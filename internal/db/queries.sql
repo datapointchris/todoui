@@ -46,7 +46,7 @@ DELETE FROM todos WHERE id = ?;
 
 -- name: AddTodoToProject :exec
 INSERT INTO todo_projects (todo_id, project_id, position)
-VALUES (?, ?, (SELECT COALESCE(MAX(position), 0) + 1 FROM todo_projects WHERE project_id = ?));
+VALUES (?, ?, (SELECT COALESCE(MAX(tp.position), 0) + 1 FROM todo_projects tp WHERE tp.project_id = ?));
 
 -- name: RemoveTodoFromProject :exec
 DELETE FROM todo_projects WHERE todo_id = ? AND project_id = ?;
