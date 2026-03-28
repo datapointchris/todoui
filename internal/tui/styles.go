@@ -30,7 +30,7 @@ var (
 	itemIDStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("240"))
 	itemCompletedStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("240")).
+				Foreground(lipgloss.Color("245")).
 				Strikethrough(true)
 	multiProjectStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("214"))
@@ -60,4 +60,27 @@ var (
 			Foreground(lipgloss.Color("240")).
 			Italic(true).
 			PaddingLeft(2)
+
+	// Overlay
+	overlayBoxStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("62")).
+			Padding(1, 2)
+
+	overlayTitleStyle = lipgloss.NewStyle().
+				Bold(true)
+
+	dimStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("240"))
+
+	// Project picker
+	pickerSelectedStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("170")).
+				Bold(true)
+
+	pickerNormalStyle = lipgloss.NewStyle()
+
+	// Status flash
+	statusMsgStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("42"))
 )
