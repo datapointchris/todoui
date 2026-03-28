@@ -98,8 +98,9 @@ func toModelProjectItemInProject(row generated.ListItemsByProjectRow) model.Proj
 		item.Notes = &row.Notes.String
 	}
 	return model.ProjectItemInProject{
-		ProjectItem: item,
-		Position:    int(row.MembershipPosition),
+		ProjectItem:  item,
+		Position:     int(row.MembershipPosition),
+		ProjectCount: int(row.ProjectCount),
 	}
 }
 

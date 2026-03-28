@@ -38,7 +38,8 @@ WHERE archived = 0
 ORDER BY created_at DESC;
 
 -- name: ListItemsByProject :many
-SELECT pi.*, m.position AS membership_position
+SELECT pi.*, m.position AS membership_position,
+    (SELECT COUNT(*) FROM project_item_memberships m2 WHERE m2.item_id = pi.id) AS project_count
 FROM project_items pi
 JOIN project_item_memberships m ON pi.id = m.item_id
 WHERE m.project_id = ? AND pi.archived = 0

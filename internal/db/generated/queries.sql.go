@@ -485,7 +485,8 @@ func (q *Queries) ListBlockedItems(ctx context.Context) ([]ProjectItem, error) {
 }
 
 const listItemsByProject = `-- name: ListItemsByProject :many
-SELECT pi.id, pi.title, pi.notes, pi.completed, pi.archived, pi.created_at, pi.updated_at, m.position AS membership_position
+SELECT pi.id, pi.title, pi.notes, pi.completed, pi.archived, pi.created_at, pi.updated_at, m.position AS membership_position,
+    (SELECT COUNT(*) FROM project_item_memberships m2 WHERE m2.item_id = pi.id) AS project_count
 FROM project_items pi
 JOIN project_item_memberships m ON pi.id = m.item_id
 WHERE m.project_id = ? AND pi.archived = 0
@@ -501,6 +502,7 @@ type ListItemsByProjectRow struct {
 	CreatedAt          string
 	UpdatedAt          string
 	MembershipPosition int64
+	ProjectCount       int64
 }
 
 func (q *Queries) ListItemsByProject(ctx context.Context, projectID int64) ([]ListItemsByProjectRow, error) {
@@ -521,6 +523,7 @@ func (q *Queries) ListItemsByProject(ctx context.Context, projectID int64) ([]Li
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.MembershipPosition,
+			&i.ProjectCount,
 		); err != nil {
 			return nil, err
 		}

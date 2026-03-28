@@ -26,7 +26,8 @@ type ProjectItemDetail struct {
 // Returned by GET /projects/{id}/items/.
 type ProjectItemInProject struct {
 	ProjectItem
-	Position int `json:"position"`
+	Position     int `json:"position"`
+	ProjectCount int `json:"project_count,omitempty"`
 }
 
 // CreateProjectItem is the input for creating a new project item.
