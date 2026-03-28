@@ -1,13 +1,120 @@
 package api
 
-import "github.com/datapointchris/todoui/internal/backend"
+import (
+	"encoding/json"
+	"errors"
+	"log"
+	"net/http"
+	"strconv"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
+
+	"github.com/datapointchris/todoui/internal/backend"
+	"github.com/datapointchris/todoui/internal/model"
+)
 
 // Server holds the dependencies for the HTTP API.
 type Server struct {
 	backend backend.Backend
+	router  chi.Router
 }
 
-// NewServer creates an API server backed by the given Backend implementation.
+// NewServer creates an API server with all routes registered.
 func NewServer(b backend.Backend) *Server {
-	return &Server{backend: b}
+	s := &Server{backend: b}
+	s.router = s.buildRouter()
+	return s
+}
+
+// ServeHTTP implements http.Handler.
+func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	s.router.ServeHTTP(w, r)
+}
+
+func (s *Server) buildRouter() chi.Router {
+	r := chi.NewRouter()
+
+	r.Use(middleware.Logger)
+	r.Use(middleware.Recoverer)
+	r.Use(jsonContentType)
+
+	r.Route("/projects", func(r chi.Router) {
+		r.Get("/", s.listProjects)
+		r.Post("/", s.createProject)
+		r.Route("/{projectID}", func(r chi.Router) {
+			r.Delete("/", s.deleteProject)
+			r.Patch("/reorder", s.reorderProject)
+			r.Get("/todos", s.listTodosByProject)
+		})
+	})
+
+	r.Route("/todos", func(r chi.Router) {
+		r.Post("/", s.createTodo)
+		r.Get("/today", s.listToday)
+		r.Get("/blocked", s.listBlocked)
+		r.Route("/{todoID}", func(r chi.Router) {
+			r.Get("/", s.getTodo)
+			r.Patch("/", s.updateTodo)
+			r.Delete("/", s.deleteTodo)
+			r.Patch("/reorder", s.reorderTodo)
+			r.Get("/projects", s.getTodoProjects)
+			r.Post("/projects", s.addToProject)
+			r.Delete("/projects/{projectID}", s.removeFromProject)
+			r.Post("/dependencies", s.addDependency)
+			r.Delete("/dependencies/{depID}", s.removeDependency)
+			r.Get("/blockers", s.getBlockers)
+		})
+	})
+
+	r.Get("/search", s.search)
+
+	r.Route("/undo", func(r chi.Router) {
+		r.Get("/", s.canUndo)
+		r.Post("/", s.undo)
+	})
+
+	return r
+}
+
+// --- Helpers ---
+
+func jsonContentType(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		next.ServeHTTP(w, r)
+	})
+}
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		log.Printf("encoding response: %v", err)
+	}
+}
+
+func writeError(w http.ResponseWriter, status int, msg string) {
+	writeJSON(w, status, map[string]string{"error": msg})
+}
+
+func handleError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, model.ErrNotFound):
+		writeError(w, http.StatusNotFound, err.Error())
+	case errors.Is(err, model.ErrDuplicateName):
+		writeError(w, http.StatusConflict, err.Error())
+	case errors.Is(err, model.ErrCyclicDependency):
+		writeError(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, model.ErrLastProject):
+		writeError(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, model.ErrNothingToUndo):
+		writeError(w, http.StatusBadRequest, err.Error())
+	default:
+		log.Printf("internal error: %v", err)
+		writeError(w, http.StatusInternalServerError, "internal server error")
+	}
+}
+
+func parseID(r *http.Request, param string) (int64, error) {
+	return strconv.ParseInt(chi.URLParam(r, param), 10, 64)
 }
