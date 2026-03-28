@@ -19,7 +19,7 @@ var (
 				Foreground(lipgloss.Color("170")).
 				Bold(true)
 	projectCountStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("240"))
+				Foreground(lipgloss.Color("248"))
 
 	// Item list
 	itemNormalStyle   = lipgloss.NewStyle().PaddingLeft(1)
@@ -28,19 +28,25 @@ var (
 				Foreground(lipgloss.Color("170")).
 				Bold(true)
 	itemIDStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("240"))
+			Foreground(lipgloss.Color("248"))
 	itemCompletedStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("245")).
+				Foreground(lipgloss.Color("249")).
 				Strikethrough(true)
 	multiProjectStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("214"))
+	notesIndicatorStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("109"))
+	notesPreviewStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("249")).
+				Italic(true).
+				PaddingLeft(5)
 	blockerStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("203")).
 			PaddingLeft(5)
 
 	// Status bar
 	statusBarStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("240")).
+			Foreground(lipgloss.Color("248")).
 			PaddingLeft(1).
 			PaddingRight(1)
 	modeLocalStyle = lipgloss.NewStyle().
@@ -57,7 +63,7 @@ var (
 
 	// Empty state
 	emptyStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("240")).
+			Foreground(lipgloss.Color("248")).
 			Italic(true).
 			PaddingLeft(2)
 
@@ -71,7 +77,7 @@ var (
 				Bold(true)
 
 	dimStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("240"))
+			Foreground(lipgloss.Color("248"))
 
 	// Project picker
 	pickerSelectedStyle = lipgloss.NewStyle().

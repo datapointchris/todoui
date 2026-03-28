@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -31,10 +32,16 @@ type App struct {
 
 	// Modal state
 	appMode      appMode
+	returnMode   appMode // mode to return to after overlay closes
 	titleInput   textinput.Model
+	notesInput   textarea.Model
 	picker       projectPicker
 	pendingTitle string // for A flow: title input → project picker
 	statusMsg    string // flash feedback in status bar
+
+	// Item detail view
+	itemDetail     *model.ProjectItemDetail
+	detailBlockers []model.ProjectItem
 
 	err error
 }
@@ -44,12 +51,17 @@ func NewApp(b backend.Backend, mode string) *App {
 	ti := textinput.New()
 	ti.CharLimit = 200
 
+	ta := textarea.New()
+	ta.CharLimit = 5000
+	ta.ShowLineNumbers = false
+
 	return &App{
 		backend:      b,
 		mode:         mode,
 		blockedSet:   make(map[int64]bool),
 		itemBlockers: make(map[int64][]model.ProjectItem),
 		titleInput:   ti,
+		notesInput:   ta,
 	}
 }
 
@@ -71,6 +83,11 @@ type (
 	itemProjectsMsg      []model.Project
 	membershipUpdatedMsg struct{}
 )
+
+type itemDetailMsg struct {
+	detail   *model.ProjectItemDetail
+	blockers []model.ProjectItem
+}
 
 type errMsg struct{ error }
 
@@ -183,6 +200,23 @@ func updateMembershipCmd(b backend.Backend, itemID int64, toAdd, toRemove []int6
 	}
 }
 
+func fetchItemDetailCmd(b backend.Backend, itemID int64, isBlocked bool) tea.Cmd {
+	return func() tea.Msg {
+		detail, err := b.GetItem(itemID)
+		if err != nil {
+			return errMsg{err}
+		}
+		var blockers []model.ProjectItem
+		if isBlocked {
+			blockers, err = b.GetBlockers(itemID)
+			if err != nil {
+				return errMsg{err}
+			}
+		}
+		return itemDetailMsg{detail: detail, blockers: blockers}
+	}
+}
+
 // --- Bubble Tea interface ---
 
 func (m *App) Init() tea.Cmd {
@@ -225,6 +259,12 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case itemUpdatedMsg:
 		m.statusMsg = "Item updated"
+		if m.appMode == modeItemDetail && m.itemDetail != nil {
+			return m, tea.Batch(
+				fetchProjectsCmd(m.backend),
+				fetchItemDetailCmd(m.backend, m.itemDetail.ID, m.blockedSet[m.itemDetail.ID]),
+			)
+		}
 		return m, fetchProjectsCmd(m.backend)
 
 	case projectCreatedMsg:
@@ -234,6 +274,12 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case undoResultMsg:
 		m.statusMsg = fmt.Sprintf("Undo: %s", string(msg))
 		return m, fetchProjectsCmd(m.backend)
+
+	case itemDetailMsg:
+		m.itemDetail = msg.detail
+		m.detailBlockers = msg.blockers
+		m.appMode = modeItemDetail
+		return m, nil
 
 	case itemProjectsMsg:
 		if len(m.items) > 0 && m.itemCursor < len(m.items) {
@@ -245,6 +291,13 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case membershipUpdatedMsg:
 		m.statusMsg = "Project membership updated"
+		if m.returnMode == modeItemDetail && m.itemDetail != nil {
+			m.appMode = modeItemDetail
+			return m, tea.Batch(
+				fetchProjectsCmd(m.backend),
+				fetchItemDetailCmd(m.backend, m.itemDetail.ID, m.blockedSet[m.itemDetail.ID]),
+			)
+		}
 		return m, fetchProjectsCmd(m.backend)
 
 	case errMsg:
@@ -270,6 +323,10 @@ func (m *App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleInputKey(msg)
 	case modeProjectPicker:
 		return m.handlePickerKey(msg)
+	case modeItemDetail:
+		return m.handleDetailKey(msg)
+	case modeEditNotes:
+		return m.handleNotesKey(msg)
 	}
 	return m, nil
 }
@@ -299,6 +356,10 @@ func (m *App) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.activePane == projectPane && len(m.projects) > 0 {
 			m.activePane = itemPane
 			return m, fetchItemsCmd(m.backend, m.projects[m.projectCursor].ID)
+		}
+		if m.activePane == itemPane && len(m.items) > 0 {
+			item := m.items[m.itemCursor]
+			return m, fetchItemDetailCmd(m.backend, item.ID, m.blockedSet[item.ID])
 		}
 		return m, nil
 
@@ -357,7 +418,23 @@ func (m *App) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.titleInput.SetValue(item.Title)
 			m.titleInput.Placeholder = ""
 			cmd := m.titleInput.Focus()
+			m.returnMode = modeNormal
 			m.appMode = modeEditTitle
+			return m, cmd
+		}
+		return m, nil
+
+	case "n":
+		if m.activePane == itemPane && len(m.items) > 0 {
+			item := m.items[m.itemCursor]
+			notes := ""
+			if item.Notes != nil {
+				notes = *item.Notes
+			}
+			m.notesInput.SetValue(notes)
+			cmd := m.notesInput.Focus()
+			m.returnMode = modeNormal
+			m.appMode = modeEditNotes
 			return m, cmd
 		}
 		return m, nil
@@ -365,6 +442,7 @@ func (m *App) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "p":
 		if m.activePane == itemPane && len(m.items) > 0 {
 			item := m.items[m.itemCursor]
+			m.returnMode = modeNormal
 			return m, fetchItemProjectsCmd(m.backend, item.ID)
 		}
 		return m, nil
@@ -409,14 +487,14 @@ func (m *App) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, createProjectCmd(m.backend, value)
 
 		case modeEditTitle:
-			m.appMode = modeNormal
+			m.appMode = m.returnMode
 			m.titleInput.Blur()
 			item := m.items[m.itemCursor]
 			return m, updateItemCmd(m.backend, item.ID, model.UpdateProjectItem{Title: &value})
 		}
 
 	case "esc":
-		m.appMode = modeNormal
+		m.appMode = m.returnMode
 		m.titleInput.Blur()
 		m.pendingTitle = ""
 		return m, nil
@@ -445,7 +523,7 @@ func (m *App) handlePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "enter":
-		m.appMode = modeNormal
+		m.appMode = m.returnMode
 
 		switch m.picker.intent {
 		case pickerCreate:
@@ -467,12 +545,104 @@ func (m *App) handlePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "esc":
-		m.appMode = modeNormal
+		m.appMode = m.returnMode
 		m.pendingTitle = ""
 		return m, nil
 	}
 
 	return m, nil
+}
+
+func (m *App) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "q":
+		m.appMode = modeNormal
+		m.itemDetail = nil
+		m.detailBlockers = nil
+		return m, nil
+
+	case " ":
+		if m.itemDetail != nil {
+			if m.blockedSet[m.itemDetail.ID] && !m.itemDetail.Completed {
+				m.statusMsg = "Cannot complete: item has unresolved blockers"
+				return m, nil
+			}
+			toggled := !m.itemDetail.Completed
+			return m, updateItemCmd(m.backend, m.itemDetail.ID, model.UpdateProjectItem{Completed: &toggled})
+		}
+		return m, nil
+
+	case "x":
+		if m.itemDetail != nil {
+			archived := true
+			id := m.itemDetail.ID
+			m.appMode = modeNormal
+			m.itemDetail = nil
+			return m, updateItemCmd(m.backend, id, model.UpdateProjectItem{Archived: &archived})
+		}
+		return m, nil
+
+	case "e":
+		if m.itemDetail != nil {
+			m.titleInput.SetValue(m.itemDetail.Title)
+			m.titleInput.Placeholder = ""
+			cmd := m.titleInput.Focus()
+			m.returnMode = modeItemDetail
+			m.appMode = modeEditTitle
+			return m, cmd
+		}
+		return m, nil
+
+	case "n":
+		if m.itemDetail != nil {
+			notes := ""
+			if m.itemDetail.Notes != nil {
+				notes = *m.itemDetail.Notes
+			}
+			m.notesInput.SetValue(notes)
+			cmd := m.notesInput.Focus()
+			m.returnMode = modeItemDetail
+			m.appMode = modeEditNotes
+			return m, cmd
+		}
+		return m, nil
+
+	case "p":
+		if m.itemDetail != nil {
+			m.returnMode = modeItemDetail
+			return m, fetchItemProjectsCmd(m.backend, m.itemDetail.ID)
+		}
+		return m, nil
+
+	case "u":
+		return m, undoCmd(m.backend)
+	}
+
+	return m, nil
+}
+
+func (m *App) handleNotesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+s":
+		notes := m.notesInput.Value()
+		m.appMode = m.returnMode
+		m.notesInput.Blur()
+		itemID := m.items[m.itemCursor].ID
+		if m.itemDetail != nil {
+			itemID = m.itemDetail.ID
+		}
+		return m, updateItemCmd(m.backend, itemID, model.UpdateProjectItem{Notes: &notes})
+
+	case "esc":
+		m.appMode = m.returnMode
+		m.notesInput.Blur()
+		return m, nil
+
+	default:
+		var cmd tea.Cmd
+		m.notesInput, cmd = m.notesInput.Update(msg)
+		return m, cmd
+	}
 }
 
 // --- Cursor movement ---
@@ -522,6 +692,12 @@ func (m *App) View() string {
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, overlay)
 	case modeProjectPicker:
 		overlay := m.picker.view(m.width)
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, overlay)
+	case modeItemDetail:
+		overlay := m.renderDetailOverlay()
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, overlay)
+	case modeEditNotes:
+		overlay := m.renderNotesOverlay()
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, overlay)
 	}
 
@@ -593,6 +769,99 @@ func (m *App) renderInputOverlay() string {
 	return overlayBoxStyle.Width(boxWidth).Render(content)
 }
 
+func (m *App) renderDetailOverlay() string {
+	d := m.itemDetail
+	if d == nil {
+		return ""
+	}
+
+	header := overlayTitleStyle.Render(fmt.Sprintf("Item #%d", d.ID))
+
+	status := "○ incomplete"
+	if d.Completed {
+		status = "✓ completed"
+	}
+	if d.Archived {
+		status = "▪ archived"
+	}
+
+	var projectNames []string
+	for _, p := range d.Projects {
+		projectNames = append(projectNames, p.Name)
+	}
+
+	var lines []string
+	lines = append(lines, header)
+	lines = append(lines, "")
+	lines = append(lines, fmt.Sprintf("  %s    %s", d.Title, dimStyle.Render(status)))
+	lines = append(lines, "")
+	lines = append(lines, dimStyle.Render(fmt.Sprintf("  Projects: %s", strings.Join(projectNames, ", "))))
+	lines = append(lines, dimStyle.Render(fmt.Sprintf("  Created: %s", d.CreatedAt.Format("Jan 2, 2006"))))
+
+	if d.Notes != nil && *d.Notes != "" {
+		lines = append(lines, "")
+		lines = append(lines, dimStyle.Render("  ─── Notes ─────────────────────────"))
+		for _, noteLine := range strings.Split(*d.Notes, "\n") {
+			lines = append(lines, "  "+noteLine)
+		}
+	}
+
+	if len(m.detailBlockers) > 0 {
+		lines = append(lines, "")
+		lines = append(lines, dimStyle.Render("  ─── Blocked by ────────────────────"))
+		for _, b := range m.detailBlockers {
+			lines = append(lines, blockerStyle.Render(
+				fmt.Sprintf("○ %s (#%d)", b.Title, b.ID),
+			))
+		}
+	}
+
+	lines = append(lines, "")
+	lines = append(lines, dimStyle.Render("  [e]dit  [n]otes  [p]rojects  [space]done  [x]archive  [Esc] close"))
+
+	content := strings.Join(lines, "\n")
+
+	boxWidth := m.width - 4
+	if boxWidth > 70 {
+		boxWidth = 70
+	}
+	if boxWidth < 40 {
+		boxWidth = 40
+	}
+
+	return overlayBoxStyle.Width(boxWidth).Render(content)
+}
+
+func (m *App) renderNotesOverlay() string {
+	var itemTitle string
+	if m.itemDetail != nil {
+		itemTitle = fmt.Sprintf("%s (#%d)", m.itemDetail.Title, m.itemDetail.ID)
+	} else if len(m.items) > 0 && m.itemCursor < len(m.items) {
+		item := m.items[m.itemCursor]
+		itemTitle = fmt.Sprintf("%s (#%d)", item.Title, item.ID)
+	}
+
+	var lines []string
+	lines = append(lines, overlayTitleStyle.Render("Edit Notes"))
+	lines = append(lines, dimStyle.Render(fmt.Sprintf("  Item: %s", itemTitle)))
+	lines = append(lines, "")
+	lines = append(lines, m.notesInput.View())
+	lines = append(lines, "")
+	lines = append(lines, dimStyle.Render("  [Ctrl+S] Save  [Esc] Cancel"))
+
+	content := strings.Join(lines, "\n")
+
+	boxWidth := m.width - 4
+	if boxWidth > 70 {
+		boxWidth = 70
+	}
+	if boxWidth < 40 {
+		boxWidth = 40
+	}
+
+	return overlayBoxStyle.Width(boxWidth).Render(content)
+}
+
 func (m *App) renderProjectPane(width, height int) string {
 	title := paneTitleStyle.Render("Projects")
 	var lines []string
@@ -652,6 +921,15 @@ func (m *App) renderItemPane(width, height int) string {
 				lines = append(lines, blockerLine)
 			}
 		}
+
+		if item.Notes != nil && *item.Notes != "" {
+			preview := strings.SplitN(*item.Notes, "\n", 2)[0]
+			maxLen := width - 6
+			if maxLen > 0 && len(preview) > maxLen {
+				preview = preview[:maxLen] + "…"
+			}
+			lines = append(lines, notesPreviewStyle.Render(preview))
+		}
 	}
 
 	return strings.Join(lines, "\n")
@@ -668,13 +946,18 @@ func (m *App) renderItemLine(item model.ProjectItemInProject, selected bool, wid
 		multiProject = " ◈"
 	}
 
+	hasNotes := ""
+	if item.Notes != nil && *item.Notes != "" {
+		hasNotes = " ≡"
+	}
+
 	idText := fmt.Sprintf("#%d", item.ID)
 
 	// Build completed lines from plain text to avoid nested ANSI escapes
 	var content string
 	if item.Completed {
 		content = itemCompletedStyle.Render(
-			fmt.Sprintf("%s %s%s  %s", status, item.Title, multiProject, idText),
+			fmt.Sprintf("%s %s%s%s  %s", status, item.Title, multiProject, hasNotes, idText),
 		)
 	} else {
 		id := itemIDStyle.Render(idText)
@@ -682,7 +965,11 @@ func (m *App) renderItemLine(item model.ProjectItemInProject, selected bool, wid
 		if multiProject != "" {
 			mp = multiProjectStyle.Render(multiProject)
 		}
-		content = fmt.Sprintf("%s %s%s  %s", status, item.Title, mp, id)
+		notes := ""
+		if hasNotes != "" {
+			notes = notesIndicatorStyle.Render(hasNotes)
+		}
+		content = fmt.Sprintf("%s %s%s%s  %s", status, item.Title, mp, notes, id)
 	}
 
 	if selected {

@@ -16,6 +16,8 @@ const (
 	modeAddProject            // text input: new project
 	modeEditTitle             // text input: edit existing item title
 	modeProjectPicker         // checkbox picker: manage project membership
+	modeItemDetail            // expanded item view (read-only with action keys)
+	modeEditNotes             // multiline textarea for notes editing
 )
 
 type pickerIntent int
