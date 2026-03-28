@@ -8,10 +8,7 @@ import (
 	"github.com/datapointchris/todoui/internal/model"
 )
 
-const (
-	timeLayout = "2006-01-02 15:04:05"
-	dateLayout = "2006-01-02"
-)
+const timeLayout = "2006-01-02 15:04:05"
 
 func toModelProject(p generated.Project) model.Project {
 	t, _ := time.Parse(timeLayout, p.CreatedAt)
@@ -31,36 +28,101 @@ func toModelProjects(ps []generated.Project) []model.Project {
 	return out
 }
 
-func toModelTodo(t generated.Todo) model.Todo {
-	todo := model.Todo{
-		ID:        t.ID,
-		Title:     t.Title,
-		Completed: t.Completed != 0,
-		Archived:  t.Archived != 0,
+func toModelProjectWithItemCount(row generated.ListProjectsWithItemCountRow) model.ProjectWithItemCount {
+	t, _ := time.Parse(timeLayout, row.CreatedAt)
+	return model.ProjectWithItemCount{
+		Project: model.Project{
+			ID:        row.ID,
+			Name:      row.Name,
+			Position:  int(row.Position),
+			CreatedAt: t,
+		},
+		ItemCount: int(row.ItemCount),
 	}
-	if ct, err := time.Parse(timeLayout, t.CreatedAt); err == nil {
-		todo.CreatedAt = ct
-	}
-	if ut, err := time.Parse(timeLayout, t.UpdatedAt); err == nil {
-		todo.UpdatedAt = ut
-	}
-	if t.Notes.Valid {
-		todo.Notes = &t.Notes.String
-	}
-	if t.DueDate.Valid {
-		if dt, err := time.Parse(dateLayout, t.DueDate.String); err == nil {
-			todo.DueDate = &dt
-		}
-	}
-	return todo
 }
 
-func toModelTodos(ts []generated.Todo) []model.Todo {
-	out := make([]model.Todo, len(ts))
-	for i, t := range ts {
-		out[i] = toModelTodo(t)
+func toModelProjectWithItemCountFromGet(row generated.GetProjectWithItemCountRow) model.ProjectWithItemCount {
+	t, _ := time.Parse(timeLayout, row.CreatedAt)
+	return model.ProjectWithItemCount{
+		Project: model.Project{
+			ID:        row.ID,
+			Name:      row.Name,
+			Position:  int(row.Position),
+			CreatedAt: t,
+		},
+		ItemCount: int(row.ItemCount),
+	}
+}
+
+func toModelProjectItem(pi generated.ProjectItem) model.ProjectItem {
+	item := model.ProjectItem{
+		ID:        pi.ID,
+		Title:     pi.Title,
+		Completed: pi.Completed != 0,
+		Archived:  pi.Archived != 0,
+	}
+	if ct, err := time.Parse(timeLayout, pi.CreatedAt); err == nil {
+		item.CreatedAt = ct
+	}
+	if ut, err := time.Parse(timeLayout, pi.UpdatedAt); err == nil {
+		item.UpdatedAt = ut
+	}
+	if pi.Notes.Valid {
+		item.Notes = &pi.Notes.String
+	}
+	return item
+}
+
+func toModelProjectItems(pis []generated.ProjectItem) []model.ProjectItem {
+	out := make([]model.ProjectItem, len(pis))
+	for i, pi := range pis {
+		out[i] = toModelProjectItem(pi)
 	}
 	return out
+}
+
+func toModelProjectItemInProject(row generated.ListItemsByProjectRow) model.ProjectItemInProject {
+	item := model.ProjectItem{
+		ID:        row.ID,
+		Title:     row.Title,
+		Completed: row.Completed != 0,
+		Archived:  row.Archived != 0,
+	}
+	if ct, err := time.Parse(timeLayout, row.CreatedAt); err == nil {
+		item.CreatedAt = ct
+	}
+	if ut, err := time.Parse(timeLayout, row.UpdatedAt); err == nil {
+		item.UpdatedAt = ut
+	}
+	if row.Notes.Valid {
+		item.Notes = &row.Notes.String
+	}
+	return model.ProjectItemInProject{
+		ProjectItem: item,
+		Position:    int(row.MembershipPosition),
+	}
+}
+
+func toModelProjectItemInProjectFromArchived(row generated.ListArchivedItemsRow) model.ProjectItemInProject {
+	item := model.ProjectItem{
+		ID:        row.ID,
+		Title:     row.Title,
+		Completed: row.Completed != 0,
+		Archived:  row.Archived != 0,
+	}
+	if ct, err := time.Parse(timeLayout, row.CreatedAt); err == nil {
+		item.CreatedAt = ct
+	}
+	if ut, err := time.Parse(timeLayout, row.UpdatedAt); err == nil {
+		item.UpdatedAt = ut
+	}
+	if row.Notes.Valid {
+		item.Notes = &row.Notes.String
+	}
+	return model.ProjectItemInProject{
+		ProjectItem: item,
+		Position:    int(row.MembershipPosition),
+	}
 }
 
 func toNullString(s *string) sql.NullString {
@@ -68,13 +130,6 @@ func toNullString(s *string) sql.NullString {
 		return sql.NullString{}
 	}
 	return sql.NullString{String: *s, Valid: true}
-}
-
-func timeToNullString(t *time.Time) sql.NullString {
-	if t == nil {
-		return sql.NullString{}
-	}
-	return sql.NullString{String: t.Format(dateLayout), Valid: true}
 }
 
 func boolToInt64(b *bool) int64 {

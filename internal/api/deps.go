@@ -6,9 +6,9 @@ import (
 )
 
 func (s *Server) addDependency(w http.ResponseWriter, r *http.Request) {
-	todoID, err := parseID(r, "todoID")
+	itemID, err := parseID(r, "itemID")
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid todo ID")
+		writeError(w, http.StatusBadRequest, "invalid item ID")
 		return
 	}
 
@@ -20,7 +20,7 @@ func (s *Server) addDependency(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.backend.AddDependency(todoID, body.DependsOnID); err != nil {
+	if err := s.backend.AddDependency(itemID, body.DependsOnID); err != nil {
 		handleError(w, err)
 		return
 	}
@@ -28,9 +28,9 @@ func (s *Server) addDependency(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) removeDependency(w http.ResponseWriter, r *http.Request) {
-	todoID, err := parseID(r, "todoID")
+	itemID, err := parseID(r, "itemID")
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid todo ID")
+		writeError(w, http.StatusBadRequest, "invalid item ID")
 		return
 	}
 
@@ -40,7 +40,7 @@ func (s *Server) removeDependency(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.backend.RemoveDependency(todoID, depID); err != nil {
+	if err := s.backend.RemoveDependency(itemID, depID); err != nil {
 		handleError(w, err)
 		return
 	}
@@ -48,13 +48,13 @@ func (s *Server) removeDependency(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getBlockers(w http.ResponseWriter, r *http.Request) {
-	todoID, err := parseID(r, "todoID")
+	itemID, err := parseID(r, "itemID")
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid todo ID")
+		writeError(w, http.StatusBadRequest, "invalid item ID")
 		return
 	}
 
-	blockers, err := s.backend.GetBlockers(todoID)
+	blockers, err := s.backend.GetBlockers(itemID)
 	if err != nil {
 		handleError(w, err)
 		return
@@ -62,14 +62,14 @@ func (s *Server) getBlockers(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, blockers)
 }
 
-func (s *Server) getTodoProjects(w http.ResponseWriter, r *http.Request) {
-	todoID, err := parseID(r, "todoID")
+func (s *Server) getItemProjects(w http.ResponseWriter, r *http.Request) {
+	itemID, err := parseID(r, "itemID")
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid todo ID")
+		writeError(w, http.StatusBadRequest, "invalid item ID")
 		return
 	}
 
-	projects, err := s.backend.GetTodoProjects(todoID)
+	projects, err := s.backend.GetItemProjects(itemID)
 	if err != nil {
 		handleError(w, err)
 		return
@@ -78,9 +78,9 @@ func (s *Server) getTodoProjects(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) addToProject(w http.ResponseWriter, r *http.Request) {
-	todoID, err := parseID(r, "todoID")
+	itemID, err := parseID(r, "itemID")
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid todo ID")
+		writeError(w, http.StatusBadRequest, "invalid item ID")
 		return
 	}
 
@@ -92,7 +92,7 @@ func (s *Server) addToProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.backend.AddToProject(todoID, body.ProjectID); err != nil {
+	if err := s.backend.AddToProject(itemID, body.ProjectID); err != nil {
 		handleError(w, err)
 		return
 	}
@@ -100,9 +100,9 @@ func (s *Server) addToProject(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) removeFromProject(w http.ResponseWriter, r *http.Request) {
-	todoID, err := parseID(r, "todoID")
+	itemID, err := parseID(r, "itemID")
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid todo ID")
+		writeError(w, http.StatusBadRequest, "invalid item ID")
 		return
 	}
 
@@ -112,7 +112,7 @@ func (s *Server) removeFromProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.backend.RemoveFromProject(todoID, projectID); err != nil {
+	if err := s.backend.RemoveFromProject(itemID, projectID); err != nil {
 		handleError(w, err)
 		return
 	}
@@ -134,22 +134,13 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, results)
 }
 
-func (s *Server) listToday(w http.ResponseWriter, _ *http.Request) {
-	todos, err := s.backend.ListToday()
-	if err != nil {
-		handleError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, todos)
-}
-
 func (s *Server) listBlocked(w http.ResponseWriter, _ *http.Request) {
-	todos, err := s.backend.ListBlocked()
+	items, err := s.backend.ListBlocked()
 	if err != nil {
 		handleError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, todos)
+	writeJSON(w, http.StatusOK, items)
 }
 
 func (s *Server) canUndo(w http.ResponseWriter, _ *http.Request) {

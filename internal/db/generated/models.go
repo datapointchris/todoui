@@ -8,11 +8,6 @@ import (
 	"database/sql"
 )
 
-type Dependency struct {
-	TodoID      int64
-	DependsOnID int64
-}
-
 type Project struct {
 	ID        int64
 	Name      string
@@ -20,19 +15,23 @@ type Project struct {
 	CreatedAt string
 }
 
-type Todo struct {
+type ProjectItem struct {
 	ID        int64
 	Title     string
 	Notes     sql.NullString
-	DueDate   sql.NullString
 	Completed int64
 	Archived  int64
 	CreatedAt string
 	UpdatedAt string
 }
 
-type TodoProject struct {
-	TodoID    int64
+type ProjectItemDependency struct {
+	ItemID      int64
+	DependsOnID int64
+}
+
+type ProjectItemMembership struct {
+	ItemID    int64
 	ProjectID int64
 	Position  int64
 }

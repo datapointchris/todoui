@@ -31,12 +31,28 @@ func (b *LocalBackend) ctx() context.Context {
 
 // --- Projects ---
 
-func (b *LocalBackend) ListProjects() ([]model.Project, error) {
-	ps, err := b.q.ListProjects(b.ctx())
+func (b *LocalBackend) ListProjects() ([]model.ProjectWithItemCount, error) {
+	rows, err := b.q.ListProjectsWithItemCount(b.ctx())
 	if err != nil {
 		return nil, fmt.Errorf("listing projects: %w", err)
 	}
-	return toModelProjects(ps), nil
+	out := make([]model.ProjectWithItemCount, len(rows))
+	for i, r := range rows {
+		out[i] = toModelProjectWithItemCount(r)
+	}
+	return out, nil
+}
+
+func (b *LocalBackend) GetProject(id int64) (*model.ProjectWithItemCount, error) {
+	row, err := b.q.GetProjectWithItemCount(b.ctx(), id)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, model.ErrNotFound
+		}
+		return nil, fmt.Errorf("getting project: %w", err)
+	}
+	result := toModelProjectWithItemCountFromGet(row)
+	return &result, nil
 }
 
 func (b *LocalBackend) CreateProject(name string) (*model.Project, error) {
@@ -48,47 +64,94 @@ func (b *LocalBackend) CreateProject(name string) (*model.Project, error) {
 	return &result, nil
 }
 
-func (b *LocalBackend) DeleteProject(id int64) error {
-	return b.q.DeleteProject(b.ctx(), id)
-}
+func (b *LocalBackend) UpdateProject(id int64, input model.UpdateProject) (*model.Project, error) {
+	ctx := b.ctx()
 
-func (b *LocalBackend) ReorderProject(id int64, newPosition int) error {
-	return b.q.UpdateProjectPosition(b.ctx(), generated.UpdateProjectPositionParams{
-		ID:       id,
-		Position: int64(newPosition),
-	})
-}
-
-// --- Todos ---
-
-func (b *LocalBackend) ListTodos(projectID int64) ([]model.Todo, error) {
-	ts, err := b.q.ListTodosByProject(b.ctx(), projectID)
-	if err != nil {
-		return nil, fmt.Errorf("listing todos: %w", err)
-	}
-	return toModelTodos(ts), nil
-}
-
-func (b *LocalBackend) GetTodo(id int64) (*model.Todo, error) {
-	t, err := b.q.GetTodo(b.ctx(), id)
+	current, err := b.q.GetProject(ctx, id)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, model.ErrNotFound
 		}
-		return nil, fmt.Errorf("getting todo: %w", err)
+		return nil, fmt.Errorf("getting project for update: %w", err)
 	}
-	result := toModelTodo(t)
 
-	// Attach project list
-	ps, err := b.q.GetTodoProjects(b.ctx(), id)
-	if err != nil {
-		return nil, fmt.Errorf("getting todo projects: %w", err)
+	params := generated.UpdateProjectParams{
+		Name:     current.Name,
+		Position: current.Position,
+		ID:       id,
 	}
-	result.Projects = toModelProjects(ps)
+	if input.Name != nil {
+		params.Name = *input.Name
+	}
+	if input.Position != nil {
+		params.Position = int64(*input.Position)
+	}
+
+	p, err := b.q.UpdateProject(ctx, params)
+	if err != nil {
+		return nil, fmt.Errorf("updating project: %w", err)
+	}
+	result := toModelProject(p)
 	return &result, nil
 }
 
-func (b *LocalBackend) CreateTodo(input model.CreateTodo) (*model.Todo, error) {
+func (b *LocalBackend) DeleteProject(id int64) error {
+	return b.q.DeleteProject(b.ctx(), id)
+}
+
+// --- Items ---
+
+func (b *LocalBackend) ListAllItems() ([]model.ProjectItem, error) {
+	items, err := b.q.ListAllItems(b.ctx())
+	if err != nil {
+		return nil, fmt.Errorf("listing all items: %w", err)
+	}
+	return toModelProjectItems(items), nil
+}
+
+func (b *LocalBackend) ListItemsByProject(projectID int64) ([]model.ProjectItemInProject, error) {
+	rows, err := b.q.ListItemsByProject(b.ctx(), projectID)
+	if err != nil {
+		return nil, fmt.Errorf("listing items by project: %w", err)
+	}
+	out := make([]model.ProjectItemInProject, len(rows))
+	for i, r := range rows {
+		out[i] = toModelProjectItemInProject(r)
+	}
+	return out, nil
+}
+
+func (b *LocalBackend) GetItem(id int64) (*model.ProjectItemDetail, error) {
+	pi, err := b.q.GetItem(b.ctx(), id)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, model.ErrNotFound
+		}
+		return nil, fmt.Errorf("getting item: %w", err)
+	}
+	result := toModelProjectItem(pi)
+
+	ps, err := b.q.GetItemProjects(b.ctx(), id)
+	if err != nil {
+		return nil, fmt.Errorf("getting item projects: %w", err)
+	}
+
+	depIDs, err := b.q.GetDependencyIDs(b.ctx(), id)
+	if err != nil {
+		return nil, fmt.Errorf("getting dependency IDs: %w", err)
+	}
+	if depIDs == nil {
+		depIDs = []int64{}
+	}
+
+	return &model.ProjectItemDetail{
+		ProjectItem:   result,
+		Projects:      toModelProjects(ps),
+		DependencyIDs: depIDs,
+	}, nil
+}
+
+func (b *LocalBackend) CreateItem(input model.CreateProjectItem) (*model.ProjectItemDetail, error) {
 	if len(input.ProjectIDs) == 0 {
 		return nil, model.ErrLastProject
 	}
@@ -102,27 +165,26 @@ func (b *LocalBackend) CreateTodo(input model.CreateTodo) (*model.Todo, error) {
 	qtx := b.q.WithTx(tx)
 	ctx := b.ctx()
 
-	t, err := qtx.CreateTodo(ctx, generated.CreateTodoParams{
-		Title:   input.Title,
-		Notes:   toNullString(input.Notes),
-		DueDate: timeToNullString(input.DueDate),
+	pi, err := qtx.CreateItem(ctx, generated.CreateItemParams{
+		Title: input.Title,
+		Notes: toNullString(input.Notes),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("creating todo: %w", err)
+		return nil, fmt.Errorf("creating item: %w", err)
 	}
 
 	for _, pid := range input.ProjectIDs {
-		err := qtx.AddTodoToProject(ctx, generated.AddTodoToProjectParams{
-			TodoID:      t.ID,
+		err := qtx.AddItemToProject(ctx, generated.AddItemToProjectParams{
+			ItemID:      pi.ID,
 			ProjectID:   pid,
 			ProjectID_2: pid,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("adding todo to project %d: %w", pid, err)
+			return nil, fmt.Errorf("adding item to project %d: %w", pid, err)
 		}
 	}
 
-	if err := b.logUndo(qtx, "create", "todo", t.ID, nil); err != nil {
+	if err := b.logUndo(qtx, "create", "item", pi.ID, nil); err != nil {
 		return nil, err
 	}
 
@@ -130,19 +192,18 @@ func (b *LocalBackend) CreateTodo(input model.CreateTodo) (*model.Todo, error) {
 		return nil, fmt.Errorf("committing transaction: %w", err)
 	}
 
-	return b.GetTodo(t.ID)
+	return b.GetItem(pi.ID)
 }
 
-func (b *LocalBackend) UpdateTodo(id int64, input model.UpdateTodo) (*model.Todo, error) {
+func (b *LocalBackend) UpdateItem(id int64, input model.UpdateProjectItem) (*model.ProjectItem, error) {
 	ctx := b.ctx()
 
-	// Snapshot current state for undo
-	current, err := b.q.GetTodo(ctx, id)
+	current, err := b.q.GetItem(ctx, id)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, model.ErrNotFound
 		}
-		return nil, fmt.Errorf("getting todo for update: %w", err)
+		return nil, fmt.Errorf("getting item for update: %w", err)
 	}
 
 	tx, err := b.db.Begin()
@@ -153,11 +214,9 @@ func (b *LocalBackend) UpdateTodo(id int64, input model.UpdateTodo) (*model.Todo
 
 	qtx := b.q.WithTx(tx)
 
-	// Build update params — COALESCE in the query handles nil fields
-	params := generated.UpdateTodoParams{
+	params := generated.UpdateItemParams{
 		Title:     current.Title,
 		Notes:     current.Notes,
-		DueDate:   current.DueDate,
 		Completed: current.Completed,
 		Archived:  current.Archived,
 		ID:        id,
@@ -168,9 +227,6 @@ func (b *LocalBackend) UpdateTodo(id int64, input model.UpdateTodo) (*model.Todo
 	if input.Notes != nil {
 		params.Notes = toNullString(input.Notes)
 	}
-	if input.DueDate != nil {
-		params.DueDate = timeToNullString(input.DueDate)
-	}
 	if input.Completed != nil {
 		params.Completed = boolToInt64(input.Completed)
 	}
@@ -178,11 +234,12 @@ func (b *LocalBackend) UpdateTodo(id int64, input model.UpdateTodo) (*model.Todo
 		params.Archived = boolToInt64(input.Archived)
 	}
 
-	if _, err := qtx.UpdateTodo(ctx, params); err != nil {
-		return nil, fmt.Errorf("updating todo: %w", err)
+	pi, err := qtx.UpdateItem(ctx, params)
+	if err != nil {
+		return nil, fmt.Errorf("updating item: %w", err)
 	}
 
-	if err := b.logUndo(qtx, "update", "todo", id, current); err != nil {
+	if err := b.logUndo(qtx, "update", "item", id, current); err != nil {
 		return nil, err
 	}
 
@@ -190,17 +247,18 @@ func (b *LocalBackend) UpdateTodo(id int64, input model.UpdateTodo) (*model.Todo
 		return nil, fmt.Errorf("committing transaction: %w", err)
 	}
 
-	return b.GetTodo(id)
+	result := toModelProjectItem(pi)
+	return &result, nil
 }
 
-func (b *LocalBackend) DeleteTodo(id int64) error {
+func (b *LocalBackend) DeleteItem(id int64) error {
 	ctx := b.ctx()
-	current, err := b.q.GetTodo(ctx, id)
+	current, err := b.q.GetItem(ctx, id)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return model.ErrNotFound
 		}
-		return fmt.Errorf("getting todo for delete: %w", err)
+		return fmt.Errorf("getting item for delete: %w", err)
 	}
 
 	tx, err := b.db.Begin()
@@ -211,20 +269,20 @@ func (b *LocalBackend) DeleteTodo(id int64) error {
 
 	qtx := b.q.WithTx(tx)
 
-	if err := b.logUndo(qtx, "delete", "todo", id, current); err != nil {
+	if err := b.logUndo(qtx, "delete", "item", id, current); err != nil {
 		return err
 	}
 
-	if err := qtx.DeleteTodo(ctx, id); err != nil {
-		return fmt.Errorf("deleting todo: %w", err)
+	if err := qtx.DeleteItem(ctx, id); err != nil {
+		return fmt.Errorf("deleting item: %w", err)
 	}
 
 	return tx.Commit()
 }
 
-func (b *LocalBackend) ReorderTodo(todoID, projectID int64, newPosition int) error {
-	return b.q.UpdateTodoPosition(b.ctx(), generated.UpdateTodoPositionParams{
-		TodoID:    todoID,
+func (b *LocalBackend) ReorderItem(itemID, projectID int64, newPosition int) error {
+	return b.q.UpdateItemPosition(b.ctx(), generated.UpdateItemPositionParams{
+		ItemID:    itemID,
 		ProjectID: projectID,
 		Position:  int64(newPosition),
 	})
@@ -232,43 +290,41 @@ func (b *LocalBackend) ReorderTodo(todoID, projectID int64, newPosition int) err
 
 // --- Multi-project membership ---
 
-func (b *LocalBackend) AddToProject(todoID, projectID int64) error {
-	return b.q.AddTodoToProject(b.ctx(), generated.AddTodoToProjectParams{
-		TodoID:      todoID,
+func (b *LocalBackend) AddToProject(itemID, projectID int64) error {
+	return b.q.AddItemToProject(b.ctx(), generated.AddItemToProjectParams{
+		ItemID:      itemID,
 		ProjectID:   projectID,
 		ProjectID_2: projectID,
 	})
 }
 
-func (b *LocalBackend) RemoveFromProject(todoID, projectID int64) error {
-	// Check this isn't the last project
-	projects, err := b.q.GetTodoProjects(b.ctx(), todoID)
+func (b *LocalBackend) RemoveFromProject(itemID, projectID int64) error {
+	projects, err := b.q.GetItemProjects(b.ctx(), itemID)
 	if err != nil {
 		return fmt.Errorf("checking project count: %w", err)
 	}
 	if len(projects) <= 1 {
 		return model.ErrLastProject
 	}
-	return b.q.RemoveTodoFromProject(b.ctx(), generated.RemoveTodoFromProjectParams{
-		TodoID:    todoID,
+	return b.q.RemoveItemFromProject(b.ctx(), generated.RemoveItemFromProjectParams{
+		ItemID:    itemID,
 		ProjectID: projectID,
 	})
 }
 
-func (b *LocalBackend) GetTodoProjects(todoID int64) ([]model.Project, error) {
-	ps, err := b.q.GetTodoProjects(b.ctx(), todoID)
+func (b *LocalBackend) GetItemProjects(itemID int64) ([]model.Project, error) {
+	ps, err := b.q.GetItemProjects(b.ctx(), itemID)
 	if err != nil {
-		return nil, fmt.Errorf("getting todo projects: %w", err)
+		return nil, fmt.Errorf("getting item projects: %w", err)
 	}
 	return toModelProjects(ps), nil
 }
 
 // --- Dependencies ---
 
-func (b *LocalBackend) AddDependency(todoID, dependsOn int64) error {
+func (b *LocalBackend) AddDependency(itemID, dependsOn int64) error {
 	ctx := b.ctx()
 
-	// Build adjacency list and check for cycles
 	deps, err := b.q.GetAllDependencies(ctx)
 	if err != nil {
 		return fmt.Errorf("getting dependencies for cycle check: %w", err)
@@ -276,72 +332,68 @@ func (b *LocalBackend) AddDependency(todoID, dependsOn int64) error {
 
 	adj := make(map[int64][]int64)
 	for _, d := range deps {
-		adj[d.DependsOnID] = append(adj[d.DependsOnID], d.TodoID)
+		adj[d.DependsOnID] = append(adj[d.DependsOnID], d.ItemID)
 	}
 
-	if graph.WouldCycle(adj, dependsOn, todoID) {
+	if graph.WouldCycle(adj, dependsOn, itemID) {
 		return model.ErrCyclicDependency
 	}
 
 	return b.q.AddDependency(ctx, generated.AddDependencyParams{
-		TodoID:      todoID,
+		ItemID:      itemID,
 		DependsOnID: dependsOn,
 	})
 }
 
-func (b *LocalBackend) RemoveDependency(todoID, dependsOn int64) error {
+func (b *LocalBackend) RemoveDependency(itemID, dependsOn int64) error {
 	return b.q.RemoveDependency(b.ctx(), generated.RemoveDependencyParams{
-		TodoID:      todoID,
+		ItemID:      itemID,
 		DependsOnID: dependsOn,
 	})
 }
 
-func (b *LocalBackend) GetBlockers(todoID int64) ([]model.Todo, error) {
-	ts, err := b.q.GetBlockers(b.ctx(), todoID)
+func (b *LocalBackend) GetBlockers(itemID int64) ([]model.ProjectItem, error) {
+	items, err := b.q.GetBlockers(b.ctx(), itemID)
 	if err != nil {
 		return nil, fmt.Errorf("getting blockers: %w", err)
 	}
-	return toModelTodos(ts), nil
+	return toModelProjectItems(items), nil
 }
 
 // --- Search ---
 
-func (b *LocalBackend) Search(query string) ([]model.Todo, error) {
+func (b *LocalBackend) Search(query string) ([]model.ProjectItem, error) {
 	q := sql.NullString{String: query, Valid: true}
-	ts, err := b.q.SearchTodos(b.ctx(), generated.SearchTodosParams{
+	items, err := b.q.SearchItems(b.ctx(), generated.SearchItemsParams{
 		Column1: q,
 		Column2: q,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("searching todos: %w", err)
+		return nil, fmt.Errorf("searching items: %w", err)
 	}
-	return toModelTodos(ts), nil
+	return toModelProjectItems(items), nil
 }
 
 // --- Filters ---
 
-func (b *LocalBackend) ListToday() ([]model.Todo, error) {
-	ts, err := b.q.ListTodosToday(b.ctx())
-	if err != nil {
-		return nil, fmt.Errorf("listing today: %w", err)
-	}
-	return toModelTodos(ts), nil
-}
-
-func (b *LocalBackend) ListBlocked() ([]model.Todo, error) {
-	ts, err := b.q.ListBlockedTodos(b.ctx())
+func (b *LocalBackend) ListBlocked() ([]model.ProjectItem, error) {
+	items, err := b.q.ListBlockedItems(b.ctx())
 	if err != nil {
 		return nil, fmt.Errorf("listing blocked: %w", err)
 	}
-	return toModelTodos(ts), nil
+	return toModelProjectItems(items), nil
 }
 
-func (b *LocalBackend) ListArchived(projectID int64) ([]model.Todo, error) {
-	ts, err := b.q.ListArchivedTodos(b.ctx(), projectID)
+func (b *LocalBackend) ListArchived(projectID int64) ([]model.ProjectItemInProject, error) {
+	rows, err := b.q.ListArchivedItems(b.ctx(), projectID)
 	if err != nil {
 		return nil, fmt.Errorf("listing archived: %w", err)
 	}
-	return toModelTodos(ts), nil
+	out := make([]model.ProjectItemInProject, len(rows))
+	for i, r := range rows {
+		out[i] = toModelProjectItemInProjectFromArchived(r)
+	}
+	return out, nil
 }
 
 // --- Undo ---
@@ -368,21 +420,18 @@ func (b *LocalBackend) Undo() (string, error) {
 
 	switch entry.Action {
 	case "create":
-		// Undo a create = delete
-		if err := qtx.DeleteTodo(ctx, entry.EntityID); err != nil {
+		if err := qtx.DeleteItem(ctx, entry.EntityID); err != nil {
 			return "", fmt.Errorf("undoing create: %w", err)
 		}
 	case "update":
-		// Undo an update = restore previous state
 		if entry.PreviousState.Valid {
-			var prev generated.Todo
+			var prev generated.ProjectItem
 			if err := json.Unmarshal([]byte(entry.PreviousState.String), &prev); err != nil {
 				return "", fmt.Errorf("unmarshaling previous state: %w", err)
 			}
-			if _, err := qtx.UpdateTodo(ctx, generated.UpdateTodoParams{
+			if _, err := qtx.UpdateItem(ctx, generated.UpdateItemParams{
 				Title:     prev.Title,
 				Notes:     prev.Notes,
-				DueDate:   prev.DueDate,
 				Completed: prev.Completed,
 				Archived:  prev.Archived,
 				ID:        entry.EntityID,
@@ -391,26 +440,22 @@ func (b *LocalBackend) Undo() (string, error) {
 			}
 		}
 	case "delete":
-		// Undo a delete = recreate from snapshot
 		if entry.PreviousState.Valid {
-			var prev generated.Todo
+			var prev generated.ProjectItem
 			if err := json.Unmarshal([]byte(entry.PreviousState.String), &prev); err != nil {
 				return "", fmt.Errorf("unmarshaling deleted state: %w", err)
 			}
-			if _, err := qtx.CreateTodo(ctx, generated.CreateTodoParams{
-				Title:   prev.Title,
-				Notes:   prev.Notes,
-				DueDate: prev.DueDate,
+			if _, err := qtx.CreateItem(ctx, generated.CreateItemParams{
+				Title: prev.Title,
+				Notes: prev.Notes,
 			}); err != nil {
-				return "", fmt.Errorf("recreating deleted todo: %w", err)
+				return "", fmt.Errorf("recreating deleted item: %w", err)
 			}
 		}
 	case "complete":
-		// Undo a complete = mark incomplete
-		if _, err := qtx.UpdateTodo(ctx, generated.UpdateTodoParams{
+		if _, err := qtx.UpdateItem(ctx, generated.UpdateItemParams{
 			Title:     "",
 			Notes:     sql.NullString{},
-			DueDate:   sql.NullString{},
 			Completed: 0,
 			Archived:  0,
 			ID:        entry.EntityID,
@@ -438,7 +483,6 @@ func (b *LocalBackend) CanUndo() (bool, error) {
 	return count > 0, nil
 }
 
-// logUndo records an action to the undo log within the given transaction.
 func (b *LocalBackend) logUndo(qtx *generated.Queries, action, entityType string, entityID int64, previousState any) error {
 	var prevJSON sql.NullString
 	if previousState != nil {

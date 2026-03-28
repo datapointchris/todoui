@@ -40,7 +40,7 @@ func Open(path string) (*sql.DB, error) {
 func migrate(db *sql.DB) error {
 	// Check if schema already exists by looking for the projects table
 	var name string
-	err := db.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name='projects'").Scan(&name)
+	err := db.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name='project_items'").Scan(&name)
 	if err == sql.ErrNoRows {
 		// Fresh database — apply schema
 		if _, err := db.Exec(schema); err != nil {

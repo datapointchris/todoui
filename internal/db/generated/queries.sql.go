@@ -11,32 +11,32 @@ import (
 )
 
 const addDependency = `-- name: AddDependency :exec
-INSERT INTO dependencies (todo_id, depends_on_id) VALUES (?, ?)
+INSERT INTO project_item_dependencies (item_id, depends_on_id) VALUES (?, ?)
 `
 
 type AddDependencyParams struct {
-	TodoID      int64
+	ItemID      int64
 	DependsOnID int64
 }
 
 func (q *Queries) AddDependency(ctx context.Context, arg AddDependencyParams) error {
-	_, err := q.db.ExecContext(ctx, addDependency, arg.TodoID, arg.DependsOnID)
+	_, err := q.db.ExecContext(ctx, addDependency, arg.ItemID, arg.DependsOnID)
 	return err
 }
 
-const addTodoToProject = `-- name: AddTodoToProject :exec
-INSERT INTO todo_projects (todo_id, project_id, position)
-VALUES (?, ?, (SELECT COALESCE(MAX(tp.position), 0) + 1 FROM todo_projects tp WHERE tp.project_id = ?))
+const addItemToProject = `-- name: AddItemToProject :exec
+INSERT INTO project_item_memberships (item_id, project_id, position)
+VALUES (?, ?, (SELECT COALESCE(MAX(m.position), 0) + 1 FROM project_item_memberships m WHERE m.project_id = ?))
 `
 
-type AddTodoToProjectParams struct {
-	TodoID      int64
+type AddItemToProjectParams struct {
+	ItemID      int64
 	ProjectID   int64
 	ProjectID_2 int64
 }
 
-func (q *Queries) AddTodoToProject(ctx context.Context, arg AddTodoToProjectParams) error {
-	_, err := q.db.ExecContext(ctx, addTodoToProject, arg.TodoID, arg.ProjectID, arg.ProjectID_2)
+func (q *Queries) AddItemToProject(ctx context.Context, arg AddItemToProjectParams) error {
+	_, err := q.db.ExecContext(ctx, addItemToProject, arg.ItemID, arg.ProjectID, arg.ProjectID_2)
 	return err
 }
 
@@ -49,6 +49,32 @@ func (q *Queries) CountUndoLogs(ctx context.Context) (int64, error) {
 	var count int64
 	err := row.Scan(&count)
 	return count, err
+}
+
+const createItem = `-- name: CreateItem :one
+INSERT INTO project_items (title, notes)
+VALUES (?, ?)
+RETURNING id, title, notes, completed, archived, created_at, updated_at
+`
+
+type CreateItemParams struct {
+	Title string
+	Notes sql.NullString
+}
+
+func (q *Queries) CreateItem(ctx context.Context, arg CreateItemParams) (ProjectItem, error) {
+	row := q.db.QueryRowContext(ctx, createItem, arg.Title, arg.Notes)
+	var i ProjectItem
+	err := row.Scan(
+		&i.ID,
+		&i.Title,
+		&i.Notes,
+		&i.Completed,
+		&i.Archived,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const createProject = `-- name: CreateProject :one
@@ -69,32 +95,13 @@ func (q *Queries) CreateProject(ctx context.Context, name string) (Project, erro
 	return i, err
 }
 
-const createTodo = `-- name: CreateTodo :one
-INSERT INTO todos (title, notes, due_date)
-VALUES (?, ?, ?)
-RETURNING id, title, notes, due_date, completed, archived, created_at, updated_at
+const deleteItem = `-- name: DeleteItem :exec
+DELETE FROM project_items WHERE id = ?
 `
 
-type CreateTodoParams struct {
-	Title   string
-	Notes   sql.NullString
-	DueDate sql.NullString
-}
-
-func (q *Queries) CreateTodo(ctx context.Context, arg CreateTodoParams) (Todo, error) {
-	row := q.db.QueryRowContext(ctx, createTodo, arg.Title, arg.Notes, arg.DueDate)
-	var i Todo
-	err := row.Scan(
-		&i.ID,
-		&i.Title,
-		&i.Notes,
-		&i.DueDate,
-		&i.Completed,
-		&i.Archived,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
+func (q *Queries) DeleteItem(ctx context.Context, id int64) error {
+	_, err := q.db.ExecContext(ctx, deleteItem, id)
+	return err
 }
 
 const deleteProject = `-- name: DeleteProject :exec
@@ -103,15 +110,6 @@ DELETE FROM projects WHERE id = ?
 
 func (q *Queries) DeleteProject(ctx context.Context, id int64) error {
 	_, err := q.db.ExecContext(ctx, deleteProject, id)
-	return err
-}
-
-const deleteTodo = `-- name: DeleteTodo :exec
-DELETE FROM todos WHERE id = ?
-`
-
-func (q *Queries) DeleteTodo(ctx context.Context, id int64) error {
-	_, err := q.db.ExecContext(ctx, deleteTodo, id)
 	return err
 }
 
@@ -125,19 +123,19 @@ func (q *Queries) DeleteUndoLog(ctx context.Context, id int64) error {
 }
 
 const getAllDependencies = `-- name: GetAllDependencies :many
-SELECT todo_id, depends_on_id FROM dependencies
+SELECT item_id, depends_on_id FROM project_item_dependencies
 `
 
-func (q *Queries) GetAllDependencies(ctx context.Context) ([]Dependency, error) {
+func (q *Queries) GetAllDependencies(ctx context.Context) ([]ProjectItemDependency, error) {
 	rows, err := q.db.QueryContext(ctx, getAllDependencies)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []Dependency
+	var items []ProjectItemDependency
 	for rows.Next() {
-		var i Dependency
-		if err := rows.Scan(&i.TodoID, &i.DependsOnID); err != nil {
+		var i ProjectItemDependency
+		if err := rows.Scan(&i.ItemID, &i.DependsOnID); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -152,30 +150,111 @@ func (q *Queries) GetAllDependencies(ctx context.Context) ([]Dependency, error) 
 }
 
 const getBlockers = `-- name: GetBlockers :many
-SELECT t.id, t.title, t.notes, t.due_date, t.completed, t.archived, t.created_at, t.updated_at
-FROM todos t
-JOIN dependencies d ON t.id = d.depends_on_id
-WHERE d.todo_id = ? AND t.completed = 0
+SELECT pi.id, pi.title, pi.notes, pi.completed, pi.archived, pi.created_at, pi.updated_at
+FROM project_items pi
+JOIN project_item_dependencies d ON pi.id = d.depends_on_id
+WHERE d.item_id = ? AND pi.completed = 0
 `
 
-func (q *Queries) GetBlockers(ctx context.Context, todoID int64) ([]Todo, error) {
-	rows, err := q.db.QueryContext(ctx, getBlockers, todoID)
+func (q *Queries) GetBlockers(ctx context.Context, itemID int64) ([]ProjectItem, error) {
+	rows, err := q.db.QueryContext(ctx, getBlockers, itemID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []Todo
+	var items []ProjectItem
 	for rows.Next() {
-		var i Todo
+		var i ProjectItem
 		if err := rows.Scan(
 			&i.ID,
 			&i.Title,
 			&i.Notes,
-			&i.DueDate,
 			&i.Completed,
 			&i.Archived,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getDependencyIDs = `-- name: GetDependencyIDs :many
+SELECT depends_on_id FROM project_item_dependencies WHERE item_id = ?
+`
+
+func (q *Queries) GetDependencyIDs(ctx context.Context, itemID int64) ([]int64, error) {
+	rows, err := q.db.QueryContext(ctx, getDependencyIDs, itemID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []int64
+	for rows.Next() {
+		var depends_on_id int64
+		if err := rows.Scan(&depends_on_id); err != nil {
+			return nil, err
+		}
+		items = append(items, depends_on_id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getItem = `-- name: GetItem :one
+SELECT id, title, notes, completed, archived, created_at, updated_at FROM project_items WHERE id = ?
+`
+
+func (q *Queries) GetItem(ctx context.Context, id int64) (ProjectItem, error) {
+	row := q.db.QueryRowContext(ctx, getItem, id)
+	var i ProjectItem
+	err := row.Scan(
+		&i.ID,
+		&i.Title,
+		&i.Notes,
+		&i.Completed,
+		&i.Archived,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getItemProjects = `-- name: GetItemProjects :many
+SELECT p.id, p.name, p.position, p.created_at
+FROM projects p
+JOIN project_item_memberships m ON p.id = m.project_id
+WHERE m.item_id = ?
+ORDER BY p.name
+`
+
+func (q *Queries) GetItemProjects(ctx context.Context, itemID int64) ([]Project, error) {
+	rows, err := q.db.QueryContext(ctx, getItemProjects, itemID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Project
+	for rows.Next() {
+		var i Project
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Position,
+			&i.CreatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -224,60 +303,34 @@ func (q *Queries) GetProject(ctx context.Context, id int64) (Project, error) {
 	return i, err
 }
 
-const getTodo = `-- name: GetTodo :one
-SELECT id, title, notes, due_date, completed, archived, created_at, updated_at FROM todos WHERE id = ?
+const getProjectWithItemCount = `-- name: GetProjectWithItemCount :one
+SELECT p.id, p.name, p.position, p.created_at, COUNT(pi.id) AS item_count
+FROM projects p
+LEFT JOIN project_item_memberships m ON p.id = m.project_id
+LEFT JOIN project_items pi ON m.item_id = pi.id AND pi.archived = 0
+WHERE p.id = ?
+GROUP BY p.id
 `
 
-func (q *Queries) GetTodo(ctx context.Context, id int64) (Todo, error) {
-	row := q.db.QueryRowContext(ctx, getTodo, id)
-	var i Todo
-	err := row.Scan(
-		&i.ID,
-		&i.Title,
-		&i.Notes,
-		&i.DueDate,
-		&i.Completed,
-		&i.Archived,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
+type GetProjectWithItemCountRow struct {
+	ID        int64
+	Name      string
+	Position  int64
+	CreatedAt string
+	ItemCount int64
 }
 
-const getTodoProjects = `-- name: GetTodoProjects :many
-SELECT p.id, p.name, p.position, p.created_at
-FROM projects p
-JOIN todo_projects tp ON p.id = tp.project_id
-WHERE tp.todo_id = ?
-ORDER BY p.name
-`
-
-func (q *Queries) GetTodoProjects(ctx context.Context, todoID int64) ([]Project, error) {
-	rows, err := q.db.QueryContext(ctx, getTodoProjects, todoID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []Project
-	for rows.Next() {
-		var i Project
-		if err := rows.Scan(
-			&i.ID,
-			&i.Name,
-			&i.Position,
-			&i.CreatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
+func (q *Queries) GetProjectWithItemCount(ctx context.Context, id int64) (GetProjectWithItemCountRow, error) {
+	row := q.db.QueryRowContext(ctx, getProjectWithItemCount, id)
+	var i GetProjectWithItemCountRow
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Position,
+		&i.CreatedAt,
+		&i.ItemCount,
+	)
+	return i, err
 }
 
 const insertUndoLog = `-- name: InsertUndoLog :exec
@@ -302,28 +355,25 @@ func (q *Queries) InsertUndoLog(ctx context.Context, arg InsertUndoLogParams) er
 	return err
 }
 
-const listArchivedTodos = `-- name: ListArchivedTodos :many
-SELECT t.id, t.title, t.notes, t.due_date, t.completed, t.archived, t.created_at, t.updated_at
-FROM todos t
-JOIN todo_projects tp ON t.id = tp.todo_id
-WHERE tp.project_id = ? AND t.archived = 1
-ORDER BY t.updated_at DESC
+const listAllItems = `-- name: ListAllItems :many
+SELECT id, title, notes, completed, archived, created_at, updated_at FROM project_items
+WHERE archived = 0
+ORDER BY created_at DESC
 `
 
-func (q *Queries) ListArchivedTodos(ctx context.Context, projectID int64) ([]Todo, error) {
-	rows, err := q.db.QueryContext(ctx, listArchivedTodos, projectID)
+func (q *Queries) ListAllItems(ctx context.Context) ([]ProjectItem, error) {
+	rows, err := q.db.QueryContext(ctx, listAllItems)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []Todo
+	var items []ProjectItem
 	for rows.Next() {
-		var i Todo
+		var i ProjectItem
 		if err := rows.Scan(
 			&i.ID,
 			&i.Title,
 			&i.Notes,
-			&i.DueDate,
 			&i.Completed,
 			&i.Archived,
 			&i.CreatedAt,
@@ -342,30 +392,80 @@ func (q *Queries) ListArchivedTodos(ctx context.Context, projectID int64) ([]Tod
 	return items, nil
 }
 
-const listBlockedTodos = `-- name: ListBlockedTodos :many
-SELECT DISTINCT t.id, t.title, t.notes, t.due_date, t.completed, t.archived, t.created_at, t.updated_at
-FROM todos t
-JOIN dependencies d ON t.id = d.todo_id
-JOIN todos blocker ON d.depends_on_id = blocker.id
+const listArchivedItems = `-- name: ListArchivedItems :many
+SELECT pi.id, pi.title, pi.notes, pi.completed, pi.archived, pi.created_at, pi.updated_at, m.position AS membership_position
+FROM project_items pi
+JOIN project_item_memberships m ON pi.id = m.item_id
+WHERE m.project_id = ? AND pi.archived = 1
+ORDER BY pi.updated_at DESC
+`
+
+type ListArchivedItemsRow struct {
+	ID                 int64
+	Title              string
+	Notes              sql.NullString
+	Completed          int64
+	Archived           int64
+	CreatedAt          string
+	UpdatedAt          string
+	MembershipPosition int64
+}
+
+func (q *Queries) ListArchivedItems(ctx context.Context, projectID int64) ([]ListArchivedItemsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listArchivedItems, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListArchivedItemsRow
+	for rows.Next() {
+		var i ListArchivedItemsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Title,
+			&i.Notes,
+			&i.Completed,
+			&i.Archived,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.MembershipPosition,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listBlockedItems = `-- name: ListBlockedItems :many
+SELECT DISTINCT pi.id, pi.title, pi.notes, pi.completed, pi.archived, pi.created_at, pi.updated_at
+FROM project_items pi
+JOIN project_item_dependencies d ON pi.id = d.item_id
+JOIN project_items blocker ON d.depends_on_id = blocker.id
 WHERE blocker.completed = 0
-  AND t.completed = 0
-  AND t.archived = 0
+  AND pi.completed = 0
+  AND pi.archived = 0
 `
 
-func (q *Queries) ListBlockedTodos(ctx context.Context) ([]Todo, error) {
-	rows, err := q.db.QueryContext(ctx, listBlockedTodos)
+func (q *Queries) ListBlockedItems(ctx context.Context) ([]ProjectItem, error) {
+	rows, err := q.db.QueryContext(ctx, listBlockedItems)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []Todo
+	var items []ProjectItem
 	for rows.Next() {
-		var i Todo
+		var i ProjectItem
 		if err := rows.Scan(
 			&i.ID,
 			&i.Title,
 			&i.Notes,
-			&i.DueDate,
 			&i.Completed,
 			&i.Archived,
 			&i.CreatedAt,
@@ -384,105 +484,89 @@ func (q *Queries) ListBlockedTodos(ctx context.Context) ([]Todo, error) {
 	return items, nil
 }
 
-const listProjects = `-- name: ListProjects :many
-SELECT id, name, position, created_at FROM projects ORDER BY position, name
+const listItemsByProject = `-- name: ListItemsByProject :many
+SELECT pi.id, pi.title, pi.notes, pi.completed, pi.archived, pi.created_at, pi.updated_at, m.position AS membership_position
+FROM project_items pi
+JOIN project_item_memberships m ON pi.id = m.item_id
+WHERE m.project_id = ? AND pi.archived = 0
+ORDER BY m.position, pi.created_at
 `
 
-func (q *Queries) ListProjects(ctx context.Context) ([]Project, error) {
-	rows, err := q.db.QueryContext(ctx, listProjects)
+type ListItemsByProjectRow struct {
+	ID                 int64
+	Title              string
+	Notes              sql.NullString
+	Completed          int64
+	Archived           int64
+	CreatedAt          string
+	UpdatedAt          string
+	MembershipPosition int64
+}
+
+func (q *Queries) ListItemsByProject(ctx context.Context, projectID int64) ([]ListItemsByProjectRow, error) {
+	rows, err := q.db.QueryContext(ctx, listItemsByProject, projectID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []Project
+	var items []ListItemsByProjectRow
 	for rows.Next() {
-		var i Project
+		var i ListItemsByProjectRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Title,
+			&i.Notes,
+			&i.Completed,
+			&i.Archived,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.MembershipPosition,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listProjectsWithItemCount = `-- name: ListProjectsWithItemCount :many
+SELECT p.id, p.name, p.position, p.created_at, COUNT(pi.id) AS item_count
+FROM projects p
+LEFT JOIN project_item_memberships m ON p.id = m.project_id
+LEFT JOIN project_items pi ON m.item_id = pi.id AND pi.archived = 0
+GROUP BY p.id
+ORDER BY p.position, p.name
+`
+
+type ListProjectsWithItemCountRow struct {
+	ID        int64
+	Name      string
+	Position  int64
+	CreatedAt string
+	ItemCount int64
+}
+
+func (q *Queries) ListProjectsWithItemCount(ctx context.Context) ([]ListProjectsWithItemCountRow, error) {
+	rows, err := q.db.QueryContext(ctx, listProjectsWithItemCount)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListProjectsWithItemCountRow
+	for rows.Next() {
+		var i ListProjectsWithItemCountRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.Name,
 			&i.Position,
 			&i.CreatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listTodosByProject = `-- name: ListTodosByProject :many
-SELECT t.id, t.title, t.notes, t.due_date, t.completed, t.archived, t.created_at, t.updated_at
-FROM todos t
-JOIN todo_projects tp ON t.id = tp.todo_id
-WHERE tp.project_id = ? AND t.archived = 0
-ORDER BY tp.position, t.created_at
-`
-
-func (q *Queries) ListTodosByProject(ctx context.Context, projectID int64) ([]Todo, error) {
-	rows, err := q.db.QueryContext(ctx, listTodosByProject, projectID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []Todo
-	for rows.Next() {
-		var i Todo
-		if err := rows.Scan(
-			&i.ID,
-			&i.Title,
-			&i.Notes,
-			&i.DueDate,
-			&i.Completed,
-			&i.Archived,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listTodosToday = `-- name: ListTodosToday :many
-SELECT id, title, notes, due_date, completed, archived, created_at, updated_at FROM todos
-WHERE due_date IS NOT NULL
-  AND due_date <= date('now')
-  AND completed = 0
-  AND archived = 0
-ORDER BY due_date, created_at
-`
-
-func (q *Queries) ListTodosToday(ctx context.Context) ([]Todo, error) {
-	rows, err := q.db.QueryContext(ctx, listTodosToday)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []Todo
-	for rows.Next() {
-		var i Todo
-		if err := rows.Scan(
-			&i.ID,
-			&i.Title,
-			&i.Notes,
-			&i.DueDate,
-			&i.Completed,
-			&i.Archived,
-			&i.CreatedAt,
-			&i.UpdatedAt,
+			&i.ItemCount,
 		); err != nil {
 			return nil, err
 		}
@@ -498,59 +582,58 @@ func (q *Queries) ListTodosToday(ctx context.Context) ([]Todo, error) {
 }
 
 const removeDependency = `-- name: RemoveDependency :exec
-DELETE FROM dependencies WHERE todo_id = ? AND depends_on_id = ?
+DELETE FROM project_item_dependencies WHERE item_id = ? AND depends_on_id = ?
 `
 
 type RemoveDependencyParams struct {
-	TodoID      int64
+	ItemID      int64
 	DependsOnID int64
 }
 
 func (q *Queries) RemoveDependency(ctx context.Context, arg RemoveDependencyParams) error {
-	_, err := q.db.ExecContext(ctx, removeDependency, arg.TodoID, arg.DependsOnID)
+	_, err := q.db.ExecContext(ctx, removeDependency, arg.ItemID, arg.DependsOnID)
 	return err
 }
 
-const removeTodoFromProject = `-- name: RemoveTodoFromProject :exec
-DELETE FROM todo_projects WHERE todo_id = ? AND project_id = ?
+const removeItemFromProject = `-- name: RemoveItemFromProject :exec
+DELETE FROM project_item_memberships WHERE item_id = ? AND project_id = ?
 `
 
-type RemoveTodoFromProjectParams struct {
-	TodoID    int64
+type RemoveItemFromProjectParams struct {
+	ItemID    int64
 	ProjectID int64
 }
 
-func (q *Queries) RemoveTodoFromProject(ctx context.Context, arg RemoveTodoFromProjectParams) error {
-	_, err := q.db.ExecContext(ctx, removeTodoFromProject, arg.TodoID, arg.ProjectID)
+func (q *Queries) RemoveItemFromProject(ctx context.Context, arg RemoveItemFromProjectParams) error {
+	_, err := q.db.ExecContext(ctx, removeItemFromProject, arg.ItemID, arg.ProjectID)
 	return err
 }
 
-const searchTodos = `-- name: SearchTodos :many
-SELECT id, title, notes, due_date, completed, archived, created_at, updated_at FROM todos
+const searchItems = `-- name: SearchItems :many
+SELECT id, title, notes, completed, archived, created_at, updated_at FROM project_items
 WHERE (title LIKE '%' || ? || '%' OR notes LIKE '%' || ? || '%')
   AND archived = 0
 ORDER BY created_at DESC
 `
 
-type SearchTodosParams struct {
+type SearchItemsParams struct {
 	Column1 sql.NullString
 	Column2 sql.NullString
 }
 
-func (q *Queries) SearchTodos(ctx context.Context, arg SearchTodosParams) ([]Todo, error) {
-	rows, err := q.db.QueryContext(ctx, searchTodos, arg.Column1, arg.Column2)
+func (q *Queries) SearchItems(ctx context.Context, arg SearchItemsParams) ([]ProjectItem, error) {
+	rows, err := q.db.QueryContext(ctx, searchItems, arg.Column1, arg.Column2)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []Todo
+	var items []ProjectItem
 	for rows.Next() {
-		var i Todo
+		var i ProjectItem
 		if err := rows.Scan(
 			&i.ID,
 			&i.Title,
 			&i.Notes,
-			&i.DueDate,
 			&i.Completed,
 			&i.Archived,
 			&i.CreatedAt,
@@ -569,56 +652,38 @@ func (q *Queries) SearchTodos(ctx context.Context, arg SearchTodosParams) ([]Tod
 	return items, nil
 }
 
-const updateProjectPosition = `-- name: UpdateProjectPosition :exec
-UPDATE projects SET position = ? WHERE id = ?
-`
-
-type UpdateProjectPositionParams struct {
-	Position int64
-	ID       int64
-}
-
-func (q *Queries) UpdateProjectPosition(ctx context.Context, arg UpdateProjectPositionParams) error {
-	_, err := q.db.ExecContext(ctx, updateProjectPosition, arg.Position, arg.ID)
-	return err
-}
-
-const updateTodo = `-- name: UpdateTodo :one
-UPDATE todos
-SET title = COALESCE(?, title),
-    notes = COALESCE(?, notes),
-    due_date = COALESCE(?, due_date),
-    completed = COALESCE(?, completed),
-    archived = COALESCE(?, archived),
+const updateItem = `-- name: UpdateItem :one
+UPDATE project_items
+SET title = ?,
+    notes = ?,
+    completed = ?,
+    archived = ?,
     updated_at = datetime('now')
 WHERE id = ?
-RETURNING id, title, notes, due_date, completed, archived, created_at, updated_at
+RETURNING id, title, notes, completed, archived, created_at, updated_at
 `
 
-type UpdateTodoParams struct {
+type UpdateItemParams struct {
 	Title     string
 	Notes     sql.NullString
-	DueDate   sql.NullString
 	Completed int64
 	Archived  int64
 	ID        int64
 }
 
-func (q *Queries) UpdateTodo(ctx context.Context, arg UpdateTodoParams) (Todo, error) {
-	row := q.db.QueryRowContext(ctx, updateTodo,
+func (q *Queries) UpdateItem(ctx context.Context, arg UpdateItemParams) (ProjectItem, error) {
+	row := q.db.QueryRowContext(ctx, updateItem,
 		arg.Title,
 		arg.Notes,
-		arg.DueDate,
 		arg.Completed,
 		arg.Archived,
 		arg.ID,
 	)
-	var i Todo
+	var i ProjectItem
 	err := row.Scan(
 		&i.ID,
 		&i.Title,
 		&i.Notes,
-		&i.DueDate,
 		&i.Completed,
 		&i.Archived,
 		&i.CreatedAt,
@@ -627,17 +692,43 @@ func (q *Queries) UpdateTodo(ctx context.Context, arg UpdateTodoParams) (Todo, e
 	return i, err
 }
 
-const updateTodoPosition = `-- name: UpdateTodoPosition :exec
-UPDATE todo_projects SET position = ? WHERE todo_id = ? AND project_id = ?
+const updateItemPosition = `-- name: UpdateItemPosition :exec
+UPDATE project_item_memberships SET position = ? WHERE item_id = ? AND project_id = ?
 `
 
-type UpdateTodoPositionParams struct {
+type UpdateItemPositionParams struct {
 	Position  int64
-	TodoID    int64
+	ItemID    int64
 	ProjectID int64
 }
 
-func (q *Queries) UpdateTodoPosition(ctx context.Context, arg UpdateTodoPositionParams) error {
-	_, err := q.db.ExecContext(ctx, updateTodoPosition, arg.Position, arg.TodoID, arg.ProjectID)
+func (q *Queries) UpdateItemPosition(ctx context.Context, arg UpdateItemPositionParams) error {
+	_, err := q.db.ExecContext(ctx, updateItemPosition, arg.Position, arg.ItemID, arg.ProjectID)
 	return err
+}
+
+const updateProject = `-- name: UpdateProject :one
+UPDATE projects
+SET name = ?,
+    position = ?
+WHERE id = ?
+RETURNING id, name, position, created_at
+`
+
+type UpdateProjectParams struct {
+	Name     string
+	Position int64
+	ID       int64
+}
+
+func (q *Queries) UpdateProject(ctx context.Context, arg UpdateProjectParams) (Project, error) {
+	row := q.db.QueryRowContext(ctx, updateProject, arg.Name, arg.Position, arg.ID)
+	var i Project
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Position,
+		&i.CreatedAt,
+	)
+	return i, err
 }

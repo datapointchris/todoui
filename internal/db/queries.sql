@@ -1,110 +1,126 @@
--- name: ListProjects :many
-SELECT * FROM projects ORDER BY position, name;
+-- name: ListProjectsWithItemCount :many
+SELECT p.*, COUNT(pi.id) AS item_count
+FROM projects p
+LEFT JOIN project_item_memberships m ON p.id = m.project_id
+LEFT JOIN project_items pi ON m.item_id = pi.id AND pi.archived = 0
+GROUP BY p.id
+ORDER BY p.position, p.name;
 
 -- name: GetProject :one
 SELECT * FROM projects WHERE id = ?;
+
+-- name: GetProjectWithItemCount :one
+SELECT p.*, COUNT(pi.id) AS item_count
+FROM projects p
+LEFT JOIN project_item_memberships m ON p.id = m.project_id
+LEFT JOIN project_items pi ON m.item_id = pi.id AND pi.archived = 0
+WHERE p.id = ?
+GROUP BY p.id;
 
 -- name: CreateProject :one
 INSERT INTO projects (name, position)
 VALUES (?, (SELECT COALESCE(MAX(position), 0) + 1 FROM projects))
 RETURNING *;
 
+-- name: UpdateProject :one
+UPDATE projects
+SET name = ?,
+    position = ?
+WHERE id = ?
+RETURNING *;
+
 -- name: DeleteProject :exec
 DELETE FROM projects WHERE id = ?;
 
--- name: UpdateProjectPosition :exec
-UPDATE projects SET position = ? WHERE id = ?;
+-- name: ListAllItems :many
+SELECT * FROM project_items
+WHERE archived = 0
+ORDER BY created_at DESC;
 
--- name: ListTodosByProject :many
-SELECT t.*
-FROM todos t
-JOIN todo_projects tp ON t.id = tp.todo_id
-WHERE tp.project_id = ? AND t.archived = 0
-ORDER BY tp.position, t.created_at;
+-- name: ListItemsByProject :many
+SELECT pi.*, m.position AS membership_position
+FROM project_items pi
+JOIN project_item_memberships m ON pi.id = m.item_id
+WHERE m.project_id = ? AND pi.archived = 0
+ORDER BY m.position, pi.created_at;
 
--- name: GetTodo :one
-SELECT * FROM todos WHERE id = ?;
+-- name: GetItem :one
+SELECT * FROM project_items WHERE id = ?;
 
--- name: CreateTodo :one
-INSERT INTO todos (title, notes, due_date)
-VALUES (?, ?, ?)
+-- name: CreateItem :one
+INSERT INTO project_items (title, notes)
+VALUES (?, ?)
 RETURNING *;
 
--- name: UpdateTodo :one
-UPDATE todos
-SET title = COALESCE(?, title),
-    notes = COALESCE(?, notes),
-    due_date = COALESCE(?, due_date),
-    completed = COALESCE(?, completed),
-    archived = COALESCE(?, archived),
+-- name: UpdateItem :one
+UPDATE project_items
+SET title = ?,
+    notes = ?,
+    completed = ?,
+    archived = ?,
     updated_at = datetime('now')
 WHERE id = ?
 RETURNING *;
 
--- name: DeleteTodo :exec
-DELETE FROM todos WHERE id = ?;
+-- name: DeleteItem :exec
+DELETE FROM project_items WHERE id = ?;
 
--- name: AddTodoToProject :exec
-INSERT INTO todo_projects (todo_id, project_id, position)
-VALUES (?, ?, (SELECT COALESCE(MAX(tp.position), 0) + 1 FROM todo_projects tp WHERE tp.project_id = ?));
+-- name: AddItemToProject :exec
+INSERT INTO project_item_memberships (item_id, project_id, position)
+VALUES (?, ?, (SELECT COALESCE(MAX(m.position), 0) + 1 FROM project_item_memberships m WHERE m.project_id = ?));
 
--- name: RemoveTodoFromProject :exec
-DELETE FROM todo_projects WHERE todo_id = ? AND project_id = ?;
+-- name: RemoveItemFromProject :exec
+DELETE FROM project_item_memberships WHERE item_id = ? AND project_id = ?;
 
--- name: GetTodoProjects :many
+-- name: GetItemProjects :many
 SELECT p.*
 FROM projects p
-JOIN todo_projects tp ON p.id = tp.project_id
-WHERE tp.todo_id = ?
+JOIN project_item_memberships m ON p.id = m.project_id
+WHERE m.item_id = ?
 ORDER BY p.name;
 
--- name: UpdateTodoPosition :exec
-UPDATE todo_projects SET position = ? WHERE todo_id = ? AND project_id = ?;
+-- name: UpdateItemPosition :exec
+UPDATE project_item_memberships SET position = ? WHERE item_id = ? AND project_id = ?;
 
 -- name: AddDependency :exec
-INSERT INTO dependencies (todo_id, depends_on_id) VALUES (?, ?);
+INSERT INTO project_item_dependencies (item_id, depends_on_id) VALUES (?, ?);
 
 -- name: RemoveDependency :exec
-DELETE FROM dependencies WHERE todo_id = ? AND depends_on_id = ?;
+DELETE FROM project_item_dependencies WHERE item_id = ? AND depends_on_id = ?;
 
 -- name: GetBlockers :many
-SELECT t.*
-FROM todos t
-JOIN dependencies d ON t.id = d.depends_on_id
-WHERE d.todo_id = ? AND t.completed = 0;
+SELECT pi.*
+FROM project_items pi
+JOIN project_item_dependencies d ON pi.id = d.depends_on_id
+WHERE d.item_id = ? AND pi.completed = 0;
+
+-- name: GetDependencyIDs :many
+SELECT depends_on_id FROM project_item_dependencies WHERE item_id = ?;
 
 -- name: GetAllDependencies :many
-SELECT * FROM dependencies;
+SELECT * FROM project_item_dependencies;
 
--- name: SearchTodos :many
-SELECT * FROM todos
+-- name: SearchItems :many
+SELECT * FROM project_items
 WHERE (title LIKE '%' || ? || '%' OR notes LIKE '%' || ? || '%')
   AND archived = 0
 ORDER BY created_at DESC;
 
--- name: ListTodosToday :many
-SELECT * FROM todos
-WHERE due_date IS NOT NULL
-  AND due_date <= date('now')
-  AND completed = 0
-  AND archived = 0
-ORDER BY due_date, created_at;
-
--- name: ListBlockedTodos :many
-SELECT DISTINCT t.*
-FROM todos t
-JOIN dependencies d ON t.id = d.todo_id
-JOIN todos blocker ON d.depends_on_id = blocker.id
+-- name: ListBlockedItems :many
+SELECT DISTINCT pi.*
+FROM project_items pi
+JOIN project_item_dependencies d ON pi.id = d.item_id
+JOIN project_items blocker ON d.depends_on_id = blocker.id
 WHERE blocker.completed = 0
-  AND t.completed = 0
-  AND t.archived = 0;
+  AND pi.completed = 0
+  AND pi.archived = 0;
 
--- name: ListArchivedTodos :many
-SELECT t.*
-FROM todos t
-JOIN todo_projects tp ON t.id = tp.todo_id
-WHERE tp.project_id = ? AND t.archived = 1
-ORDER BY t.updated_at DESC;
+-- name: ListArchivedItems :many
+SELECT pi.*, m.position AS membership_position
+FROM project_items pi
+JOIN project_item_memberships m ON pi.id = m.item_id
+WHERE m.project_id = ? AND pi.archived = 1
+ORDER BY pi.updated_at DESC;
 
 -- name: InsertUndoLog :exec
 INSERT INTO undo_log (action, entity_type, entity_id, previous_state)

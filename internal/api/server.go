@@ -43,22 +43,24 @@ func (s *Server) buildRouter() chi.Router {
 		r.Get("/", s.listProjects)
 		r.Post("/", s.createProject)
 		r.Route("/{projectID}", func(r chi.Router) {
+			r.Get("/", s.getProject)
+			r.Patch("/", s.updateProject)
 			r.Delete("/", s.deleteProject)
-			r.Patch("/reorder", s.reorderProject)
-			r.Get("/todos", s.listTodosByProject)
+			r.Get("/items", s.listItemsByProject)
 		})
 	})
 
-	r.Route("/todos", func(r chi.Router) {
-		r.Post("/", s.createTodo)
-		r.Get("/today", s.listToday)
+	r.Route("/project-items", func(r chi.Router) {
+		r.Get("/", s.listAllItems)
+		r.Post("/", s.createItem)
 		r.Get("/blocked", s.listBlocked)
-		r.Route("/{todoID}", func(r chi.Router) {
-			r.Get("/", s.getTodo)
-			r.Patch("/", s.updateTodo)
-			r.Delete("/", s.deleteTodo)
-			r.Patch("/reorder", s.reorderTodo)
-			r.Get("/projects", s.getTodoProjects)
+		r.Get("/search", s.search)
+		r.Route("/{itemID}", func(r chi.Router) {
+			r.Get("/", s.getItem)
+			r.Patch("/", s.updateItem)
+			r.Delete("/", s.deleteItem)
+			r.Patch("/reorder", s.reorderItem)
+			r.Get("/projects", s.getItemProjects)
 			r.Post("/projects", s.addToProject)
 			r.Delete("/projects/{projectID}", s.removeFromProject)
 			r.Post("/dependencies", s.addDependency)
@@ -66,8 +68,6 @@ func (s *Server) buildRouter() chi.Router {
 			r.Get("/blockers", s.getBlockers)
 		})
 	})
-
-	r.Get("/search", s.search)
 
 	r.Route("/undo", func(r chi.Router) {
 		r.Get("/", s.canUndo)

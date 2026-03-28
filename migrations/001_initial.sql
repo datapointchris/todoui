@@ -5,29 +5,28 @@ CREATE TABLE projects (
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE TABLE todos (
+CREATE TABLE project_items (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     title TEXT NOT NULL,
     notes TEXT,
-    due_date TEXT,
     completed INTEGER NOT NULL DEFAULT 0,
     archived INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE TABLE todo_projects (
-    todo_id INTEGER NOT NULL REFERENCES todos(id) ON DELETE CASCADE,
+CREATE TABLE project_item_memberships (
+    item_id INTEGER NOT NULL REFERENCES project_items(id) ON DELETE CASCADE,
     project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
     position INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (todo_id, project_id)
+    PRIMARY KEY (item_id, project_id)
 );
 
-CREATE TABLE dependencies (
-    todo_id INTEGER NOT NULL REFERENCES todos(id) ON DELETE CASCADE,
-    depends_on_id INTEGER NOT NULL REFERENCES todos(id) ON DELETE CASCADE,
-    PRIMARY KEY (todo_id, depends_on_id),
-    CHECK (todo_id != depends_on_id)
+CREATE TABLE project_item_dependencies (
+    item_id INTEGER NOT NULL REFERENCES project_items(id) ON DELETE CASCADE,
+    depends_on_id INTEGER NOT NULL REFERENCES project_items(id) ON DELETE CASCADE,
+    PRIMARY KEY (item_id, depends_on_id),
+    CHECK (item_id != depends_on_id)
 );
 
 CREATE TABLE undo_log (
@@ -39,11 +38,10 @@ CREATE TABLE undo_log (
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE INDEX idx_todo_projects_project ON todo_projects(project_id);
-CREATE INDEX idx_todo_projects_todo ON todo_projects(todo_id);
-CREATE INDEX idx_todo_projects_position ON todo_projects(project_id, position);
-CREATE INDEX idx_todos_due ON todos(due_date) WHERE due_date IS NOT NULL;
-CREATE INDEX idx_todos_active ON todos(archived) WHERE archived = 0;
-CREATE INDEX idx_deps_todo ON dependencies(todo_id);
-CREATE INDEX idx_deps_depends ON dependencies(depends_on_id);
+CREATE INDEX idx_memberships_project ON project_item_memberships(project_id);
+CREATE INDEX idx_memberships_item ON project_item_memberships(item_id);
+CREATE INDEX idx_memberships_position ON project_item_memberships(project_id, position);
+CREATE INDEX idx_project_items_active ON project_items(archived) WHERE archived = 0;
+CREATE INDEX idx_deps_item ON project_item_dependencies(item_id);
+CREATE INDEX idx_deps_depends ON project_item_dependencies(depends_on_id);
 CREATE INDEX idx_undo_recent ON undo_log(created_at DESC);
