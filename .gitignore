@@ -1,0 +1,30 @@
+# Binaries
+/todoui
+/todoui-server
+*.exe
+
+# Go
+vendor/
+
+# SQLite
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Planning (local only)
+.planning/
+
+# Node (web frontend)
+web/node_modules/
+web/dist/
