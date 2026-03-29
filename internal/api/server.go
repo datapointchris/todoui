@@ -47,6 +47,10 @@ func (s *Server) buildRouter() chi.Router {
 	}))
 	r.Use(jsonContentType)
 
+	r.Get("/health", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	})
+
 	r.Route("/projects", func(r chi.Router) {
 		r.Get("/", s.listProjects)
 		r.Post("/", s.createProject)
