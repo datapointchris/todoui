@@ -1,4 +1,4 @@
-package api
+package testapi
 
 import (
 	"encoding/json"
@@ -9,19 +9,19 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
-	"github.com/go-chi/cors"
 
 	"github.com/datapointchris/todoui/internal/backend"
 	"github.com/datapointchris/todoui/internal/model"
 )
 
-// Server holds the dependencies for the HTTP API.
+// Server is a test double that mirrors ichrisbirch FastAPI behavior.
+// It is used only in tests — the real API is ichrisbirch.
 type Server struct {
 	backend backend.Backend
 	router  chi.Router
 }
 
-// NewServer creates an API server with all routes registered.
+// NewServer creates a test API server with all routes registered.
 func NewServer(b backend.Backend) *Server {
 	s := &Server{backend: b}
 	s.router = s.buildRouter()
@@ -38,18 +38,7 @@ func (s *Server) buildRouter() chi.Router {
 
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
-	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins:   []string{"https://*", "http://*"},
-		AllowedMethods:   []string{"GET", "POST", "PATCH", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"Accept", "Content-Type", "Authorization"},
-		AllowCredentials: false,
-		MaxAge:           300,
-	}))
 	r.Use(jsonContentType)
-
-	r.Get("/health", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-	})
 
 	r.Route("/projects", func(r chi.Router) {
 		r.Get("/", s.listProjects)
@@ -105,25 +94,27 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	}
 }
 
-func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg})
+// writeDetail matches FastAPI's error response format: {"detail": "message"}
+func writeDetail(w http.ResponseWriter, status int, msg string) {
+	writeJSON(w, status, map[string]string{"detail": msg})
 }
 
+// handleError maps domain errors to HTTP responses matching ichrisbirch FastAPI.
 func handleError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, model.ErrNotFound):
-		writeError(w, http.StatusNotFound, err.Error())
+		writeDetail(w, http.StatusNotFound, err.Error())
 	case errors.Is(err, model.ErrDuplicateName):
-		writeError(w, http.StatusConflict, err.Error())
+		writeDetail(w, http.StatusConflict, err.Error())
 	case errors.Is(err, model.ErrCyclicDependency):
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeDetail(w, http.StatusConflict, err.Error())
 	case errors.Is(err, model.ErrLastProject):
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeDetail(w, http.StatusConflict, err.Error())
 	case errors.Is(err, model.ErrNothingToUndo):
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeDetail(w, http.StatusBadRequest, err.Error())
 	default:
 		log.Printf("internal error: %v", err)
-		writeError(w, http.StatusInternalServerError, "internal server error")
+		writeDetail(w, http.StatusInternalServerError, "internal server error")
 	}
 }
 

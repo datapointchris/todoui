@@ -4,10 +4,10 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/datapointchris/todoui/internal/api"
 	"github.com/datapointchris/todoui/internal/backend"
 	"github.com/datapointchris/todoui/internal/db"
 	"github.com/datapointchris/todoui/internal/model"
+	"github.com/datapointchris/todoui/internal/testapi"
 )
 
 // setupRemote creates an in-memory SQLite DB, wraps it in a LocalBackend,
@@ -22,7 +22,7 @@ func setupRemote(t *testing.T) *backend.RemoteBackend {
 	t.Cleanup(func() { _ = database.Close() })
 
 	local := backend.NewLocalBackend(database)
-	srv := api.NewServer(local)
+	srv := testapi.NewServer(local)
 	ts := httptest.NewServer(srv)
 	t.Cleanup(ts.Close)
 

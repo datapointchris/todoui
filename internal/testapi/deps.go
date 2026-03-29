@@ -1,4 +1,4 @@
-package api
+package testapi
 
 import (
 	"encoding/json"
@@ -8,7 +8,7 @@ import (
 func (s *Server) addDependency(w http.ResponseWriter, r *http.Request) {
 	itemID, err := parseID(r, "itemID")
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid item ID")
+		writeDetail(w, http.StatusBadRequest, "invalid item ID")
 		return
 	}
 
@@ -16,7 +16,7 @@ func (s *Server) addDependency(w http.ResponseWriter, r *http.Request) {
 		DependsOnID int64 `json:"depends_on_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON")
+		writeDetail(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
 
@@ -30,13 +30,13 @@ func (s *Server) addDependency(w http.ResponseWriter, r *http.Request) {
 func (s *Server) removeDependency(w http.ResponseWriter, r *http.Request) {
 	itemID, err := parseID(r, "itemID")
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid item ID")
+		writeDetail(w, http.StatusBadRequest, "invalid item ID")
 		return
 	}
 
 	depID, err := parseID(r, "depID")
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid dependency ID")
+		writeDetail(w, http.StatusBadRequest, "invalid dependency ID")
 		return
 	}
 
@@ -50,7 +50,7 @@ func (s *Server) removeDependency(w http.ResponseWriter, r *http.Request) {
 func (s *Server) getBlockers(w http.ResponseWriter, r *http.Request) {
 	itemID, err := parseID(r, "itemID")
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid item ID")
+		writeDetail(w, http.StatusBadRequest, "invalid item ID")
 		return
 	}
 
@@ -65,7 +65,7 @@ func (s *Server) getBlockers(w http.ResponseWriter, r *http.Request) {
 func (s *Server) getItemProjects(w http.ResponseWriter, r *http.Request) {
 	itemID, err := parseID(r, "itemID")
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid item ID")
+		writeDetail(w, http.StatusBadRequest, "invalid item ID")
 		return
 	}
 
@@ -80,7 +80,7 @@ func (s *Server) getItemProjects(w http.ResponseWriter, r *http.Request) {
 func (s *Server) addToProject(w http.ResponseWriter, r *http.Request) {
 	itemID, err := parseID(r, "itemID")
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid item ID")
+		writeDetail(w, http.StatusBadRequest, "invalid item ID")
 		return
 	}
 
@@ -88,7 +88,7 @@ func (s *Server) addToProject(w http.ResponseWriter, r *http.Request) {
 		ProjectID int64 `json:"project_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON")
+		writeDetail(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
 
@@ -102,13 +102,13 @@ func (s *Server) addToProject(w http.ResponseWriter, r *http.Request) {
 func (s *Server) removeFromProject(w http.ResponseWriter, r *http.Request) {
 	itemID, err := parseID(r, "itemID")
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid item ID")
+		writeDetail(w, http.StatusBadRequest, "invalid item ID")
 		return
 	}
 
 	projectID, err := parseID(r, "projectID")
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid project ID")
+		writeDetail(w, http.StatusBadRequest, "invalid project ID")
 		return
 	}
 
@@ -122,7 +122,7 @@ func (s *Server) removeFromProject(w http.ResponseWriter, r *http.Request) {
 func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query().Get("q")
 	if q == "" {
-		writeError(w, http.StatusBadRequest, "q parameter is required")
+		writeDetail(w, http.StatusBadRequest, "q parameter is required")
 		return
 	}
 

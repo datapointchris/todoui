@@ -1,4 +1,4 @@
-package api
+package testapi
 
 import (
 	"encoding/json"
@@ -19,7 +19,7 @@ func (s *Server) listProjects(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) getProject(w http.ResponseWriter, r *http.Request) {
 	id, err := parseID(r, "projectID")
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid project ID")
+		writeDetail(w, http.StatusBadRequest, "invalid project ID")
 		return
 	}
 
@@ -36,11 +36,11 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		Name string `json:"name"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON")
+		writeDetail(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
 	if body.Name == "" {
-		writeError(w, http.StatusBadRequest, "name is required")
+		writeDetail(w, http.StatusBadRequest, "name is required")
 		return
 	}
 
@@ -55,13 +55,13 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
 	id, err := parseID(r, "projectID")
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid project ID")
+		writeDetail(w, http.StatusBadRequest, "invalid project ID")
 		return
 	}
 
 	var input model.UpdateProject
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON")
+		writeDetail(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
 
@@ -76,7 +76,7 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
 func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 	id, err := parseID(r, "projectID")
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid project ID")
+		writeDetail(w, http.StatusBadRequest, "invalid project ID")
 		return
 	}
 

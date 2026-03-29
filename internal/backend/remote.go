@@ -95,14 +95,17 @@ func (r *RemoteBackend) handleResponse(resp *http.Response, result any) error {
 	return json.NewDecoder(resp.Body).Decode(result)
 }
 
+// parseError maps HTTP error responses from ichrisbirch FastAPI to domain errors.
+// FastAPI returns errors as {"detail": "message"} and uses 409 Conflict for
+// cyclic dependencies and last-project violations (not 400 Bad Request).
 func (r *RemoteBackend) parseError(resp *http.Response) error {
 	var apiErr struct {
-		Error string `json:"error"`
+		Detail string `json:"detail"`
 	}
 	body, _ := io.ReadAll(resp.Body)
 	_ = json.Unmarshal(body, &apiErr)
 
-	msg := apiErr.Error
+	msg := apiErr.Detail
 	if msg == "" {
 		msg = string(body)
 	}
@@ -111,14 +114,16 @@ func (r *RemoteBackend) parseError(resp *http.Response) error {
 	case http.StatusNotFound:
 		return model.ErrNotFound
 	case http.StatusConflict:
-		return model.ErrDuplicateName
-	case http.StatusBadRequest:
 		switch {
 		case strings.Contains(msg, "cyclic"):
 			return model.ErrCyclicDependency
 		case strings.Contains(msg, "at least one"):
 			return model.ErrLastProject
-		case strings.Contains(msg, "nothing to undo"):
+		default:
+			return model.ErrDuplicateName
+		}
+	case http.StatusBadRequest:
+		if strings.Contains(msg, "nothing to undo") {
 			return model.ErrNothingToUndo
 		}
 		return fmt.Errorf("bad request: %s", msg)

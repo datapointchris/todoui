@@ -1,4 +1,4 @@
-package api
+package testapi
 
 import (
 	"encoding/json"
@@ -19,7 +19,7 @@ func (s *Server) listAllItems(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) listItemsByProject(w http.ResponseWriter, r *http.Request) {
 	projectID, err := parseID(r, "projectID")
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid project ID")
+		writeDetail(w, http.StatusBadRequest, "invalid project ID")
 		return
 	}
 
@@ -45,15 +45,15 @@ func (s *Server) listItemsByProject(w http.ResponseWriter, r *http.Request) {
 func (s *Server) createItem(w http.ResponseWriter, r *http.Request) {
 	var input model.CreateProjectItem
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON")
+		writeDetail(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
 	if input.Title == "" {
-		writeError(w, http.StatusBadRequest, "title is required")
+		writeDetail(w, http.StatusBadRequest, "title is required")
 		return
 	}
 	if len(input.ProjectIDs) == 0 {
-		writeError(w, http.StatusBadRequest, "at least one project_id is required")
+		writeDetail(w, http.StatusBadRequest, "at least one project_id is required")
 		return
 	}
 
@@ -68,7 +68,7 @@ func (s *Server) createItem(w http.ResponseWriter, r *http.Request) {
 func (s *Server) getItem(w http.ResponseWriter, r *http.Request) {
 	id, err := parseID(r, "itemID")
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid item ID")
+		writeDetail(w, http.StatusBadRequest, "invalid item ID")
 		return
 	}
 
@@ -83,13 +83,13 @@ func (s *Server) getItem(w http.ResponseWriter, r *http.Request) {
 func (s *Server) updateItem(w http.ResponseWriter, r *http.Request) {
 	id, err := parseID(r, "itemID")
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid item ID")
+		writeDetail(w, http.StatusBadRequest, "invalid item ID")
 		return
 	}
 
 	var input model.UpdateProjectItem
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON")
+		writeDetail(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
 
@@ -104,7 +104,7 @@ func (s *Server) updateItem(w http.ResponseWriter, r *http.Request) {
 func (s *Server) deleteItem(w http.ResponseWriter, r *http.Request) {
 	id, err := parseID(r, "itemID")
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid item ID")
+		writeDetail(w, http.StatusBadRequest, "invalid item ID")
 		return
 	}
 
@@ -118,7 +118,7 @@ func (s *Server) deleteItem(w http.ResponseWriter, r *http.Request) {
 func (s *Server) reorderItem(w http.ResponseWriter, r *http.Request) {
 	itemID, err := parseID(r, "itemID")
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid item ID")
+		writeDetail(w, http.StatusBadRequest, "invalid item ID")
 		return
 	}
 
@@ -127,7 +127,7 @@ func (s *Server) reorderItem(w http.ResponseWriter, r *http.Request) {
 		Position  int   `json:"position"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON")
+		writeDetail(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
 
