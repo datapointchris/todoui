@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/datapointchris/todoui/internal/db/generated"
 	"github.com/datapointchris/todoui/internal/graph"
@@ -58,6 +59,9 @@ func (b *LocalBackend) GetProject(id int64) (*model.ProjectWithItemCount, error)
 func (b *LocalBackend) CreateProject(name string) (*model.Project, error) {
 	p, err := b.q.CreateProject(b.ctx(), name)
 	if err != nil {
+		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+			return nil, model.ErrDuplicateName
+		}
 		return nil, fmt.Errorf("creating project: %w", err)
 	}
 	result := toModelProject(p)
