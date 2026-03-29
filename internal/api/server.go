@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/go-chi/cors"
 
 	"github.com/datapointchris/todoui/internal/backend"
 	"github.com/datapointchris/todoui/internal/model"
@@ -37,6 +38,13 @@ func (s *Server) buildRouter() chi.Router {
 
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
+	r.Use(cors.Handler(cors.Options{
+		AllowedOrigins:   []string{"https://*", "http://*"},
+		AllowedMethods:   []string{"GET", "POST", "PATCH", "DELETE", "OPTIONS"},
+		AllowedHeaders:   []string{"Accept", "Content-Type", "Authorization"},
+		AllowCredentials: false,
+		MaxAge:           300,
+	}))
 	r.Use(jsonContentType)
 
 	r.Route("/projects", func(r chi.Router) {
