@@ -12,6 +12,7 @@ linters:
     - gosimple
     - gocritic
     - gofumpt
+    - nakedret
     - misspell
     - unconvert
     - wastedassign
@@ -41,6 +42,8 @@ linters-settings:
       - rangeValCopy
       - hugeParam
   gofumpt:
-    extra-rules: true
+    extra-rules: false
+  nakedret:
+    max-func-lines: 20
   misspell:
     locale: US
