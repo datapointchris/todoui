@@ -65,7 +65,8 @@ type App struct {
 	// Navigation
 	pendingItemID int64 // after fetch, select this item
 
-	err error
+	errorMsg string // transient error shown in status bar
+	loading  bool   // true while an async operation is in-flight
 }
 
 // NewApp creates a new TUI application backed by the given Backend.
@@ -491,7 +492,8 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, fetchProjectsCmd(m.backend)
 
 	case errMsg:
-		m.err = msg.error
+		m.loading = false
+		m.errorMsg = msg.Error()
 		return m, nil
 	}
 
@@ -504,6 +506,9 @@ func (m *App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if msg.String() == "ctrl+c" {
 		return m, tea.Quit
 	}
+
+	// Any keypress clears transient messages
+	m.errorMsg = ""
 
 	switch m.appMode {
 	case modeNormal:
@@ -1220,10 +1225,6 @@ func (m *App) View() string {
 		return "Loading..."
 	}
 
-	if m.err != nil {
-		return fmt.Sprintf("Error: %v\nPress q to quit.", m.err)
-	}
-
 	switch m.appMode {
 	case modeAddItem, modeAddItemMulti, modeAddProject, modeEditTitle:
 		overlay := m.renderInputOverlay()
@@ -1750,7 +1751,17 @@ func (m *App) statusBarHints() string {
 }
 
 func (m *App) renderStatusBar() string {
-	left := m.statusBarHints()
+	var left string
+	switch {
+	case m.errorMsg != "":
+		left = errorMsgStyle.Render("Error: " + m.errorMsg)
+	case m.loading:
+		left = dimStyle.Render("Loading...")
+	case m.statusMsg != "":
+		left = statusMsgStyle.Render(m.statusMsg)
+	default:
+		left = m.statusBarHints()
+	}
 
 	var modeStr string
 	if m.mode == "remote" {

@@ -90,6 +90,10 @@ var (
 	statusMsgStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("42"))
 
+	errorMsgStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("203")).
+			Bold(true)
+
 	// Filter indicator
 	filterIndicatorStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("214")).

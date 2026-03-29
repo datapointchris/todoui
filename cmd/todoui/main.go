@@ -4,12 +4,14 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 
 	"github.com/datapointchris/todoui/internal/backend"
 	"github.com/datapointchris/todoui/internal/cli"
+	"github.com/datapointchris/todoui/internal/config"
 	"github.com/datapointchris/todoui/internal/db"
 	"github.com/datapointchris/todoui/internal/tui"
 )
@@ -30,23 +32,20 @@ func rootCmd() *cobra.Command {
 		Use:   "todoui",
 		Short: "Personal project organization",
 		PersistentPreRunE: func(_ *cobra.Command, _ []string) error {
-			mode = os.Getenv("TODOUI_MODE")
-			if mode == "" {
-				mode = "local"
+			cfg, err := config.Load()
+			if err != nil {
+				return err
 			}
+			mode = cfg.Mode
+
 			switch mode {
 			case "remote":
-				apiURL := os.Getenv("TODOUI_API_URL")
-				if apiURL == "" {
-					return fmt.Errorf("TODOUI_API_URL is required when TODOUI_MODE=remote")
-				}
-				b = backend.NewRemoteBackend(apiURL)
+				b = backend.NewRemoteBackend(cfg.Remote.APIURL)
 			default:
-				dbPath := os.Getenv("TODOUI_DB")
-				if dbPath == "" {
-					dbPath = "todoui.db"
+				if err := os.MkdirAll(filepath.Dir(cfg.Local.DBPath), 0o755); err != nil {
+					return fmt.Errorf("creating data directory: %w", err)
 				}
-				d, err := db.Open(dbPath)
+				d, err := db.Open(cfg.Local.DBPath)
 				if err != nil {
 					return fmt.Errorf("opening database: %w", err)
 				}

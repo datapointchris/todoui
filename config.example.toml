@@ -1,0 +1,18 @@
+# todoui configuration
+# Place at ~/.config/todoui/config.toml
+# All values can be overridden with environment variables.
+
+# Which mode to use: "local" or "remote"
+# Env: TODOUI_MODE
+mode = "local"
+
+[remote]
+# API server URL (required when mode = "remote")
+# Env: TODOUI_API_URL
+api_url = "https://homelab.local:8080"
+
+[local]
+# Path to SQLite database
+# Env: TODOUI_DB
+# Default: ~/.config/todoui/todoui.db
+# db_path = "/custom/path/todoui.db"

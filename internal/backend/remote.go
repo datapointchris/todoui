@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/datapointchris/todoui/internal/model"
 )
@@ -21,7 +22,7 @@ type RemoteBackend struct {
 // NewRemoteBackend creates a backend that communicates with a remote API server.
 func NewRemoteBackend(apiURL string) *RemoteBackend {
 	return &RemoteBackend{
-		client: &http.Client{},
+		client: &http.Client{Timeout: 10 * time.Second},
 		apiURL: strings.TrimRight(apiURL, "/"),
 	}
 }
@@ -31,7 +32,7 @@ func NewRemoteBackend(apiURL string) *RemoteBackend {
 func (r *RemoteBackend) get(path string, result any) error {
 	resp, err := r.client.Get(r.apiURL + path)
 	if err != nil {
-		return fmt.Errorf("GET %s: %w", path, err)
+		return friendlyNetErr(err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	return r.handleResponse(resp, result)
@@ -52,7 +53,7 @@ func (r *RemoteBackend) delete(path string) error {
 	}
 	resp, err := r.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("DELETE %s: %w", path, err)
+		return friendlyNetErr(err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 400 {
@@ -78,7 +79,7 @@ func (r *RemoteBackend) doJSON(method string, path string, body any, result any)
 
 	resp, err := r.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("%s %s: %w", method, path, err)
+		return friendlyNetErr(err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	return r.handleResponse(resp, result)
@@ -123,6 +124,23 @@ func (r *RemoteBackend) parseError(resp *http.Response) error {
 		return fmt.Errorf("bad request: %s", msg)
 	default:
 		return fmt.Errorf("API error (%d): %s", resp.StatusCode, msg)
+	}
+}
+
+// friendlyNetErr translates raw network errors into user-readable messages.
+func friendlyNetErr(err error) error {
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "connection refused"):
+		return fmt.Errorf("cannot reach API server (connection refused)")
+	case strings.Contains(msg, "no such host"):
+		return fmt.Errorf("cannot reach API server (DNS lookup failed)")
+	case strings.Contains(msg, "Timeout"):
+		return fmt.Errorf("API server did not respond (timeout)")
+	case strings.Contains(msg, "deadline exceeded"):
+		return fmt.Errorf("API server did not respond (timeout)")
+	default:
+		return fmt.Errorf("network error: %w", err)
 	}
 }
 
