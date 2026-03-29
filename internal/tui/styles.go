@@ -89,4 +89,20 @@ var (
 	// Status flash
 	statusMsgStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("42"))
+
+	// Filter indicator
+	filterIndicatorStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("214")).
+				Bold(true)
+
+	// Move mode
+	moveIndicatorStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("214")).
+				Bold(true)
+
+	// Search results
+	searchResultSelectedStyle = lipgloss.NewStyle().
+					Foreground(lipgloss.Color("170")).
+					Bold(true)
+	searchResultNormalStyle = lipgloss.NewStyle()
 )

@@ -26,6 +26,8 @@ type App struct {
 	activePane    pane
 	projectCursor int
 	itemCursor    int
+	projectScroll int // viewport scroll offset for projects
+	itemScroll    int // viewport scroll offset for items
 
 	width  int
 	height int
@@ -42,6 +44,26 @@ type App struct {
 	// Item detail view
 	itemDetail     *model.ProjectItemDetail
 	detailBlockers []model.ProjectItem
+
+	// Filters
+	filter filterMode
+
+	// Search
+	searchResults []model.ProjectItem
+	searchCursor  int
+	searchFocused bool // true = typing in input, false = browsing results
+
+	// Move/reorder
+	moveOrigPos int
+
+	// Dependency linking
+	depItems    []model.ProjectItem
+	depCursor   int
+	depItemID   int64
+	depItemName string
+
+	// Navigation
+	pendingItemID int64 // after fetch, select this item
 
 	err error
 }
@@ -82,12 +104,26 @@ type (
 	undoResultMsg        string
 	itemProjectsMsg      []model.Project
 	membershipUpdatedMsg struct{}
+	reorderDoneMsg       struct{}
+	depLinkedMsg         struct{}
+	depUnlinkedMsg       struct{}
 )
 
 type itemDetailMsg struct {
 	detail   *model.ProjectItemDetail
 	blockers []model.ProjectItem
 }
+
+type searchResultsMsg []model.ProjectItem
+
+type searchNavigateMsg struct {
+	itemID   int64
+	projects []model.Project
+}
+
+type depCandidatesMsg []model.ProjectItem
+
+type depBlockersForUnlinkMsg []model.ProjectItem
 
 type errMsg struct{ error }
 
@@ -103,11 +139,19 @@ func fetchProjectsCmd(b backend.Backend) tea.Cmd {
 	}
 }
 
-func fetchItemsCmd(b backend.Backend, projectID int64) tea.Cmd {
+func fetchItemsCmd(b backend.Backend, projectID int64, filter filterMode) tea.Cmd {
 	return func() tea.Msg {
 		items, err := b.ListItemsByProject(projectID)
 		if err != nil {
 			return errMsg{err}
+		}
+
+		if filter == filterAll {
+			archived, err := b.ListArchived(projectID)
+			if err != nil {
+				return errMsg{err}
+			}
+			items = append(items, archived...)
 		}
 
 		blockedItems, err := b.ListBlocked()
@@ -128,6 +172,16 @@ func fetchItemsCmd(b backend.Backend, projectID int64) tea.Cmd {
 				}
 				blockers[item.ID] = bs
 			}
+		}
+
+		if filter == filterBlocked {
+			var filtered []model.ProjectItemInProject
+			for _, item := range items {
+				if blockedSet[item.ID] {
+					filtered = append(filtered, item)
+				}
+			}
+			items = filtered
 		}
 
 		return itemsMsg{items: items, blocked: blockedSet, blockers: blockers}
@@ -217,6 +271,73 @@ func fetchItemDetailCmd(b backend.Backend, itemID int64, isBlocked bool) tea.Cmd
 	}
 }
 
+func searchCmd(b backend.Backend, query string) tea.Cmd {
+	return func() tea.Msg {
+		results, err := b.Search(query)
+		if err != nil {
+			return errMsg{err}
+		}
+		return searchResultsMsg(results)
+	}
+}
+
+func searchNavigateCmd(b backend.Backend, itemID int64) tea.Cmd {
+	return func() tea.Msg {
+		detail, err := b.GetItem(itemID)
+		if err != nil {
+			return errMsg{err}
+		}
+		return searchNavigateMsg{itemID: itemID, projects: detail.Projects}
+	}
+}
+
+func reorderItemCmd(b backend.Backend, itemID, projectID int64, newPos int) tea.Cmd {
+	return func() tea.Msg {
+		if err := b.ReorderItem(itemID, projectID, newPos); err != nil {
+			return errMsg{err}
+		}
+		return reorderDoneMsg{}
+	}
+}
+
+func fetchDepCandidatesCmd(b backend.Backend) tea.Cmd {
+	return func() tea.Msg {
+		items, err := b.ListAllItems()
+		if err != nil {
+			return errMsg{err}
+		}
+		return depCandidatesMsg(items)
+	}
+}
+
+func fetchDepBlockersCmd(b backend.Backend, itemID int64) tea.Cmd {
+	return func() tea.Msg {
+		blockers, err := b.GetBlockers(itemID)
+		if err != nil {
+			return errMsg{err}
+		}
+		return depBlockersForUnlinkMsg(blockers)
+	}
+}
+
+func addDependencyCmd(b backend.Backend, itemID, dependsOn int64) tea.Cmd {
+	return func() tea.Msg {
+		if err := b.AddDependency(itemID, dependsOn); err != nil {
+			return errMsg{err}
+		}
+		return depLinkedMsg{}
+	}
+}
+
+func removeDependencyCmd(b backend.Backend, itemID, dependsOn int64) tea.Cmd {
+	return func() tea.Msg {
+		if err := b.RemoveDependency(itemID, dependsOn); err != nil {
+			return errMsg{err}
+		}
+		return depUnlinkedMsg{}
+	}
+}
+
 // --- Bubble Tea interface ---
 
 func (m *App) Init() tea.Cmd {
@@ -239,7 +360,7 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.projectCursor = max(0, len(m.projects)-1)
 		}
 		if len(m.projects) > 0 {
-			return m, fetchItemsCmd(m.backend, m.projects[m.projectCursor].ID)
+			return m, fetchItemsCmd(m.backend, m.projects[m.projectCursor].ID, m.filter)
 		}
 		m.items = nil
 		return m, nil
@@ -248,7 +369,15 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.items = msg.items
 		m.blockedSet = msg.blocked
 		m.itemBlockers = msg.blockers
-		if m.itemCursor >= len(m.items) {
+		if m.pendingItemID > 0 {
+			for i, item := range m.items {
+				if item.ID == m.pendingItemID {
+					m.itemCursor = i
+					break
+				}
+			}
+			m.pendingItemID = 0
+		} else if m.itemCursor >= len(m.items) {
 			m.itemCursor = max(0, len(m.items)-1)
 		}
 		return m, nil
@@ -258,7 +387,9 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, fetchProjectsCmd(m.backend)
 
 	case itemUpdatedMsg:
-		m.statusMsg = "Item updated"
+		if m.statusMsg == "" {
+			m.statusMsg = "Item updated"
+		}
 		if m.appMode == modeItemDetail && m.itemDetail != nil {
 			return m, tea.Batch(
 				fetchProjectsCmd(m.backend),
@@ -300,6 +431,65 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, fetchProjectsCmd(m.backend)
 
+	case searchResultsMsg:
+		m.searchResults = msg
+		m.searchCursor = 0
+		m.searchFocused = false
+		return m, nil
+
+	case searchNavigateMsg:
+		m.appMode = modeNormal
+		m.searchResults = nil
+		m.filter = filterNone
+		for i, p := range m.projects {
+			for _, sp := range msg.projects {
+				if p.ID == sp.ID {
+					m.projectCursor = i
+					m.pendingItemID = msg.itemID
+					m.activePane = itemPane
+					return m, fetchItemsCmd(m.backend, p.ID, filterNone)
+				}
+			}
+		}
+		return m, nil
+
+	case reorderDoneMsg:
+		m.statusMsg = "Item reordered"
+		if len(m.projects) > 0 {
+			return m, fetchItemsCmd(m.backend, m.projects[m.projectCursor].ID, m.filter)
+		}
+		return m, nil
+
+	case depCandidatesMsg:
+		var filtered []model.ProjectItem
+		for _, item := range msg {
+			if item.ID != m.depItemID {
+				filtered = append(filtered, item)
+			}
+		}
+		m.depItems = filtered
+		m.depCursor = 0
+		m.appMode = modeDepLink
+		return m, nil
+
+	case depBlockersForUnlinkMsg:
+		if len(msg) == 0 {
+			m.statusMsg = "No dependencies to unlink"
+			return m, nil
+		}
+		m.depItems = msg
+		m.depCursor = 0
+		m.appMode = modeDepUnlink
+		return m, nil
+
+	case depLinkedMsg:
+		m.statusMsg = "Dependency linked"
+		return m, fetchProjectsCmd(m.backend)
+
+	case depUnlinkedMsg:
+		m.statusMsg = "Dependency unlinked"
+		return m, fetchProjectsCmd(m.backend)
+
 	case errMsg:
 		m.err = msg.error
 		return m, nil
@@ -327,6 +517,14 @@ func (m *App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleDetailKey(msg)
 	case modeEditNotes:
 		return m.handleNotesKey(msg)
+	case modeHelp:
+		return m.handleHelpKey(msg)
+	case modeSearch:
+		return m.handleSearchKey(msg)
+	case modeMove:
+		return m.handleMoveKey(msg)
+	case modeDepLink, modeDepUnlink:
+		return m.handleDepLinkKey(msg)
 	}
 	return m, nil
 }
@@ -352,10 +550,65 @@ func (m *App) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		cmd := m.cursorUp()
 		return m, cmd
 
+	case "g":
+		if m.activePane == projectPane {
+			if m.projectCursor > 0 {
+				m.projectCursor = 0
+				return m, fetchItemsCmd(m.backend, m.projects[0].ID, m.filter)
+			}
+		} else {
+			m.itemCursor = 0
+		}
+		return m, nil
+
+	case "G":
+		if m.activePane == projectPane {
+			last := len(m.projects) - 1
+			if last >= 0 && m.projectCursor != last {
+				m.projectCursor = last
+				return m, fetchItemsCmd(m.backend, m.projects[last].ID, m.filter)
+			}
+		} else {
+			if last := len(m.items) - 1; last >= 0 {
+				m.itemCursor = last
+			}
+		}
+		return m, nil
+
+	case "ctrl+d":
+		half := m.paneContentHeight() / 2
+		if half < 1 {
+			half = 1
+		}
+		if m.activePane == projectPane {
+			m.projectCursor = min(m.projectCursor+half, max(0, len(m.projects)-1))
+			if len(m.projects) > 0 {
+				return m, fetchItemsCmd(m.backend, m.projects[m.projectCursor].ID, m.filter)
+			}
+		} else {
+			m.itemCursor = min(m.itemCursor+half, max(0, len(m.items)-1))
+		}
+		return m, nil
+
+	case "ctrl+u":
+		half := m.paneContentHeight() / 2
+		if half < 1 {
+			half = 1
+		}
+		if m.activePane == projectPane {
+			m.projectCursor = max(m.projectCursor-half, 0)
+			if len(m.projects) > 0 {
+				return m, fetchItemsCmd(m.backend, m.projects[m.projectCursor].ID, m.filter)
+			}
+		} else {
+			m.itemCursor = max(m.itemCursor-half, 0)
+		}
+		return m, nil
+
 	case "enter":
 		if m.activePane == projectPane && len(m.projects) > 0 {
 			m.activePane = itemPane
-			return m, fetchItemsCmd(m.backend, m.projects[m.projectCursor].ID)
+			return m, fetchItemsCmd(m.backend, m.projects[m.projectCursor].ID, m.filter)
 		}
 		if m.activePane == itemPane && len(m.items) > 0 {
 			item := m.items[m.itemCursor]
@@ -363,7 +616,7 @@ func (m *App) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	// --- Phase 4 actions ---
+	// --- Actions ---
 
 	case "a":
 		if m.activePane == projectPane {
@@ -400,6 +653,11 @@ func (m *App) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			toggled := !item.Completed
+			if toggled {
+				m.statusMsg = "Marked done"
+			} else {
+				m.statusMsg = "Marked incomplete"
+			}
 			return m, updateItemCmd(m.backend, item.ID, model.UpdateProjectItem{Completed: &toggled})
 		}
 		return m, nil
@@ -408,6 +666,7 @@ func (m *App) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.activePane == itemPane && len(m.items) > 0 {
 			item := m.items[m.itemCursor]
 			archived := true
+			m.statusMsg = "Archived"
 			return m, updateItemCmd(m.backend, item.ID, model.UpdateProjectItem{Archived: &archived})
 		}
 		return m, nil
@@ -449,6 +708,76 @@ func (m *App) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "u":
 		return m, undoCmd(m.backend)
+
+	// --- Phase 6: Advanced ---
+
+	case "?":
+		m.appMode = modeHelp
+		return m, nil
+
+	case "1":
+		if m.filter == filterBlocked {
+			m.filter = filterNone
+		} else {
+			m.filter = filterBlocked
+		}
+		if len(m.projects) > 0 {
+			return m, fetchItemsCmd(m.backend, m.projects[m.projectCursor].ID, m.filter)
+		}
+		return m, nil
+
+	case "2":
+		if m.filter == filterAll {
+			m.filter = filterNone
+		} else {
+			m.filter = filterAll
+		}
+		if len(m.projects) > 0 {
+			return m, fetchItemsCmd(m.backend, m.projects[m.projectCursor].ID, m.filter)
+		}
+		return m, nil
+
+	case "0":
+		m.filter = filterNone
+		if len(m.projects) > 0 {
+			return m, fetchItemsCmd(m.backend, m.projects[m.projectCursor].ID, m.filter)
+		}
+		return m, nil
+
+	case "/":
+		m.titleInput.SetValue("")
+		m.titleInput.Placeholder = "Search..."
+		cmd := m.titleInput.Focus()
+		m.searchResults = nil
+		m.searchCursor = 0
+		m.searchFocused = true
+		m.appMode = modeSearch
+		return m, cmd
+
+	case "m":
+		if m.activePane == itemPane && len(m.items) > 1 {
+			m.moveOrigPos = m.itemCursor
+			m.appMode = modeMove
+		}
+		return m, nil
+
+	case "b":
+		if m.activePane == itemPane && len(m.items) > 0 {
+			item := m.items[m.itemCursor]
+			m.depItemID = item.ID
+			m.depItemName = item.Title
+			return m, fetchDepCandidatesCmd(m.backend)
+		}
+		return m, nil
+
+	case "B":
+		if m.activePane == itemPane && len(m.items) > 0 {
+			item := m.items[m.itemCursor]
+			m.depItemID = item.ID
+			m.depItemName = item.Title
+			return m, fetchDepBlockersCmd(m.backend, item.ID)
+		}
+		return m, nil
 	}
 
 	return m, nil
@@ -473,7 +802,6 @@ func (m *App) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			})
 
 		case modeAddItemMulti:
-			// Transition to project picker
 			m.pendingTitle = value
 			m.titleInput.Blur()
 			currentProjectID := m.projects[m.projectCursor].ID
@@ -516,6 +844,16 @@ func (m *App) handlePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "k", "up":
 		m.picker.up()
+		return m, nil
+
+	case "g":
+		m.picker.cursor = 0
+		return m, nil
+
+	case "G":
+		if last := len(m.picker.projects) - 1; last >= 0 {
+			m.picker.cursor = last
+		}
 		return m, nil
 
 	case " ":
@@ -568,6 +906,11 @@ func (m *App) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			toggled := !m.itemDetail.Completed
+			if toggled {
+				m.statusMsg = "Marked done"
+			} else {
+				m.statusMsg = "Marked incomplete"
+			}
 			return m, updateItemCmd(m.backend, m.itemDetail.ID, model.UpdateProjectItem{Completed: &toggled})
 		}
 		return m, nil
@@ -576,6 +919,7 @@ func (m *App) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.itemDetail != nil {
 			archived := true
 			id := m.itemDetail.ID
+			m.statusMsg = "Archived"
 			m.appMode = modeNormal
 			m.itemDetail = nil
 			return m, updateItemCmd(m.backend, id, model.UpdateProjectItem{Archived: &archived})
@@ -645,13 +989,184 @@ func (m *App) handleNotesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
+func (m *App) handleHelpKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "?", "q":
+		m.appMode = modeNormal
+	}
+	return m, nil
+}
+
+func (m *App) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.searchFocused {
+		switch msg.String() {
+		case "enter":
+			query := strings.TrimSpace(m.titleInput.Value())
+			if query == "" {
+				return m, nil
+			}
+			return m, searchCmd(m.backend, query)
+
+		case "esc":
+			m.appMode = modeNormal
+			m.titleInput.Blur()
+			m.searchResults = nil
+			return m, nil
+
+		case "down", "tab":
+			if len(m.searchResults) > 0 {
+				m.searchFocused = false
+				m.searchCursor = 0
+			}
+			return m, nil
+
+		default:
+			var cmd tea.Cmd
+			m.titleInput, cmd = m.titleInput.Update(msg)
+			return m, cmd
+		}
+	}
+
+	// Browsing results
+	switch msg.String() {
+	case "j", "down":
+		if m.searchCursor < len(m.searchResults)-1 {
+			m.searchCursor++
+		}
+		return m, nil
+
+	case "k", "up":
+		if m.searchCursor > 0 {
+			m.searchCursor--
+		} else {
+			m.searchFocused = true
+		}
+		return m, nil
+
+	case "g":
+		m.searchCursor = 0
+		return m, nil
+
+	case "G":
+		if last := len(m.searchResults) - 1; last >= 0 {
+			m.searchCursor = last
+		}
+		return m, nil
+
+	case "enter":
+		if len(m.searchResults) > 0 {
+			item := m.searchResults[m.searchCursor]
+			m.titleInput.Blur()
+			return m, searchNavigateCmd(m.backend, item.ID)
+		}
+		return m, nil
+
+	case "esc", "/":
+		m.searchFocused = true
+		return m, nil
+	}
+
+	return m, nil
+}
+
+func (m *App) handleMoveKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "j", "down":
+		if m.itemCursor < len(m.items)-1 {
+			m.items[m.itemCursor], m.items[m.itemCursor+1] = m.items[m.itemCursor+1], m.items[m.itemCursor]
+			m.itemCursor++
+		}
+		return m, nil
+
+	case "k", "up":
+		if m.itemCursor > 0 {
+			m.items[m.itemCursor], m.items[m.itemCursor-1] = m.items[m.itemCursor-1], m.items[m.itemCursor]
+			m.itemCursor--
+		}
+		return m, nil
+
+	case "g":
+		for m.itemCursor > 0 {
+			m.items[m.itemCursor], m.items[m.itemCursor-1] = m.items[m.itemCursor-1], m.items[m.itemCursor]
+			m.itemCursor--
+		}
+		return m, nil
+
+	case "G":
+		for m.itemCursor < len(m.items)-1 {
+			m.items[m.itemCursor], m.items[m.itemCursor+1] = m.items[m.itemCursor+1], m.items[m.itemCursor]
+			m.itemCursor++
+		}
+		return m, nil
+
+	case "enter":
+		m.appMode = modeNormal
+		item := m.items[m.itemCursor]
+		projectID := m.projects[m.projectCursor].ID
+		return m, reorderItemCmd(m.backend, item.ID, projectID, m.itemCursor)
+
+	case "esc":
+		m.appMode = modeNormal
+		if len(m.projects) > 0 {
+			return m, fetchItemsCmd(m.backend, m.projects[m.projectCursor].ID, m.filter)
+		}
+		return m, nil
+	}
+
+	return m, nil
+}
+
+func (m *App) handleDepLinkKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "j", "down":
+		if m.depCursor < len(m.depItems)-1 {
+			m.depCursor++
+		}
+		return m, nil
+
+	case "k", "up":
+		if m.depCursor > 0 {
+			m.depCursor--
+		}
+		return m, nil
+
+	case "g":
+		m.depCursor = 0
+		return m, nil
+
+	case "G":
+		if last := len(m.depItems) - 1; last >= 0 {
+			m.depCursor = last
+		}
+		return m, nil
+
+	case "enter":
+		if len(m.depItems) > 0 {
+			selected := m.depItems[m.depCursor]
+			wasUnlink := m.appMode == modeDepUnlink
+			m.appMode = modeNormal
+			if wasUnlink {
+				return m, removeDependencyCmd(m.backend, m.depItemID, selected.ID)
+			}
+			return m, addDependencyCmd(m.backend, m.depItemID, selected.ID)
+		}
+		return m, nil
+
+	case "esc":
+		m.appMode = modeNormal
+		return m, nil
+	}
+
+	return m, nil
+}
+
 // --- Cursor movement ---
 
 func (m *App) cursorDown() tea.Cmd {
 	if m.activePane == projectPane {
 		if m.projectCursor < len(m.projects)-1 {
 			m.projectCursor++
-			return fetchItemsCmd(m.backend, m.projects[m.projectCursor].ID)
+			return fetchItemsCmd(m.backend, m.projects[m.projectCursor].ID, m.filter)
 		}
 	} else {
 		if m.itemCursor < len(m.items)-1 {
@@ -665,7 +1180,7 @@ func (m *App) cursorUp() tea.Cmd {
 	if m.activePane == projectPane {
 		if m.projectCursor > 0 {
 			m.projectCursor--
-			return fetchItemsCmd(m.backend, m.projects[m.projectCursor].ID)
+			return fetchItemsCmd(m.backend, m.projects[m.projectCursor].ID, m.filter)
 		}
 	} else {
 		if m.itemCursor > 0 {
@@ -673,6 +1188,29 @@ func (m *App) cursorUp() tea.Cmd {
 		}
 	}
 	return nil
+}
+
+// syncScroll adjusts scroll offset so the cursor stays visible within the viewport.
+func syncScroll(cursor, scroll, viewHeight int) int {
+	if viewHeight <= 0 {
+		return 0
+	}
+	if cursor < scroll {
+		return cursor
+	}
+	if cursor >= scroll+viewHeight {
+		return cursor - viewHeight + 1
+	}
+	return scroll
+}
+
+// paneContentHeight returns how many list items fit in a pane (minus title and status bar).
+func (m *App) paneContentHeight() int {
+	paneHeight := m.height - 3 // status bar (~1 line) + borders (2)
+	if paneHeight < 3 {
+		paneHeight = 3
+	}
+	return paneHeight - 1 // subtract title line
 }
 
 // --- View ---
@@ -698,6 +1236,15 @@ func (m *App) View() string {
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, overlay)
 	case modeEditNotes:
 		overlay := m.renderNotesOverlay()
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, overlay)
+	case modeHelp:
+		overlay := m.renderHelpOverlay()
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, overlay)
+	case modeSearch:
+		overlay := m.renderSearchOverlay()
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, overlay)
+	case modeDepLink, modeDepUnlink:
+		overlay := m.renderDepLinkOverlay()
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, overlay)
 	}
 
@@ -862,6 +1409,151 @@ func (m *App) renderNotesOverlay() string {
 	return overlayBoxStyle.Width(boxWidth).Render(content)
 }
 
+func (m *App) renderHelpOverlay() string {
+	var lines []string
+	lines = append(lines, overlayTitleStyle.Render("Keybindings"))
+	lines = append(lines, "")
+
+	nav := `  Navigation
+  j/k ↑/↓       Navigate items
+  g/G            Jump to top/bottom
+  Ctrl+d/u       Half-page down/up
+  h/l ←/→       Switch panes
+  Tab            Toggle pane focus
+  Enter          Select / item detail`
+
+	lines = append(lines, nav)
+
+	if m.activePane == projectPane {
+		actions := `
+  Project Pane
+  a              Add project`
+		lines = append(lines, actions)
+	} else {
+		actions := `
+  Item Actions
+  space          Toggle done
+  a              Add item
+  A              Add item to multiple projects
+  e              Edit title
+  n              Edit notes
+  x              Archive item
+  p              Manage project membership
+  b              Link dependency (blocked by)
+  B              Unlink dependency
+  m              Move/reorder item`
+		lines = append(lines, actions)
+	}
+
+	global := `
+  Global
+  u              Undo last action
+  /              Search
+  1              Filter: blocked only (toggle)
+  2              Filter: all + archived (toggle)
+  0              Filter: reset
+  q  Ctrl+C      Quit
+  ?              Toggle this help`
+
+	lines = append(lines, global)
+	lines = append(lines, "")
+	lines = append(lines, dimStyle.Render("  [Esc] or [?] Close"))
+
+	content := strings.Join(lines, "\n")
+	return overlayBoxStyle.Width(50).Render(content)
+}
+
+func (m *App) renderSearchOverlay() string {
+	var lines []string
+	lines = append(lines, overlayTitleStyle.Render("Search"))
+	lines = append(lines, "")
+	lines = append(lines, "  "+m.titleInput.View())
+	lines = append(lines, "")
+
+	if len(m.searchResults) == 0 && !m.searchFocused {
+		lines = append(lines, dimStyle.Render("  No results"))
+	}
+
+	for i, item := range m.searchResults {
+		status := "○"
+		if item.Completed {
+			status = "✓"
+		}
+		line := fmt.Sprintf("%s %s  %s", status, item.Title, itemIDStyle.Render(fmt.Sprintf("#%d", item.ID)))
+		if !m.searchFocused && i == m.searchCursor {
+			line = searchResultSelectedStyle.Render("> " + line)
+		} else {
+			line = searchResultNormalStyle.Render("  " + line)
+		}
+		lines = append(lines, line)
+	}
+
+	lines = append(lines, "")
+	lines = append(lines, dimStyle.Render("  [Enter] Search/Go  [↓] Results  [Esc] Close"))
+
+	content := strings.Join(lines, "\n")
+
+	boxWidth := m.width - 4
+	if boxWidth > 70 {
+		boxWidth = 70
+	}
+	if boxWidth < 40 {
+		boxWidth = 40
+	}
+
+	return overlayBoxStyle.Width(boxWidth).Render(content)
+}
+
+func (m *App) renderDepLinkOverlay() string {
+	var header string
+	if m.appMode == modeDepUnlink {
+		header = fmt.Sprintf("Unlink dependency from: %s (#%d)", m.depItemName, m.depItemID)
+	} else {
+		header = fmt.Sprintf("Link dependency for: %s (#%d)", m.depItemName, m.depItemID)
+	}
+
+	var lines []string
+	lines = append(lines, overlayTitleStyle.Render(header))
+	lines = append(lines, "")
+
+	if len(m.depItems) == 0 {
+		lines = append(lines, dimStyle.Render("  No items available"))
+	}
+
+	for i, item := range m.depItems {
+		status := "○"
+		if item.Completed {
+			status = "✓"
+		}
+		line := fmt.Sprintf("%s %s  %s", status, item.Title, itemIDStyle.Render(fmt.Sprintf("#%d", item.ID)))
+		if i == m.depCursor {
+			line = pickerSelectedStyle.Render("> " + line)
+		} else {
+			line = pickerNormalStyle.Render("  " + line)
+		}
+		lines = append(lines, line)
+	}
+
+	lines = append(lines, "")
+	if m.appMode == modeDepUnlink {
+		lines = append(lines, dimStyle.Render("  [Enter] Unlink  [Esc] Cancel"))
+	} else {
+		lines = append(lines, dimStyle.Render("  [Enter] Link  [Esc] Cancel"))
+	}
+
+	content := strings.Join(lines, "\n")
+
+	boxWidth := m.width - 4
+	if boxWidth > 70 {
+		boxWidth = 70
+	}
+	if boxWidth < 40 {
+		boxWidth = 40
+	}
+
+	return overlayBoxStyle.Width(boxWidth).Render(content)
+}
+
 func (m *App) renderProjectPane(width, height int) string {
 	title := paneTitleStyle.Render("Projects")
 	var lines []string
@@ -872,7 +1564,16 @@ func (m *App) renderProjectPane(width, height int) string {
 		return strings.Join(lines, "\n")
 	}
 
-	for i, p := range m.projects {
+	viewHeight := height - 1 // subtract title
+	m.projectScroll = syncScroll(m.projectCursor, m.projectScroll, viewHeight)
+
+	end := m.projectScroll + viewHeight
+	if end > len(m.projects) {
+		end = len(m.projects)
+	}
+
+	for i := m.projectScroll; i < end; i++ {
+		p := m.projects[i]
 		name := p.Name
 		count := projectCountStyle.Render(fmt.Sprintf("(%d)", p.ItemCount))
 		line := fmt.Sprintf("%s %s", name, count)
@@ -890,6 +1591,11 @@ func (m *App) renderProjectPane(width, height int) string {
 		lines = append(lines, line)
 	}
 
+	if len(m.projects) > viewHeight {
+		scrollInfo := dimStyle.Render(fmt.Sprintf(" %d/%d", m.projectCursor+1, len(m.projects)))
+		lines = append(lines, scrollInfo)
+	}
+
 	return strings.Join(lines, "\n")
 }
 
@@ -900,42 +1606,84 @@ func (m *App) renderItemPane(width, height int) string {
 	} else {
 		titleText = "Items"
 	}
+
+	if m.filter != filterNone {
+		var filterLabel string
+		switch m.filter {
+		case filterBlocked:
+			filterLabel = " [BLOCKED]"
+		case filterAll:
+			filterLabel = " [ALL]"
+		}
+		titleText += filterIndicatorStyle.Render(filterLabel)
+	}
+
 	title := paneTitleStyle.Render(titleText)
 	var lines []string
 	lines = append(lines, title)
 
 	if len(m.items) == 0 {
-		lines = append(lines, emptyStyle.Render("No items"))
+		if m.filter != filterNone {
+			lines = append(lines, emptyStyle.Render("No matching items"))
+		} else {
+			lines = append(lines, emptyStyle.Render("No items"))
+		}
 		return strings.Join(lines, "\n")
 	}
 
-	for i, item := range m.items {
-		line := m.renderItemLine(item, i == m.itemCursor, width)
+	viewHeight := height - 1 // subtract title
+	m.itemScroll = syncScroll(m.itemCursor, m.itemScroll, viewHeight)
+
+	end := m.itemScroll + viewHeight
+	if end > len(m.items) {
+		end = len(m.items)
+	}
+
+	linesUsed := 0
+	for i := m.itemScroll; i < end; i++ {
+		item := m.items[i]
+		isMoving := m.appMode == modeMove && i == m.itemCursor
+		line := m.renderItemLine(item, i == m.itemCursor, width, isMoving)
 		lines = append(lines, line)
+		linesUsed++
 
 		if blockers, ok := m.itemBlockers[item.ID]; ok && len(blockers) > 0 {
 			for _, b := range blockers {
+				if linesUsed >= viewHeight {
+					break
+				}
 				blockerLine := blockerStyle.Render(
 					fmt.Sprintf("└─ blocked by: %s (#%d)", b.Title, b.ID),
 				)
 				lines = append(lines, blockerLine)
+				linesUsed++
 			}
 		}
 
-		if item.Notes != nil && *item.Notes != "" {
+		if item.Notes != nil && *item.Notes != "" && linesUsed < viewHeight {
 			preview := strings.SplitN(*item.Notes, "\n", 2)[0]
 			maxLen := width - 6
 			if maxLen > 0 && len(preview) > maxLen {
 				preview = preview[:maxLen] + "…"
 			}
 			lines = append(lines, notesPreviewStyle.Render(preview))
+			linesUsed++
 		}
+
+		if linesUsed >= viewHeight {
+			break
+		}
+	}
+
+	if len(m.items) > viewHeight {
+		scrollInfo := dimStyle.Render(fmt.Sprintf(" %d/%d", m.itemCursor+1, len(m.items)))
+		lines = append(lines, scrollInfo)
 	}
 
 	return strings.Join(lines, "\n")
 }
 
-func (m *App) renderItemLine(item model.ProjectItemInProject, selected bool, width int) string {
+func (m *App) renderItemLine(item model.ProjectItemInProject, selected bool, width int, moving bool) string {
 	status := "○"
 	if item.Completed {
 		status = "✓"
@@ -953,7 +1701,6 @@ func (m *App) renderItemLine(item model.ProjectItemInProject, selected bool, wid
 
 	idText := fmt.Sprintf("#%d", item.ID)
 
-	// Build completed lines from plain text to avoid nested ANSI escapes
 	var content string
 	if item.Completed {
 		content = itemCompletedStyle.Render(
@@ -972,19 +1719,38 @@ func (m *App) renderItemLine(item model.ProjectItemInProject, selected bool, wid
 		content = fmt.Sprintf("%s %s%s%s  %s", status, item.Title, mp, notes, id)
 	}
 
+	if moving {
+		return moveIndicatorStyle.Render("▶ " + content + " ◀ MOVING")
+	}
 	if selected {
 		return itemSelectedStyle.Render("> " + content)
 	}
 	return itemNormalStyle.Render("  " + content)
 }
 
-func (m *App) renderStatusBar() string {
-	var left string
-	if m.statusMsg != "" {
-		left = statusMsgStyle.Render(m.statusMsg)
-	} else {
-		left = "[space]done [a]dd [x]archive [e]dit [p]rojects [u]ndo"
+func (m *App) statusBarHints() string {
+	switch {
+	case m.statusMsg != "":
+		return statusMsgStyle.Render(m.statusMsg)
+	case m.appMode == modeMove:
+		return moveIndicatorStyle.Render("[j/k] Move  [g/G] Top/Bottom  [Enter] Confirm  [Esc] Cancel")
+	case m.activePane == projectPane:
+		hints := "[a]dd project [Enter]select [Tab]items [/]search [?]help"
+		if m.filter != filterNone {
+			hints += " [0]reset filter"
+		}
+		return hints
+	default:
+		hints := "[space]done [a]dd [x]archive [e]dit [n]otes [b]lock [/]search [?]help"
+		if m.filter != filterNone {
+			hints += " [0]reset"
+		}
+		return hints
 	}
+}
+
+func (m *App) renderStatusBar() string {
+	left := m.statusBarHints()
 
 	var modeStr string
 	if m.mode == "remote" {
