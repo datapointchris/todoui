@@ -19,7 +19,6 @@ import (
 // App is the top-level Bubble Tea model for the TUI.
 type App struct {
 	backend backend.Backend
-	mode    string // "local" or "remote"
 
 	projects     []model.ProjectWithItemCount
 	items        []model.ProjectItemInProject
@@ -78,7 +77,7 @@ type App struct {
 
 // NewApp creates a new TUI application backed by the given Backend.
 // syncEngine may be nil when sync is disabled.
-func NewApp(b backend.Backend, mode string, syncEngine *sync.Engine) *App {
+func NewApp(b backend.Backend, syncEngine *sync.Engine) *App {
 	ti := textinput.New()
 	ti.CharLimit = 200
 
@@ -88,7 +87,6 @@ func NewApp(b backend.Backend, mode string, syncEngine *sync.Engine) *App {
 
 	return &App{
 		backend:      b,
-		mode:         mode,
 		blockedSet:   make(map[string]bool),
 		itemBlockers: make(map[string][]model.ProjectItem),
 		titleInput:   ti,
@@ -1827,8 +1825,7 @@ func (m *App) renderStatusBar() string {
 	}
 
 	var modeStr string
-	switch {
-	case m.syncEngine != nil:
+	if m.syncEngine != nil {
 		s := m.syncStatus
 		switch {
 		case s.Syncing:
@@ -1840,9 +1837,7 @@ func (m *App) renderStatusBar() string {
 		default:
 			modeStr = syncOKStyle.Render("SYNCED")
 		}
-	case m.mode == "remote":
-		modeStr = modeRemoteStyle.Render("REMOTE")
-	default:
+	} else {
 		modeStr = modeLocalStyle.Render("LOCAL")
 	}
 

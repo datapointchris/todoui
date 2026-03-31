@@ -2,20 +2,11 @@
 # Place at ~/.config/todoui/config.toml
 # All values can be overridden with environment variables.
 
-# Which mode to use: "local" or "remote"
-# Env: TODOUI_MODE
-mode = "local"
-
-[remote]
-# API server URL (required when mode = "remote")
-# Env: TODOUI_API_URL
-api_url = "https://homelab.local:8080"
-
 [sync]
 # Enable background sync with ichrisbirch API
 # Env: TODOUI_SYNC
 enabled = false
-# API URL for sync (defaults to remote.api_url if not set)
+# API URL for sync (required when enabled)
 # Env: TODOUI_SYNC_URL
 # api_url = "https://homelab.local:8080"
 

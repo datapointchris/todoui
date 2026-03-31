@@ -28,7 +28,6 @@ func rootCmd() *cobra.Command {
 	var b backend.Backend
 	var database *sql.DB
 	var syncEngine *sync.Engine
-	var mode string
 
 	root := &cobra.Command{
 		Use:   "todoui",
@@ -38,34 +37,28 @@ func rootCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			mode = cfg.Mode
 
-			switch mode {
-			case "remote":
-				b = backend.NewRemoteBackend(cfg.Remote.APIURL)
-			default:
-				if err := os.MkdirAll(filepath.Dir(cfg.Local.DBPath), 0o755); err != nil {
-					return fmt.Errorf("creating data directory: %w", err)
-				}
-				d, err := db.Open(cfg.Local.DBPath)
-				if err != nil {
-					return fmt.Errorf("opening database: %w", err)
-				}
-				database = d
-				local := backend.NewLocalBackend(d)
+			if err := os.MkdirAll(filepath.Dir(cfg.Local.DBPath), 0o755); err != nil {
+				return fmt.Errorf("creating data directory: %w", err)
+			}
+			d, err := db.Open(cfg.Local.DBPath)
+			if err != nil {
+				return fmt.Errorf("opening database: %w", err)
+			}
+			database = d
+			local := backend.NewLocalBackend(d)
 
-				if cfg.Sync.Enabled {
-					syncEngine = sync.New(d, cfg.Sync.APIURL)
-					syncEngine.Start()
-					b = sync.NewSyncBackend(local, syncEngine)
-				} else {
-					b = local
-				}
+			if cfg.Sync.Enabled {
+				syncEngine = sync.New(d, cfg.Sync.APIURL)
+				syncEngine.Start()
+				b = sync.NewSyncBackend(local, syncEngine)
+			} else {
+				b = local
 			}
 			return nil
 		},
 		RunE: func(_ *cobra.Command, _ []string) error {
-			app := tui.NewApp(b, mode, syncEngine)
+			app := tui.NewApp(b, syncEngine)
 			p := tea.NewProgram(app, tea.WithAltScreen())
 			_, err := p.Run()
 			return err
@@ -89,7 +82,7 @@ func rootCmd() *cobra.Command {
 		Short: "Launch the TUI (default when no command given)",
 		Args:  cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			app := tui.NewApp(b, mode, syncEngine)
+			app := tui.NewApp(b, syncEngine)
 			p := tea.NewProgram(app, tea.WithAltScreen())
 			_, err := p.Run()
 			return err

@@ -3,7 +3,7 @@ package backend
 import "github.com/datapointchris/todoui/internal/model"
 
 // Backend defines the interface for all data operations.
-// Two implementations exist: LocalBackend (embedded SQLite) and RemoteBackend (HTTP client).
+// LocalBackend provides direct SQLite access; SyncBackend wraps it with background push/pull.
 type Backend interface {
 	// Projects
 	ListProjects() ([]model.ProjectWithItemCount, error)

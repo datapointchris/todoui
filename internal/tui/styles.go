@@ -52,9 +52,6 @@ var (
 	modeLocalStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("42")).
 			Bold(true)
-	modeRemoteStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("69")).
-			Bold(true)
 	syncOKStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("42")).
 			Bold(true)
