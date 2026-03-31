@@ -14,5 +14,5 @@ api_url = "https://homelab.local:8080"
 [local]
 # Path to SQLite database
 # Env: TODOUI_DB
-# Default: ~/.config/todoui/todoui.db
+# Default: ~/.local/share/todoui/todoui.db
 # db_path = "/custom/path/todoui.db"

@@ -68,9 +68,18 @@ func Load() (*Config, error) {
 }
 
 func defaultDBPath() string {
-	dataDir, err := os.UserConfigDir()
-	if err != nil {
-		return "todoui.db"
+	return filepath.Join(userDataDir(), "todoui", "todoui.db")
+}
+
+// userDataDir returns the XDG data directory ($XDG_DATA_HOME or ~/.local/share).
+// Go's stdlib only provides UserConfigDir, not UserDataDir.
+func userDataDir() string {
+	if dir := os.Getenv("XDG_DATA_HOME"); dir != "" {
+		return dir
 	}
-	return filepath.Join(dataDir, "todoui", "todoui.db")
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "."
+	}
+	return filepath.Join(home, ".local", "share")
 }
