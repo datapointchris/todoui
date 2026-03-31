@@ -459,3 +459,128 @@ func TestTaskCRUD(t *testing.T) {
 		t.Errorf("expected 1 task after delete, got %d", len(tasks))
 	}
 }
+
+func TestDeleteProject(t *testing.T) {
+	b := newTestBackend(t)
+
+	p := mustCreateProject(t, b, "doomed")
+	if err := b.DeleteProject(p.ID); err != nil {
+		t.Fatalf("deleting project: %v", err)
+	}
+
+	projects, _ := b.ListProjects()
+	if len(projects) != 0 {
+		t.Errorf("expected 0 projects after delete, got %d", len(projects))
+	}
+}
+
+func TestDeleteItem(t *testing.T) {
+	b := newTestBackend(t)
+
+	p := mustCreateProject(t, b, "work")
+	item := mustCreateItem(t, b, model.CreateProjectItem{Title: "doomed", ProjectIDs: []string{p.ID}})
+
+	if err := b.DeleteItem(item.ID); err != nil {
+		t.Fatalf("deleting item: %v", err)
+	}
+
+	_, err := b.GetItem(item.ID)
+	if err != model.ErrNotFound {
+		t.Errorf("expected ErrNotFound after delete, got %v", err)
+	}
+
+	// Undo should restore the item
+	_, err = b.Undo()
+	if err != nil {
+		t.Fatalf("undoing delete: %v", err)
+	}
+	restored, err := b.GetItem(item.ID)
+	if err != nil {
+		t.Fatalf("getting restored item: %v", err)
+	}
+	if restored.Title != "doomed" {
+		t.Errorf("expected restored title 'doomed', got %q", restored.Title)
+	}
+}
+
+func TestReorderItem(t *testing.T) {
+	b := newTestBackend(t)
+
+	p := mustCreateProject(t, b, "work")
+	mustCreateItem(t, b, model.CreateProjectItem{Title: "first", ProjectIDs: []string{p.ID}})
+	item2 := mustCreateItem(t, b, model.CreateProjectItem{Title: "second", ProjectIDs: []string{p.ID}})
+
+	if err := b.ReorderItem(item2.ID, p.ID, 1); err != nil {
+		t.Fatalf("reordering item: %v", err)
+	}
+
+	items, _ := b.ListItemsByProject(p.ID)
+	for _, it := range items {
+		if it.ID == item2.ID && it.Position != 1 {
+			t.Errorf("expected position 1 for reordered item, got %d", it.Position)
+		}
+	}
+}
+
+func TestRemoveDependency(t *testing.T) {
+	b := newTestBackend(t)
+
+	p := mustCreateProject(t, b, "work")
+	t1 := mustCreateItem(t, b, model.CreateProjectItem{Title: "blocker", ProjectIDs: []string{p.ID}})
+	t2 := mustCreateItem(t, b, model.CreateProjectItem{Title: "blocked", ProjectIDs: []string{p.ID}})
+
+	_ = b.AddDependency(t2.ID, t1.ID)
+
+	if err := b.RemoveDependency(t2.ID, t1.ID); err != nil {
+		t.Fatalf("removing dependency: %v", err)
+	}
+
+	blockers, _ := b.GetBlockers(t2.ID)
+	if len(blockers) != 0 {
+		t.Errorf("expected 0 blockers after remove, got %d", len(blockers))
+	}
+}
+
+func TestListBlocked(t *testing.T) {
+	b := newTestBackend(t)
+
+	p := mustCreateProject(t, b, "work")
+	blocker := mustCreateItem(t, b, model.CreateProjectItem{Title: "blocker", ProjectIDs: []string{p.ID}})
+	blocked := mustCreateItem(t, b, model.CreateProjectItem{Title: "blocked", ProjectIDs: []string{p.ID}})
+	mustCreateItem(t, b, model.CreateProjectItem{Title: "free", ProjectIDs: []string{p.ID}})
+
+	_ = b.AddDependency(blocked.ID, blocker.ID)
+
+	items, err := b.ListBlocked()
+	if err != nil {
+		t.Fatalf("ListBlocked: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 blocked item, got %d", len(items))
+	}
+	if items[0].ID != blocked.ID {
+		t.Errorf("expected blocked item %s, got %s", blocked.ID, items[0].ID)
+	}
+}
+
+func TestListArchived(t *testing.T) {
+	b := newTestBackend(t)
+
+	p := mustCreateProject(t, b, "work")
+	mustCreateItem(t, b, model.CreateProjectItem{Title: "active", ProjectIDs: []string{p.ID}})
+	archived := mustCreateItem(t, b, model.CreateProjectItem{Title: "archived", ProjectIDs: []string{p.ID}})
+
+	archiveTrue := true
+	_, _ = b.UpdateItem(archived.ID, model.UpdateProjectItem{Archived: &archiveTrue})
+
+	items, err := b.ListArchived(p.ID)
+	if err != nil {
+		t.Fatalf("ListArchived: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 archived item, got %d", len(items))
+	}
+	if items[0].Title != "archived" {
+		t.Errorf("expected 'archived', got %q", items[0].Title)
+	}
+}
