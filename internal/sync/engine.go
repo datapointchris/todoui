@@ -29,17 +29,37 @@ type Engine struct {
 }
 
 // New creates a sync engine. Call Start() to launch the background push loop.
-func New(db *sql.DB, apiURL string) *Engine {
+// If apiKey is non-empty, it is sent as a Bearer token on every request.
+func New(db *sql.DB, apiURL, apiKey string) *Engine {
 	ctx, cancel := context.WithCancel(context.Background())
+	client := &http.Client{Timeout: 10 * time.Second}
+	if apiKey != "" {
+		client.Transport = &authTransport{
+			key:  apiKey,
+			base: http.DefaultTransport,
+		}
+	}
 	return &Engine{
 		db:     db,
 		q:      generated.New(db),
-		client: &http.Client{Timeout: 10 * time.Second},
+		client: client,
 		apiURL: apiURL,
 		pushCh: make(chan struct{}, 1),
 		ctx:    ctx,
 		cancel: cancel,
 	}
+}
+
+// authTransport injects an Authorization header into every outgoing request.
+type authTransport struct {
+	key  string
+	base http.RoundTripper
+}
+
+func (t *authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	req = req.Clone(req.Context())
+	req.Header.Set("Authorization", "Bearer "+t.key)
+	return t.base.RoundTrip(req)
 }
 
 // Start launches the background push loop goroutine.

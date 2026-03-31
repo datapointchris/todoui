@@ -49,7 +49,7 @@ func rootCmd() *cobra.Command {
 			local := backend.NewLocalBackend(d)
 
 			if cfg.Sync.Enabled {
-				syncEngine = sync.New(d, cfg.Sync.APIURL)
+				syncEngine = sync.New(d, cfg.Sync.APIURL, cfg.Sync.APIKey)
 				syncEngine.Start()
 				b = sync.NewSyncBackend(local, syncEngine)
 			} else {

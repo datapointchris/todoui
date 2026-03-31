@@ -8,7 +8,10 @@
 enabled = false
 # API URL for sync (required when enabled)
 # Env: TODOUI_SYNC_URL
-# api_url = "https://homelab.local:8080"
+# api_url = "https://api.ichrisbirch.com"
+# Personal API key (ichrisbirch: POST /api-keys/ to generate)
+# Env: TODOUI_SYNC_KEY
+# api_key = "icb_..."
 
 [local]
 # Path to SQLite database

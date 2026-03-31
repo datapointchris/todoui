@@ -18,6 +18,7 @@ type Config struct {
 type SyncConfig struct {
 	Enabled bool   `mapstructure:"enabled"`
 	APIURL  string `mapstructure:"api_url"`
+	APIKey  string `mapstructure:"api_key"`
 }
 
 // LocalConfig holds settings for the local embedded mode.
@@ -52,6 +53,7 @@ func Load() (*Config, error) {
 	_ = v.BindEnv("local.db_path", "TODOUI_DB")
 	_ = v.BindEnv("sync.enabled", "TODOUI_SYNC")
 	_ = v.BindEnv("sync.api_url", "TODOUI_SYNC_URL")
+	_ = v.BindEnv("sync.api_key", "TODOUI_SYNC_KEY")
 
 	var cfg Config
 	if err := v.Unmarshal(&cfg); err != nil {

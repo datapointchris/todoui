@@ -81,7 +81,8 @@ Config file: `~/.config/todoui/config.toml`
 
 [sync]
 enabled = false
-# api_url = "https://homelab.local:8080"
+# api_url = "https://api.ichrisbirch.com"
+# api_key = "icb_..."  # personal API key from POST /api-keys/
 ```
 
 Environment variable overrides:
@@ -91,6 +92,7 @@ Environment variable overrides:
 | `TODOUI_DB` | SQLite database path |
 | `TODOUI_SYNC` | Enable sync (`true`/`false`) |
 | `TODOUI_SYNC_URL` | API URL for sync |
+| `TODOUI_SYNC_KEY` | Personal API key for sync auth |
 
 ## Architecture
 

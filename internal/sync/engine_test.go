@@ -25,7 +25,7 @@ func setupSync(t *testing.T, handler http.Handler) (*sync.SyncBackend, *sync.Eng
 	t.Cleanup(ts.Close)
 
 	local := backend.NewLocalBackend(database)
-	engine := sync.New(database, ts.URL)
+	engine := sync.New(database, ts.URL, "")
 	engine.Start()
 	t.Cleanup(engine.Stop)
 
@@ -280,7 +280,7 @@ func TestPull_Reconciles(t *testing.T) {
 	ts := httptest.NewServer(handler)
 	defer ts.Close()
 
-	engine := sync.New(database, ts.URL)
+	engine := sync.New(database, ts.URL, "")
 
 	// Pull should reconcile server data into local DB
 	if err := engine.Pull(t.Context()); err != nil {
