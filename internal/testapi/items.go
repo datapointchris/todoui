@@ -17,12 +17,7 @@ func (s *Server) listAllItems(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) listItemsByProject(w http.ResponseWriter, r *http.Request) {
-	projectID, err := parseID(r, "projectID")
-	if err != nil {
-		writeDetail(w, http.StatusBadRequest, "invalid project ID")
-		return
-	}
-
+	projectID := getParam(r, "projectID")
 	archived := r.URL.Query().Get("archived") == "true"
 
 	if archived {
@@ -66,12 +61,7 @@ func (s *Server) createItem(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getItem(w http.ResponseWriter, r *http.Request) {
-	id, err := parseID(r, "itemID")
-	if err != nil {
-		writeDetail(w, http.StatusBadRequest, "invalid item ID")
-		return
-	}
-
+	id := getParam(r, "itemID")
 	item, err := s.backend.GetItem(id)
 	if err != nil {
 		handleError(w, err)
@@ -81,11 +71,7 @@ func (s *Server) getItem(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) updateItem(w http.ResponseWriter, r *http.Request) {
-	id, err := parseID(r, "itemID")
-	if err != nil {
-		writeDetail(w, http.StatusBadRequest, "invalid item ID")
-		return
-	}
+	id := getParam(r, "itemID")
 
 	var input model.UpdateProjectItem
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
@@ -102,12 +88,7 @@ func (s *Server) updateItem(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) deleteItem(w http.ResponseWriter, r *http.Request) {
-	id, err := parseID(r, "itemID")
-	if err != nil {
-		writeDetail(w, http.StatusBadRequest, "invalid item ID")
-		return
-	}
-
+	id := getParam(r, "itemID")
 	if err := s.backend.DeleteItem(id); err != nil {
 		handleError(w, err)
 		return
@@ -116,15 +97,11 @@ func (s *Server) deleteItem(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) reorderItem(w http.ResponseWriter, r *http.Request) {
-	itemID, err := parseID(r, "itemID")
-	if err != nil {
-		writeDetail(w, http.StatusBadRequest, "invalid item ID")
-		return
-	}
+	itemID := getParam(r, "itemID")
 
 	var body struct {
-		ProjectID int64 `json:"project_id"`
-		Position  int   `json:"position"`
+		ProjectID string `json:"project_id"`
+		Position  int    `json:"position"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeDetail(w, http.StatusBadRequest, "invalid JSON")

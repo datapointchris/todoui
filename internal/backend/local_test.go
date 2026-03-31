@@ -17,6 +17,15 @@ func newTestBackend(t *testing.T) *LocalBackend {
 	return NewLocalBackend(database)
 }
 
+func mustCreateProject(t *testing.T, b *LocalBackend, name string) *model.Project {
+	t.Helper()
+	p, err := b.CreateProject(model.CreateProject{Name: name})
+	if err != nil {
+		t.Fatalf("creating project %q: %v", name, err)
+	}
+	return p
+}
+
 func mustCreateItem(t *testing.T, b *LocalBackend, input model.CreateProjectItem) *model.ProjectItemDetail {
 	t.Helper()
 	item, err := b.CreateItem(input)
@@ -29,10 +38,7 @@ func mustCreateItem(t *testing.T, b *LocalBackend, input model.CreateProjectItem
 func TestCreateAndListProjects(t *testing.T) {
 	b := newTestBackend(t)
 
-	p, err := b.CreateProject("work")
-	if err != nil {
-		t.Fatalf("creating project: %v", err)
-	}
+	p := mustCreateProject(t, b, "work")
 	if p.Name != "work" {
 		t.Errorf("expected name 'work', got %q", p.Name)
 	}
@@ -52,9 +58,9 @@ func TestCreateAndListProjects(t *testing.T) {
 func TestGetProject(t *testing.T) {
 	b := newTestBackend(t)
 
-	p, _ := b.CreateProject("work")
-	mustCreateItem(t, b, model.CreateProjectItem{Title: "task 1", ProjectIDs: []int64{p.ID}})
-	mustCreateItem(t, b, model.CreateProjectItem{Title: "task 2", ProjectIDs: []int64{p.ID}})
+	p := mustCreateProject(t, b, "work")
+	mustCreateItem(t, b, model.CreateProjectItem{Title: "task 1", ProjectIDs: []string{p.ID}})
+	mustCreateItem(t, b, model.CreateProjectItem{Title: "task 2", ProjectIDs: []string{p.ID}})
 
 	project, err := b.GetProject(p.ID)
 	if err != nil {
@@ -71,7 +77,7 @@ func TestGetProject(t *testing.T) {
 func TestUpdateProject(t *testing.T) {
 	b := newTestBackend(t)
 
-	p, _ := b.CreateProject("old name")
+	p := mustCreateProject(t, b, "old name")
 	newName := "new name"
 	newPos := 5
 
@@ -87,12 +93,33 @@ func TestUpdateProject(t *testing.T) {
 	}
 }
 
+func TestProjectDescription(t *testing.T) {
+	b := newTestBackend(t)
+
+	desc := "A project for work tasks"
+	p, err := b.CreateProject(model.CreateProject{Name: "work", Description: &desc})
+	if err != nil {
+		t.Fatalf("creating project with description: %v", err)
+	}
+	if p.Description == nil || *p.Description != desc {
+		t.Errorf("expected description %q, got %v", desc, p.Description)
+	}
+
+	project, err := b.GetProject(p.ID)
+	if err != nil {
+		t.Fatalf("getting project: %v", err)
+	}
+	if project.Description == nil || *project.Description != desc {
+		t.Errorf("expected description %q after get, got %v", desc, project.Description)
+	}
+}
+
 func TestCreateItemRequiresProject(t *testing.T) {
 	b := newTestBackend(t)
 
 	_, err := b.CreateItem(model.CreateProjectItem{
 		Title:      "orphan task",
-		ProjectIDs: []int64{},
+		ProjectIDs: []string{},
 	})
 	if err != model.ErrLastProject {
 		t.Errorf("expected ErrLastProject, got %v", err)
@@ -102,12 +129,12 @@ func TestCreateItemRequiresProject(t *testing.T) {
 func TestCreateAndGetItem(t *testing.T) {
 	b := newTestBackend(t)
 
-	p, _ := b.CreateProject("work")
+	p := mustCreateProject(t, b, "work")
 	notes := "some notes"
 	item, err := b.CreateItem(model.CreateProjectItem{
 		Title:      "fix bug",
 		Notes:      &notes,
-		ProjectIDs: []int64{p.ID},
+		ProjectIDs: []string{p.ID},
 	})
 	if err != nil {
 		t.Fatalf("creating item: %v", err)
@@ -135,12 +162,12 @@ func TestCreateAndGetItem(t *testing.T) {
 func TestMultiProjectItem(t *testing.T) {
 	b := newTestBackend(t)
 
-	p1, _ := b.CreateProject("work")
-	p2, _ := b.CreateProject("personal")
+	p1 := mustCreateProject(t, b, "work")
+	p2 := mustCreateProject(t, b, "personal")
 
 	item, err := b.CreateItem(model.CreateProjectItem{
 		Title:      "cross-cutting task",
-		ProjectIDs: []int64{p1.ID, p2.ID},
+		ProjectIDs: []string{p1.ID, p2.ID},
 	})
 	if err != nil {
 		t.Fatalf("creating multi-project item: %v", err)
@@ -162,9 +189,9 @@ func TestMultiProjectItem(t *testing.T) {
 func TestListItemsByProjectIncludesPosition(t *testing.T) {
 	b := newTestBackend(t)
 
-	p, _ := b.CreateProject("work")
-	mustCreateItem(t, b, model.CreateProjectItem{Title: "first", ProjectIDs: []int64{p.ID}})
-	mustCreateItem(t, b, model.CreateProjectItem{Title: "second", ProjectIDs: []int64{p.ID}})
+	p := mustCreateProject(t, b, "work")
+	mustCreateItem(t, b, model.CreateProjectItem{Title: "first", ProjectIDs: []string{p.ID}})
+	mustCreateItem(t, b, model.CreateProjectItem{Title: "second", ProjectIDs: []string{p.ID}})
 
 	items, err := b.ListItemsByProject(p.ID)
 	if err != nil {
@@ -181,10 +208,10 @@ func TestListItemsByProjectIncludesPosition(t *testing.T) {
 func TestListAllItems(t *testing.T) {
 	b := newTestBackend(t)
 
-	p1, _ := b.CreateProject("work")
-	p2, _ := b.CreateProject("personal")
-	mustCreateItem(t, b, model.CreateProjectItem{Title: "work task", ProjectIDs: []int64{p1.ID}})
-	mustCreateItem(t, b, model.CreateProjectItem{Title: "personal task", ProjectIDs: []int64{p2.ID}})
+	p1 := mustCreateProject(t, b, "work")
+	p2 := mustCreateProject(t, b, "personal")
+	mustCreateItem(t, b, model.CreateProjectItem{Title: "work task", ProjectIDs: []string{p1.ID}})
+	mustCreateItem(t, b, model.CreateProjectItem{Title: "personal task", ProjectIDs: []string{p2.ID}})
 
 	items, err := b.ListAllItems()
 	if err != nil {
@@ -198,10 +225,10 @@ func TestListAllItems(t *testing.T) {
 func TestRemoveFromProjectPreservesLastProject(t *testing.T) {
 	b := newTestBackend(t)
 
-	p, _ := b.CreateProject("only")
+	p := mustCreateProject(t, b, "only")
 	item := mustCreateItem(t, b, model.CreateProjectItem{
 		Title:      "task",
-		ProjectIDs: []int64{p.ID},
+		ProjectIDs: []string{p.ID},
 	})
 
 	err := b.RemoveFromProject(item.ID, p.ID)
@@ -213,10 +240,10 @@ func TestRemoveFromProjectPreservesLastProject(t *testing.T) {
 func TestDependencyCycleDetection(t *testing.T) {
 	b := newTestBackend(t)
 
-	p, _ := b.CreateProject("work")
-	t1 := mustCreateItem(t, b, model.CreateProjectItem{Title: "task 1", ProjectIDs: []int64{p.ID}})
-	t2 := mustCreateItem(t, b, model.CreateProjectItem{Title: "task 2", ProjectIDs: []int64{p.ID}})
-	t3 := mustCreateItem(t, b, model.CreateProjectItem{Title: "task 3", ProjectIDs: []int64{p.ID}})
+	p := mustCreateProject(t, b, "work")
+	t1 := mustCreateItem(t, b, model.CreateProjectItem{Title: "task 1", ProjectIDs: []string{p.ID}})
+	t2 := mustCreateItem(t, b, model.CreateProjectItem{Title: "task 2", ProjectIDs: []string{p.ID}})
+	t3 := mustCreateItem(t, b, model.CreateProjectItem{Title: "task 3", ProjectIDs: []string{p.ID}})
 
 	if err := b.AddDependency(t1.ID, t2.ID); err != nil {
 		t.Fatalf("adding dep t1->t2: %v", err)
@@ -234,9 +261,9 @@ func TestDependencyCycleDetection(t *testing.T) {
 func TestGetBlockers(t *testing.T) {
 	b := newTestBackend(t)
 
-	p, _ := b.CreateProject("work")
-	t1 := mustCreateItem(t, b, model.CreateProjectItem{Title: "blocker", ProjectIDs: []int64{p.ID}})
-	t2 := mustCreateItem(t, b, model.CreateProjectItem{Title: "blocked", ProjectIDs: []int64{p.ID}})
+	p := mustCreateProject(t, b, "work")
+	t1 := mustCreateItem(t, b, model.CreateProjectItem{Title: "blocker", ProjectIDs: []string{p.ID}})
+	t2 := mustCreateItem(t, b, model.CreateProjectItem{Title: "blocked", ProjectIDs: []string{p.ID}})
 
 	_ = b.AddDependency(t2.ID, t1.ID)
 
@@ -248,17 +275,17 @@ func TestGetBlockers(t *testing.T) {
 		t.Fatalf("expected 1 blocker, got %d", len(blockers))
 	}
 	if blockers[0].ID != t1.ID {
-		t.Errorf("expected blocker ID %d, got %d", t1.ID, blockers[0].ID)
+		t.Errorf("expected blocker ID %s, got %s", t1.ID, blockers[0].ID)
 	}
 }
 
 func TestGetItemDependencyIDs(t *testing.T) {
 	b := newTestBackend(t)
 
-	p, _ := b.CreateProject("work")
-	t1 := mustCreateItem(t, b, model.CreateProjectItem{Title: "dep 1", ProjectIDs: []int64{p.ID}})
-	t2 := mustCreateItem(t, b, model.CreateProjectItem{Title: "dep 2", ProjectIDs: []int64{p.ID}})
-	t3 := mustCreateItem(t, b, model.CreateProjectItem{Title: "main", ProjectIDs: []int64{p.ID}})
+	p := mustCreateProject(t, b, "work")
+	t1 := mustCreateItem(t, b, model.CreateProjectItem{Title: "dep 1", ProjectIDs: []string{p.ID}})
+	t2 := mustCreateItem(t, b, model.CreateProjectItem{Title: "dep 2", ProjectIDs: []string{p.ID}})
+	t3 := mustCreateItem(t, b, model.CreateProjectItem{Title: "main", ProjectIDs: []string{p.ID}})
 
 	_ = b.AddDependency(t3.ID, t1.ID)
 	_ = b.AddDependency(t3.ID, t2.ID)
@@ -275,8 +302,8 @@ func TestGetItemDependencyIDs(t *testing.T) {
 func TestUpdateItem(t *testing.T) {
 	b := newTestBackend(t)
 
-	p, _ := b.CreateProject("work")
-	item := mustCreateItem(t, b, model.CreateProjectItem{Title: "original", ProjectIDs: []int64{p.ID}})
+	p := mustCreateProject(t, b, "work")
+	item := mustCreateItem(t, b, model.CreateProjectItem{Title: "original", ProjectIDs: []string{p.ID}})
 
 	newTitle := "updated"
 	updated, err := b.UpdateItem(item.ID, model.UpdateProjectItem{Title: &newTitle})
@@ -291,8 +318,8 @@ func TestUpdateItem(t *testing.T) {
 func TestCompleteItem(t *testing.T) {
 	b := newTestBackend(t)
 
-	p, _ := b.CreateProject("work")
-	item := mustCreateItem(t, b, model.CreateProjectItem{Title: "task", ProjectIDs: []int64{p.ID}})
+	p := mustCreateProject(t, b, "work")
+	item := mustCreateItem(t, b, model.CreateProjectItem{Title: "task", ProjectIDs: []string{p.ID}})
 
 	done := true
 	updated, err := b.UpdateItem(item.ID, model.UpdateProjectItem{Completed: &done})
@@ -307,9 +334,9 @@ func TestCompleteItem(t *testing.T) {
 func TestSearch(t *testing.T) {
 	b := newTestBackend(t)
 
-	p, _ := b.CreateProject("work")
-	mustCreateItem(t, b, model.CreateProjectItem{Title: "fix auth bug", ProjectIDs: []int64{p.ID}})
-	mustCreateItem(t, b, model.CreateProjectItem{Title: "write tests", ProjectIDs: []int64{p.ID}})
+	p := mustCreateProject(t, b, "work")
+	mustCreateItem(t, b, model.CreateProjectItem{Title: "fix auth bug", ProjectIDs: []string{p.ID}})
+	mustCreateItem(t, b, model.CreateProjectItem{Title: "write tests", ProjectIDs: []string{p.ID}})
 
 	results, err := b.Search("auth")
 	if err != nil {
@@ -326,8 +353,8 @@ func TestSearch(t *testing.T) {
 func TestUndoCreateItem(t *testing.T) {
 	b := newTestBackend(t)
 
-	p, _ := b.CreateProject("work")
-	item := mustCreateItem(t, b, model.CreateProjectItem{Title: "will undo", ProjectIDs: []int64{p.ID}})
+	p := mustCreateProject(t, b, "work")
+	item := mustCreateItem(t, b, model.CreateProjectItem{Title: "will undo", ProjectIDs: []string{p.ID}})
 
 	canUndo, _ := b.CanUndo()
 	if !canUndo {
@@ -360,9 +387,9 @@ func TestUndoWhenEmpty(t *testing.T) {
 func TestProjectItemCountExcludesArchived(t *testing.T) {
 	b := newTestBackend(t)
 
-	p, _ := b.CreateProject("work")
-	mustCreateItem(t, b, model.CreateProjectItem{Title: "active", ProjectIDs: []int64{p.ID}})
-	archived := mustCreateItem(t, b, model.CreateProjectItem{Title: "archived", ProjectIDs: []int64{p.ID}})
+	p := mustCreateProject(t, b, "work")
+	mustCreateItem(t, b, model.CreateProjectItem{Title: "active", ProjectIDs: []string{p.ID}})
+	archived := mustCreateItem(t, b, model.CreateProjectItem{Title: "archived", ProjectIDs: []string{p.ID}})
 
 	archiveTrue := true
 	_, _ = b.UpdateItem(archived.ID, model.UpdateProjectItem{Archived: &archiveTrue})
@@ -373,5 +400,62 @@ func TestProjectItemCountExcludesArchived(t *testing.T) {
 	}
 	if project.ItemCount != 1 {
 		t.Errorf("expected item_count 1 (excluding archived), got %d", project.ItemCount)
+	}
+}
+
+func TestTaskCRUD(t *testing.T) {
+	b := newTestBackend(t)
+
+	p := mustCreateProject(t, b, "work")
+	item := mustCreateItem(t, b, model.CreateProjectItem{Title: "main item", ProjectIDs: []string{p.ID}})
+
+	// Create tasks
+	task1, err := b.CreateTask(item.ID, model.CreateProjectItemTask{Title: "subtask 1"})
+	if err != nil {
+		t.Fatalf("creating task: %v", err)
+	}
+	if task1.Title != "subtask 1" {
+		t.Errorf("expected title 'subtask 1', got %q", task1.Title)
+	}
+	if task1.ItemID != item.ID {
+		t.Errorf("expected item_id %s, got %s", item.ID, task1.ItemID)
+	}
+
+	task2, err := b.CreateTask(item.ID, model.CreateProjectItemTask{Title: "subtask 2"})
+	if err != nil {
+		t.Fatalf("creating task 2: %v", err)
+	}
+
+	// List tasks
+	tasks, err := b.ListTasks(item.ID)
+	if err != nil {
+		t.Fatalf("listing tasks: %v", err)
+	}
+	if len(tasks) != 2 {
+		t.Fatalf("expected 2 tasks, got %d", len(tasks))
+	}
+
+	// Update task
+	newTitle := "updated subtask"
+	updated, err := b.UpdateTask(item.ID, task1.ID, model.UpdateProjectItemTask{Title: &newTitle})
+	if err != nil {
+		t.Fatalf("updating task: %v", err)
+	}
+	if updated.Title != "updated subtask" {
+		t.Errorf("expected 'updated subtask', got %q", updated.Title)
+	}
+
+	// Complete task
+	if err := b.CompleteTask(item.ID, task1.ID); err != nil {
+		t.Fatalf("completing task: %v", err)
+	}
+
+	// Delete task
+	if err := b.DeleteTask(item.ID, task2.ID); err != nil {
+		t.Fatalf("deleting task: %v", err)
+	}
+	tasks, _ = b.ListTasks(item.ID)
+	if len(tasks) != 1 {
+		t.Errorf("expected 1 task after delete, got %d", len(tasks))
 	}
 }

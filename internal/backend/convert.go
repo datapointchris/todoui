@@ -8,16 +8,31 @@ import (
 	"github.com/datapointchris/todoui/internal/model"
 )
 
-const timeLayout = "2006-01-02 15:04:05"
+func parseTime(s string) time.Time {
+	// Try RFC3339Nano first (ISO 8601 from API), then SQLite format as fallback
+	if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
+		return t
+	}
+	if t, err := time.Parse("2006-01-02T15:04:05.000Z", s); err == nil {
+		return t
+	}
+	if t, err := time.Parse("2006-01-02 15:04:05", s); err == nil {
+		return t
+	}
+	return time.Time{}
+}
 
 func toModelProject(p generated.Project) model.Project {
-	t, _ := time.Parse(timeLayout, p.CreatedAt)
-	return model.Project{
+	proj := model.Project{
 		ID:        p.ID,
 		Name:      p.Name,
 		Position:  int(p.Position),
-		CreatedAt: t,
+		CreatedAt: parseTime(p.CreatedAt),
 	}
+	if p.Description.Valid {
+		proj.Description = &p.Description.String
+	}
+	return proj
 }
 
 func toModelProjects(ps []generated.Project) []model.Project {
@@ -29,27 +44,33 @@ func toModelProjects(ps []generated.Project) []model.Project {
 }
 
 func toModelProjectWithItemCount(row generated.ListProjectsWithItemCountRow) model.ProjectWithItemCount {
-	t, _ := time.Parse(timeLayout, row.CreatedAt)
+	proj := model.Project{
+		ID:        row.ID,
+		Name:      row.Name,
+		Position:  int(row.Position),
+		CreatedAt: parseTime(row.CreatedAt),
+	}
+	if row.Description.Valid {
+		proj.Description = &row.Description.String
+	}
 	return model.ProjectWithItemCount{
-		Project: model.Project{
-			ID:        row.ID,
-			Name:      row.Name,
-			Position:  int(row.Position),
-			CreatedAt: t,
-		},
+		Project:   proj,
 		ItemCount: int(row.ItemCount),
 	}
 }
 
 func toModelProjectWithItemCountFromGet(row generated.GetProjectWithItemCountRow) model.ProjectWithItemCount {
-	t, _ := time.Parse(timeLayout, row.CreatedAt)
+	proj := model.Project{
+		ID:        row.ID,
+		Name:      row.Name,
+		Position:  int(row.Position),
+		CreatedAt: parseTime(row.CreatedAt),
+	}
+	if row.Description.Valid {
+		proj.Description = &row.Description.String
+	}
 	return model.ProjectWithItemCount{
-		Project: model.Project{
-			ID:        row.ID,
-			Name:      row.Name,
-			Position:  int(row.Position),
-			CreatedAt: t,
-		},
+		Project:   proj,
 		ItemCount: int(row.ItemCount),
 	}
 }
@@ -60,12 +81,8 @@ func toModelProjectItem(pi generated.ProjectItem) model.ProjectItem {
 		Title:     pi.Title,
 		Completed: pi.Completed != 0,
 		Archived:  pi.Archived != 0,
-	}
-	if ct, err := time.Parse(timeLayout, pi.CreatedAt); err == nil {
-		item.CreatedAt = ct
-	}
-	if ut, err := time.Parse(timeLayout, pi.UpdatedAt); err == nil {
-		item.UpdatedAt = ut
+		CreatedAt: parseTime(pi.CreatedAt),
+		UpdatedAt: parseTime(pi.UpdatedAt),
 	}
 	if pi.Notes.Valid {
 		item.Notes = &pi.Notes.String
@@ -87,12 +104,8 @@ func toModelProjectItemInProject(row generated.ListItemsByProjectRow) model.Proj
 		Title:     row.Title,
 		Completed: row.Completed != 0,
 		Archived:  row.Archived != 0,
-	}
-	if ct, err := time.Parse(timeLayout, row.CreatedAt); err == nil {
-		item.CreatedAt = ct
-	}
-	if ut, err := time.Parse(timeLayout, row.UpdatedAt); err == nil {
-		item.UpdatedAt = ut
+		CreatedAt: parseTime(row.CreatedAt),
+		UpdatedAt: parseTime(row.UpdatedAt),
 	}
 	if row.Notes.Valid {
 		item.Notes = &row.Notes.String
@@ -110,12 +123,8 @@ func toModelProjectItemInProjectFromArchived(row generated.ListArchivedItemsRow)
 		Title:     row.Title,
 		Completed: row.Completed != 0,
 		Archived:  row.Archived != 0,
-	}
-	if ct, err := time.Parse(timeLayout, row.CreatedAt); err == nil {
-		item.CreatedAt = ct
-	}
-	if ut, err := time.Parse(timeLayout, row.UpdatedAt); err == nil {
-		item.UpdatedAt = ut
+		CreatedAt: parseTime(row.CreatedAt),
+		UpdatedAt: parseTime(row.UpdatedAt),
 	}
 	if row.Notes.Valid {
 		item.Notes = &row.Notes.String
@@ -123,6 +132,17 @@ func toModelProjectItemInProjectFromArchived(row generated.ListArchivedItemsRow)
 	return model.ProjectItemInProject{
 		ProjectItem: item,
 		Position:    int(row.MembershipPosition),
+	}
+}
+
+func toModelProjectItemTask(t generated.ProjectItemTask) model.ProjectItemTask {
+	return model.ProjectItemTask{
+		ID:        t.ID,
+		ItemID:    t.ItemID,
+		Title:     t.Title,
+		Completed: t.Completed != 0,
+		Position:  int(t.Position),
+		CreatedAt: parseTime(t.CreatedAt),
 	}
 }
 

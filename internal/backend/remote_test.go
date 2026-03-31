@@ -33,12 +33,15 @@ func TestRemote_ProjectCRUD(t *testing.T) {
 	remote := setupRemote(t)
 
 	// Create
-	p, err := remote.CreateProject("TestProject")
+	p, err := remote.CreateProject(model.CreateProject{Name: "TestProject"})
 	if err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}
 	if p.Name != "TestProject" {
 		t.Errorf("got name %q, want TestProject", p.Name)
+	}
+	if p.ID == "" {
+		t.Fatal("expected non-empty UUID ID")
 	}
 
 	// List
@@ -85,11 +88,39 @@ func TestRemote_ProjectCRUD(t *testing.T) {
 	}
 }
 
+func TestRemote_ProjectDescription(t *testing.T) {
+	remote := setupRemote(t)
+
+	desc := "A test description"
+	p, err := remote.CreateProject(model.CreateProject{Name: "Described", Description: &desc})
+	if err != nil {
+		t.Fatalf("CreateProject with description: %v", err)
+	}
+
+	got, err := remote.GetProject(p.ID)
+	if err != nil {
+		t.Fatalf("GetProject: %v", err)
+	}
+	if got.Description == nil || *got.Description != desc {
+		t.Errorf("got description %v, want %q", got.Description, desc)
+	}
+
+	// Update description
+	newDesc := "Updated description"
+	updated, err := remote.UpdateProject(p.ID, model.UpdateProject{Description: &newDesc})
+	if err != nil {
+		t.Fatalf("UpdateProject description: %v", err)
+	}
+	if updated.Description == nil || *updated.Description != newDesc {
+		t.Errorf("got description %v, want %q", updated.Description, newDesc)
+	}
+}
+
 func TestRemote_ItemLifecycle(t *testing.T) {
 	remote := setupRemote(t)
 
 	// Setup: create a project
-	p, err := remote.CreateProject("Project1")
+	p, err := remote.CreateProject(model.CreateProject{Name: "Project1"})
 	if err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}
@@ -97,13 +128,16 @@ func TestRemote_ItemLifecycle(t *testing.T) {
 	// Create item
 	item, err := remote.CreateItem(model.CreateProjectItem{
 		Title:      "Test Item",
-		ProjectIDs: []int64{p.ID},
+		ProjectIDs: []string{p.ID},
 	})
 	if err != nil {
 		t.Fatalf("CreateItem: %v", err)
 	}
 	if item.Title != "Test Item" {
 		t.Errorf("got title %q, want Test Item", item.Title)
+	}
+	if item.ID == "" {
+		t.Fatal("expected non-empty UUID ID for item")
 	}
 
 	// List by project
@@ -163,9 +197,9 @@ func TestRemote_ItemLifecycle(t *testing.T) {
 func TestRemote_Dependencies(t *testing.T) {
 	remote := setupRemote(t)
 
-	p, _ := remote.CreateProject("Deps")
-	item1, _ := remote.CreateItem(model.CreateProjectItem{Title: "Blocker", ProjectIDs: []int64{p.ID}})
-	item2, _ := remote.CreateItem(model.CreateProjectItem{Title: "Blocked", ProjectIDs: []int64{p.ID}})
+	p, _ := remote.CreateProject(model.CreateProject{Name: "Deps"})
+	item1, _ := remote.CreateItem(model.CreateProjectItem{Title: "Blocker", ProjectIDs: []string{p.ID}})
+	item2, _ := remote.CreateItem(model.CreateProjectItem{Title: "Blocked", ProjectIDs: []string{p.ID}})
 
 	// Add dependency: item2 depends on item1
 	if err := remote.AddDependency(item2.ID, item1.ID); err != nil {
@@ -178,7 +212,7 @@ func TestRemote_Dependencies(t *testing.T) {
 		t.Fatalf("GetBlockers: %v", err)
 	}
 	if len(blockers) != 1 || blockers[0].ID != item1.ID {
-		t.Errorf("got blockers %v, want [%d]", blockers, item1.ID)
+		t.Errorf("got blockers %v, want [%s]", blockers, item1.ID)
 	}
 
 	// List blocked
@@ -187,7 +221,7 @@ func TestRemote_Dependencies(t *testing.T) {
 		t.Fatalf("ListBlocked: %v", err)
 	}
 	if len(blocked) != 1 || blocked[0].ID != item2.ID {
-		t.Errorf("got blocked %v, want [%d]", blocked, item2.ID)
+		t.Errorf("got blocked %v, want [%s]", blocked, item2.ID)
 	}
 
 	// Remove dependency
@@ -203,9 +237,9 @@ func TestRemote_Dependencies(t *testing.T) {
 func TestRemote_MultiProject(t *testing.T) {
 	remote := setupRemote(t)
 
-	p1, _ := remote.CreateProject("P1")
-	p2, _ := remote.CreateProject("P2")
-	item, _ := remote.CreateItem(model.CreateProjectItem{Title: "Multi", ProjectIDs: []int64{p1.ID}})
+	p1, _ := remote.CreateProject(model.CreateProject{Name: "P1"})
+	p2, _ := remote.CreateProject(model.CreateProject{Name: "P2"})
+	item, _ := remote.CreateItem(model.CreateProjectItem{Title: "Multi", ProjectIDs: []string{p1.ID}})
 
 	// Add to second project
 	if err := remote.AddToProject(item.ID, p2.ID); err != nil {
@@ -227,7 +261,67 @@ func TestRemote_MultiProject(t *testing.T) {
 	}
 	projects, _ = remote.GetItemProjects(item.ID)
 	if len(projects) != 1 || projects[0].ID != p2.ID {
-		t.Errorf("after remove, got projects %v, want [%d]", projects, p2.ID)
+		t.Errorf("after remove, got projects %v, want [%s]", projects, p2.ID)
+	}
+}
+
+func TestRemote_TaskCRUD(t *testing.T) {
+	remote := setupRemote(t)
+
+	p, _ := remote.CreateProject(model.CreateProject{Name: "TaskProject"})
+	item, _ := remote.CreateItem(model.CreateProjectItem{Title: "WithTasks", ProjectIDs: []string{p.ID}})
+
+	// Create task
+	task, err := remote.CreateTask(item.ID, model.CreateProjectItemTask{Title: "Task 1"})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if task.Title != "Task 1" {
+		t.Errorf("got title %q, want Task 1", task.Title)
+	}
+	if task.ID == "" {
+		t.Fatal("expected non-empty UUID ID for task")
+	}
+	if task.Completed {
+		t.Error("new task should not be completed")
+	}
+
+	// List tasks
+	tasks, err := remote.ListTasks(item.ID)
+	if err != nil {
+		t.Fatalf("ListTasks: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("got %d tasks, want 1", len(tasks))
+	}
+
+	// Update task
+	newTitle := "Updated Task"
+	updated, err := remote.UpdateTask(item.ID, task.ID, model.UpdateProjectItemTask{Title: &newTitle})
+	if err != nil {
+		t.Fatalf("UpdateTask: %v", err)
+	}
+	if updated.Title != "Updated Task" {
+		t.Errorf("got title %q, want Updated Task", updated.Title)
+	}
+
+	// Complete task
+	if err := remote.CompleteTask(item.ID, task.ID); err != nil {
+		t.Fatalf("CompleteTask: %v", err)
+	}
+	tasks, _ = remote.ListTasks(item.ID)
+	if !tasks[0].Completed {
+		t.Error("expected task to be completed after CompleteTask")
+	}
+
+	// Create second task and delete it
+	task2, _ := remote.CreateTask(item.ID, model.CreateProjectItemTask{Title: "Task 2"})
+	if err := remote.DeleteTask(item.ID, task2.ID); err != nil {
+		t.Fatalf("DeleteTask: %v", err)
+	}
+	tasks, _ = remote.ListTasks(item.ID)
+	if len(tasks) != 1 {
+		t.Errorf("got %d tasks after delete, want 1", len(tasks))
 	}
 }
 
@@ -244,8 +338,8 @@ func TestRemote_Undo(t *testing.T) {
 	}
 
 	// Create something, then undo
-	p, _ := remote.CreateProject("Undo")
-	_, _ = remote.CreateItem(model.CreateProjectItem{Title: "Undoable", ProjectIDs: []int64{p.ID}})
+	p, _ := remote.CreateProject(model.CreateProject{Name: "Undo"})
+	_, _ = remote.CreateItem(model.CreateProjectItem{Title: "Undoable", ProjectIDs: []string{p.ID}})
 
 	desc, err := remote.Undo()
 	if err != nil {
@@ -260,14 +354,14 @@ func TestRemote_ErrorMapping(t *testing.T) {
 	remote := setupRemote(t)
 
 	// Not found
-	_, err := remote.GetProject(999)
+	_, err := remote.GetProject("nonexistent-uuid")
 	if err != model.ErrNotFound {
 		t.Errorf("expected ErrNotFound, got %v", err)
 	}
 
 	// Duplicate name
-	_, _ = remote.CreateProject("Dup")
-	_, err = remote.CreateProject("Dup")
+	_, _ = remote.CreateProject(model.CreateProject{Name: "Dup"})
+	_, err = remote.CreateProject(model.CreateProject{Name: "Dup"})
 	if err != model.ErrDuplicateName {
 		t.Errorf("expected ErrDuplicateName, got %v", err)
 	}

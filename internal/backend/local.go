@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/datapointchris/todoui/internal/db/generated"
 	"github.com/datapointchris/todoui/internal/graph"
 	"github.com/datapointchris/todoui/internal/model"
@@ -30,6 +32,10 @@ func (b *LocalBackend) ctx() context.Context {
 	return context.Background()
 }
 
+func newID() string {
+	return uuid.Must(uuid.NewV7()).String()
+}
+
 // --- Projects ---
 
 func (b *LocalBackend) ListProjects() ([]model.ProjectWithItemCount, error) {
@@ -44,7 +50,7 @@ func (b *LocalBackend) ListProjects() ([]model.ProjectWithItemCount, error) {
 	return out, nil
 }
 
-func (b *LocalBackend) GetProject(id int64) (*model.ProjectWithItemCount, error) {
+func (b *LocalBackend) GetProject(id string) (*model.ProjectWithItemCount, error) {
 	row, err := b.q.GetProjectWithItemCount(b.ctx(), id)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -56,8 +62,12 @@ func (b *LocalBackend) GetProject(id int64) (*model.ProjectWithItemCount, error)
 	return &result, nil
 }
 
-func (b *LocalBackend) CreateProject(name string) (*model.Project, error) {
-	p, err := b.q.CreateProject(b.ctx(), name)
+func (b *LocalBackend) CreateProject(input model.CreateProject) (*model.Project, error) {
+	p, err := b.q.CreateProject(b.ctx(), generated.CreateProjectParams{
+		ID:          newID(),
+		Name:        input.Name,
+		Description: toNullString(input.Description),
+	})
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
 			return nil, model.ErrDuplicateName
@@ -68,7 +78,7 @@ func (b *LocalBackend) CreateProject(name string) (*model.Project, error) {
 	return &result, nil
 }
 
-func (b *LocalBackend) UpdateProject(id int64, input model.UpdateProject) (*model.Project, error) {
+func (b *LocalBackend) UpdateProject(id string, input model.UpdateProject) (*model.Project, error) {
 	ctx := b.ctx()
 
 	current, err := b.q.GetProject(ctx, id)
@@ -80,12 +90,16 @@ func (b *LocalBackend) UpdateProject(id int64, input model.UpdateProject) (*mode
 	}
 
 	params := generated.UpdateProjectParams{
-		Name:     current.Name,
-		Position: current.Position,
-		ID:       id,
+		Name:        current.Name,
+		Description: current.Description,
+		Position:    current.Position,
+		ID:          id,
 	}
 	if input.Name != nil {
 		params.Name = *input.Name
+	}
+	if input.Description != nil {
+		params.Description = toNullString(input.Description)
 	}
 	if input.Position != nil {
 		params.Position = int64(*input.Position)
@@ -99,7 +113,7 @@ func (b *LocalBackend) UpdateProject(id int64, input model.UpdateProject) (*mode
 	return &result, nil
 }
 
-func (b *LocalBackend) DeleteProject(id int64) error {
+func (b *LocalBackend) DeleteProject(id string) error {
 	return b.q.DeleteProject(b.ctx(), id)
 }
 
@@ -113,7 +127,7 @@ func (b *LocalBackend) ListAllItems() ([]model.ProjectItem, error) {
 	return toModelProjectItems(items), nil
 }
 
-func (b *LocalBackend) ListItemsByProject(projectID int64) ([]model.ProjectItemInProject, error) {
+func (b *LocalBackend) ListItemsByProject(projectID string) ([]model.ProjectItemInProject, error) {
 	rows, err := b.q.ListItemsByProject(b.ctx(), projectID)
 	if err != nil {
 		return nil, fmt.Errorf("listing items by project: %w", err)
@@ -125,7 +139,7 @@ func (b *LocalBackend) ListItemsByProject(projectID int64) ([]model.ProjectItemI
 	return out, nil
 }
 
-func (b *LocalBackend) GetItem(id int64) (*model.ProjectItemDetail, error) {
+func (b *LocalBackend) GetItem(id string) (*model.ProjectItemDetail, error) {
 	pi, err := b.q.GetItem(b.ctx(), id)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -145,7 +159,7 @@ func (b *LocalBackend) GetItem(id int64) (*model.ProjectItemDetail, error) {
 		return nil, fmt.Errorf("getting dependency IDs: %w", err)
 	}
 	if depIDs == nil {
-		depIDs = []int64{}
+		depIDs = []string{}
 	}
 
 	return &model.ProjectItemDetail{
@@ -170,6 +184,7 @@ func (b *LocalBackend) CreateItem(input model.CreateProjectItem) (*model.Project
 	ctx := b.ctx()
 
 	pi, err := qtx.CreateItem(ctx, generated.CreateItemParams{
+		ID:    newID(),
 		Title: input.Title,
 		Notes: toNullString(input.Notes),
 	})
@@ -184,7 +199,7 @@ func (b *LocalBackend) CreateItem(input model.CreateProjectItem) (*model.Project
 			ProjectID_2: pid,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("adding item to project %d: %w", pid, err)
+			return nil, fmt.Errorf("adding item to project %s: %w", pid, err)
 		}
 	}
 
@@ -199,7 +214,7 @@ func (b *LocalBackend) CreateItem(input model.CreateProjectItem) (*model.Project
 	return b.GetItem(pi.ID)
 }
 
-func (b *LocalBackend) UpdateItem(id int64, input model.UpdateProjectItem) (*model.ProjectItem, error) {
+func (b *LocalBackend) UpdateItem(id string, input model.UpdateProjectItem) (*model.ProjectItem, error) {
 	ctx := b.ctx()
 
 	current, err := b.q.GetItem(ctx, id)
@@ -255,7 +270,7 @@ func (b *LocalBackend) UpdateItem(id int64, input model.UpdateProjectItem) (*mod
 	return &result, nil
 }
 
-func (b *LocalBackend) DeleteItem(id int64) error {
+func (b *LocalBackend) DeleteItem(id string) error {
 	ctx := b.ctx()
 	current, err := b.q.GetItem(ctx, id)
 	if err != nil {
@@ -284,7 +299,7 @@ func (b *LocalBackend) DeleteItem(id int64) error {
 	return tx.Commit()
 }
 
-func (b *LocalBackend) ReorderItem(itemID, projectID int64, newPosition int) error {
+func (b *LocalBackend) ReorderItem(itemID, projectID string, newPosition int) error {
 	return b.q.UpdateItemPosition(b.ctx(), generated.UpdateItemPositionParams{
 		ItemID:    itemID,
 		ProjectID: projectID,
@@ -294,7 +309,7 @@ func (b *LocalBackend) ReorderItem(itemID, projectID int64, newPosition int) err
 
 // --- Multi-project membership ---
 
-func (b *LocalBackend) AddToProject(itemID, projectID int64) error {
+func (b *LocalBackend) AddToProject(itemID, projectID string) error {
 	return b.q.AddItemToProject(b.ctx(), generated.AddItemToProjectParams{
 		ItemID:      itemID,
 		ProjectID:   projectID,
@@ -302,7 +317,7 @@ func (b *LocalBackend) AddToProject(itemID, projectID int64) error {
 	})
 }
 
-func (b *LocalBackend) RemoveFromProject(itemID, projectID int64) error {
+func (b *LocalBackend) RemoveFromProject(itemID, projectID string) error {
 	projects, err := b.q.GetItemProjects(b.ctx(), itemID)
 	if err != nil {
 		return fmt.Errorf("checking project count: %w", err)
@@ -316,7 +331,7 @@ func (b *LocalBackend) RemoveFromProject(itemID, projectID int64) error {
 	})
 }
 
-func (b *LocalBackend) GetItemProjects(itemID int64) ([]model.Project, error) {
+func (b *LocalBackend) GetItemProjects(itemID string) ([]model.Project, error) {
 	ps, err := b.q.GetItemProjects(b.ctx(), itemID)
 	if err != nil {
 		return nil, fmt.Errorf("getting item projects: %w", err)
@@ -326,7 +341,7 @@ func (b *LocalBackend) GetItemProjects(itemID int64) ([]model.Project, error) {
 
 // --- Dependencies ---
 
-func (b *LocalBackend) AddDependency(itemID, dependsOn int64) error {
+func (b *LocalBackend) AddDependency(itemID, dependsOn string) error {
 	ctx := b.ctx()
 
 	deps, err := b.q.GetAllDependencies(ctx)
@@ -334,7 +349,7 @@ func (b *LocalBackend) AddDependency(itemID, dependsOn int64) error {
 		return fmt.Errorf("getting dependencies for cycle check: %w", err)
 	}
 
-	adj := make(map[int64][]int64)
+	adj := make(map[string][]string)
 	for _, d := range deps {
 		adj[d.DependsOnID] = append(adj[d.DependsOnID], d.ItemID)
 	}
@@ -349,19 +364,111 @@ func (b *LocalBackend) AddDependency(itemID, dependsOn int64) error {
 	})
 }
 
-func (b *LocalBackend) RemoveDependency(itemID, dependsOn int64) error {
+func (b *LocalBackend) RemoveDependency(itemID, dependsOn string) error {
 	return b.q.RemoveDependency(b.ctx(), generated.RemoveDependencyParams{
 		ItemID:      itemID,
 		DependsOnID: dependsOn,
 	})
 }
 
-func (b *LocalBackend) GetBlockers(itemID int64) ([]model.ProjectItem, error) {
+func (b *LocalBackend) GetBlockers(itemID string) ([]model.ProjectItem, error) {
 	items, err := b.q.GetBlockers(b.ctx(), itemID)
 	if err != nil {
 		return nil, fmt.Errorf("getting blockers: %w", err)
 	}
 	return toModelProjectItems(items), nil
+}
+
+// --- Tasks ---
+
+func (b *LocalBackend) ListTasks(itemID string) ([]model.ProjectItemTask, error) {
+	rows, err := b.q.ListTasksByItem(b.ctx(), itemID)
+	if err != nil {
+		return nil, fmt.Errorf("listing tasks: %w", err)
+	}
+	out := make([]model.ProjectItemTask, len(rows))
+	for i, r := range rows {
+		out[i] = toModelProjectItemTask(r)
+	}
+	return out, nil
+}
+
+func (b *LocalBackend) CreateTask(itemID string, input model.CreateProjectItemTask) (*model.ProjectItemTask, error) {
+	id := newID()
+	t, err := b.q.CreateTask(b.ctx(), generated.CreateTaskParams{
+		ID:       id,
+		ItemID:   itemID,
+		Title:    input.Title,
+		ItemID_2: itemID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("creating task: %w", err)
+	}
+	result := toModelProjectItemTask(t)
+	return &result, nil
+}
+
+func (b *LocalBackend) UpdateTask(itemID, taskID string, input model.UpdateProjectItemTask) (*model.ProjectItemTask, error) {
+	ctx := b.ctx()
+
+	current, err := b.q.GetTask(ctx, taskID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, model.ErrNotFound
+		}
+		return nil, fmt.Errorf("getting task for update: %w", err)
+	}
+
+	params := generated.UpdateTaskParams{
+		Title:     current.Title,
+		Completed: current.Completed,
+		Position:  current.Position,
+		ID:        taskID,
+	}
+	if input.Title != nil {
+		params.Title = *input.Title
+	}
+	if input.Completed != nil {
+		params.Completed = boolToInt64(input.Completed)
+	}
+	if input.Position != nil {
+		params.Position = int64(*input.Position)
+	}
+
+	t, err := b.q.UpdateTask(ctx, params)
+	if err != nil {
+		return nil, fmt.Errorf("updating task: %w", err)
+	}
+	result := toModelProjectItemTask(t)
+	return &result, nil
+}
+
+func (b *LocalBackend) DeleteTask(itemID, taskID string) error {
+	return b.q.DeleteTask(b.ctx(), taskID)
+}
+
+func (b *LocalBackend) CompleteTask(itemID, taskID string) error {
+	ctx := b.ctx()
+
+	current, err := b.q.GetTask(ctx, taskID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return model.ErrNotFound
+		}
+		return fmt.Errorf("getting task for complete: %w", err)
+	}
+
+	completed := int64(1)
+	_, err = b.q.UpdateTask(ctx, generated.UpdateTaskParams{
+		Title:     current.Title,
+		Completed: completed,
+		Position:  current.Position,
+		ID:        taskID,
+	})
+	if err != nil {
+		return fmt.Errorf("completing task: %w", err)
+	}
+	return nil
 }
 
 // --- Search ---
@@ -388,7 +495,7 @@ func (b *LocalBackend) ListBlocked() ([]model.ProjectItem, error) {
 	return toModelProjectItems(items), nil
 }
 
-func (b *LocalBackend) ListArchived(projectID int64) ([]model.ProjectItemInProject, error) {
+func (b *LocalBackend) ListArchived(projectID string) ([]model.ProjectItemInProject, error) {
 	rows, err := b.q.ListArchivedItems(b.ctx(), projectID)
 	if err != nil {
 		return nil, fmt.Errorf("listing archived: %w", err)
@@ -420,7 +527,7 @@ func (b *LocalBackend) Undo() (string, error) {
 
 	qtx := b.q.WithTx(tx)
 
-	description := fmt.Sprintf("undid %s on %s #%d", entry.Action, entry.EntityType, entry.EntityID)
+	description := fmt.Sprintf("undid %s on %s %s", entry.Action, entry.EntityType, entry.EntityID[:8])
 
 	switch entry.Action {
 	case "create":
@@ -450,6 +557,7 @@ func (b *LocalBackend) Undo() (string, error) {
 				return "", fmt.Errorf("unmarshaling deleted state: %w", err)
 			}
 			if _, err := qtx.CreateItem(ctx, generated.CreateItemParams{
+				ID:    entry.EntityID,
 				Title: prev.Title,
 				Notes: prev.Notes,
 			}); err != nil {
@@ -487,7 +595,7 @@ func (b *LocalBackend) CanUndo() (bool, error) {
 	return count > 0, nil
 }
 
-func (b *LocalBackend) logUndo(qtx *generated.Queries, action, entityType string, entityID int64, previousState any) error {
+func (b *LocalBackend) logUndo(qtx *generated.Queries, action, entityType string, entityID string, previousState any) error {
 	var prevJSON sql.NullString
 	if previousState != nil {
 		data, err := json.Marshal(previousState)

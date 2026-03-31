@@ -5,7 +5,6 @@ import (
 	"errors"
 	"log"
 	"net/http"
-	"strconv"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -67,6 +66,13 @@ func (s *Server) buildRouter() chi.Router {
 			r.Post("/dependencies", s.addDependency)
 			r.Delete("/dependencies/{depID}", s.removeDependency)
 			r.Get("/blockers", s.getBlockers)
+			r.Get("/tasks/", s.listTasks)
+			r.Post("/tasks/", s.createTask)
+			r.Route("/tasks/{taskID}", func(r chi.Router) {
+				r.Patch("/", s.updateTask)
+				r.Delete("/", s.deleteTask)
+				r.Post("/complete/", s.completeTask)
+			})
 		})
 	})
 
@@ -118,6 +124,6 @@ func handleError(w http.ResponseWriter, err error) {
 	}
 }
 
-func parseID(r *http.Request, param string) (int64, error) {
-	return strconv.ParseInt(chi.URLParam(r, param), 10, 64)
+func getParam(r *http.Request, param string) string {
+	return chi.URLParam(r, param)
 }

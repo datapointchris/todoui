@@ -17,12 +17,7 @@ func (s *Server) listProjects(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) getProject(w http.ResponseWriter, r *http.Request) {
-	id, err := parseID(r, "projectID")
-	if err != nil {
-		writeDetail(w, http.StatusBadRequest, "invalid project ID")
-		return
-	}
-
+	id := getParam(r, "projectID")
 	project, err := s.backend.GetProject(id)
 	if err != nil {
 		handleError(w, err)
@@ -32,19 +27,17 @@ func (s *Server) getProject(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Name string `json:"name"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	var input model.CreateProject
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 		writeDetail(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
-	if body.Name == "" {
+	if input.Name == "" {
 		writeDetail(w, http.StatusBadRequest, "name is required")
 		return
 	}
 
-	project, err := s.backend.CreateProject(body.Name)
+	project, err := s.backend.CreateProject(input)
 	if err != nil {
 		handleError(w, err)
 		return
@@ -53,11 +46,7 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
-	id, err := parseID(r, "projectID")
-	if err != nil {
-		writeDetail(w, http.StatusBadRequest, "invalid project ID")
-		return
-	}
+	id := getParam(r, "projectID")
 
 	var input model.UpdateProject
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
@@ -74,12 +63,7 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
-	id, err := parseID(r, "projectID")
-	if err != nil {
-		writeDetail(w, http.StatusBadRequest, "invalid project ID")
-		return
-	}
-
+	id := getParam(r, "projectID")
 	if err := s.backend.DeleteProject(id); err != nil {
 		handleError(w, err)
 		return

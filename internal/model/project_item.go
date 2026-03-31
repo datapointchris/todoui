@@ -4,7 +4,7 @@ import "time"
 
 // ProjectItem is the base representation of an item in the system.
 type ProjectItem struct {
-	ID        int64     `json:"id"`
+	ID        string    `json:"id"`
 	Title     string    `json:"title"`
 	Notes     *string   `json:"notes,omitempty"`
 	Completed bool      `json:"completed"`
@@ -18,7 +18,7 @@ type ProjectItem struct {
 type ProjectItemDetail struct {
 	ProjectItem
 	Projects      []Project `json:"projects"`
-	DependencyIDs []int64   `json:"dependency_ids"`
+	DependencyIDs []string  `json:"dependency_ids"`
 }
 
 // ProjectItemInProject is a ProjectItem as seen within a specific project context,
@@ -32,9 +32,9 @@ type ProjectItemInProject struct {
 
 // CreateProjectItem is the input for creating a new project item.
 type CreateProjectItem struct {
-	Title      string  `json:"title"`
-	Notes      *string `json:"notes,omitempty"`
-	ProjectIDs []int64 `json:"project_ids"`
+	Title      string   `json:"title"`
+	Notes      *string  `json:"notes,omitempty"`
+	ProjectIDs []string `json:"project_ids"`
 }
 
 // UpdateProjectItem is the input for updating an existing project item.

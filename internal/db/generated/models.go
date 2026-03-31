@@ -9,14 +9,15 @@ import (
 )
 
 type Project struct {
-	ID        int64
-	Name      string
-	Position  int64
-	CreatedAt string
+	ID          string
+	Name        string
+	Description sql.NullString
+	Position    int64
+	CreatedAt   string
 }
 
 type ProjectItem struct {
-	ID        int64
+	ID        string
 	Title     string
 	Notes     sql.NullString
 	Completed int64
@@ -26,21 +27,30 @@ type ProjectItem struct {
 }
 
 type ProjectItemDependency struct {
-	ItemID      int64
-	DependsOnID int64
+	ItemID      string
+	DependsOnID string
 }
 
 type ProjectItemMembership struct {
-	ItemID    int64
-	ProjectID int64
+	ItemID    string
+	ProjectID string
 	Position  int64
+}
+
+type ProjectItemTask struct {
+	ID        string
+	ItemID    string
+	Title     string
+	Completed int64
+	Position  int64
+	CreatedAt string
 }
 
 type UndoLog struct {
 	ID            int64
 	Action        string
 	EntityType    string
-	EntityID      int64
+	EntityID      string
 	PreviousState sql.NullString
 	CreatedAt     string
 }

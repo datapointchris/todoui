@@ -18,13 +18,14 @@ WHERE p.id = ?
 GROUP BY p.id;
 
 -- name: CreateProject :one
-INSERT INTO projects (name, position)
-VALUES (?, (SELECT COALESCE(MAX(position), 0) + 1 FROM projects))
+INSERT INTO projects (id, name, description, position)
+VALUES (?, ?, ?, (SELECT COALESCE(MAX(position), 0) + 1 FROM projects))
 RETURNING *;
 
 -- name: UpdateProject :one
 UPDATE projects
 SET name = ?,
+    description = ?,
     position = ?
 WHERE id = ?
 RETURNING *;
@@ -49,8 +50,8 @@ ORDER BY m.position, pi.created_at;
 SELECT * FROM project_items WHERE id = ?;
 
 -- name: CreateItem :one
-INSERT INTO project_items (title, notes)
-VALUES (?, ?)
+INSERT INTO project_items (id, title, notes)
+VALUES (?, ?, ?)
 RETURNING *;
 
 -- name: UpdateItem :one
@@ -59,7 +60,7 @@ SET title = ?,
     notes = ?,
     completed = ?,
     archived = ?,
-    updated_at = datetime('now')
+    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
 WHERE id = ?
 RETURNING *;
 
@@ -122,6 +123,30 @@ FROM project_items pi
 JOIN project_item_memberships m ON pi.id = m.item_id
 WHERE m.project_id = ? AND pi.archived = 1
 ORDER BY pi.updated_at DESC;
+
+-- name: ListTasksByItem :many
+SELECT * FROM project_item_tasks
+WHERE item_id = ?
+ORDER BY position, created_at;
+
+-- name: GetTask :one
+SELECT * FROM project_item_tasks WHERE id = ?;
+
+-- name: CreateTask :one
+INSERT INTO project_item_tasks (id, item_id, title, position)
+VALUES (?, ?, ?, (SELECT COALESCE(MAX(t.position), 0) + 1 FROM project_item_tasks t WHERE t.item_id = ?))
+RETURNING *;
+
+-- name: UpdateTask :one
+UPDATE project_item_tasks
+SET title = ?,
+    completed = ?,
+    position = ?
+WHERE id = ?
+RETURNING *;
+
+-- name: DeleteTask :exec
+DELETE FROM project_item_tasks WHERE id = ?;
 
 -- name: InsertUndoLog :exec
 INSERT INTO undo_log (action, entity_type, entity_id, previous_state)

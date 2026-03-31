@@ -20,8 +20,8 @@ type App struct {
 
 	projects     []model.ProjectWithItemCount
 	items        []model.ProjectItemInProject
-	blockedSet   map[int64]bool
-	itemBlockers map[int64][]model.ProjectItem
+	blockedSet   map[string]bool
+	itemBlockers map[string][]model.ProjectItem
 
 	activePane    pane
 	projectCursor int
@@ -59,11 +59,11 @@ type App struct {
 	// Dependency linking
 	depItems    []model.ProjectItem
 	depCursor   int
-	depItemID   int64
+	depItemID   string
 	depItemName string
 
 	// Navigation
-	pendingItemID int64 // after fetch, select this item
+	pendingItemID string // after fetch, select this item
 
 	errorMsg string // transient error shown in status bar
 	loading  bool   // true while an async operation is in-flight
@@ -81,8 +81,8 @@ func NewApp(b backend.Backend, mode string) *App {
 	return &App{
 		backend:      b,
 		mode:         mode,
-		blockedSet:   make(map[int64]bool),
-		itemBlockers: make(map[int64][]model.ProjectItem),
+		blockedSet:   make(map[string]bool),
+		itemBlockers: make(map[string][]model.ProjectItem),
 		titleInput:   ti,
 		notesInput:   ta,
 	}
@@ -94,8 +94,8 @@ type projectsMsg []model.ProjectWithItemCount
 
 type itemsMsg struct {
 	items    []model.ProjectItemInProject
-	blocked  map[int64]bool
-	blockers map[int64][]model.ProjectItem
+	blocked  map[string]bool
+	blockers map[string][]model.ProjectItem
 }
 
 type (
@@ -118,7 +118,7 @@ type itemDetailMsg struct {
 type searchResultsMsg []model.ProjectItem
 
 type searchNavigateMsg struct {
-	itemID   int64
+	itemID   string
 	projects []model.Project
 }
 
@@ -127,6 +127,14 @@ type depCandidatesMsg []model.ProjectItem
 type depBlockersForUnlinkMsg []model.ProjectItem
 
 type errMsg struct{ error }
+
+// shortID returns the first 8 characters of a UUID for display.
+func shortID(id string) string {
+	if len(id) >= 8 {
+		return id[:8]
+	}
+	return id
+}
 
 // --- Commands ---
 
@@ -140,7 +148,7 @@ func fetchProjectsCmd(b backend.Backend) tea.Cmd {
 	}
 }
 
-func fetchItemsCmd(b backend.Backend, projectID int64, filter filterMode) tea.Cmd {
+func fetchItemsCmd(b backend.Backend, projectID string, filter filterMode) tea.Cmd {
 	return func() tea.Msg {
 		items, err := b.ListItemsByProject(projectID)
 		if err != nil {
@@ -159,12 +167,12 @@ func fetchItemsCmd(b backend.Backend, projectID int64, filter filterMode) tea.Cm
 		if err != nil {
 			return errMsg{err}
 		}
-		blockedSet := make(map[int64]bool)
+		blockedSet := make(map[string]bool)
 		for _, bi := range blockedItems {
 			blockedSet[bi.ID] = true
 		}
 
-		blockers := make(map[int64][]model.ProjectItem)
+		blockers := make(map[string][]model.ProjectItem)
 		for _, item := range items {
 			if blockedSet[item.ID] {
 				bs, err := b.GetBlockers(item.ID)
@@ -199,7 +207,7 @@ func createItemCmd(b backend.Backend, input model.CreateProjectItem) tea.Cmd {
 	}
 }
 
-func updateItemCmd(b backend.Backend, id int64, input model.UpdateProjectItem) tea.Cmd {
+func updateItemCmd(b backend.Backend, id string, input model.UpdateProjectItem) tea.Cmd {
 	return func() tea.Msg {
 		_, err := b.UpdateItem(id, input)
 		if err != nil {
@@ -209,9 +217,9 @@ func updateItemCmd(b backend.Backend, id int64, input model.UpdateProjectItem) t
 	}
 }
 
-func createProjectCmd(b backend.Backend, name string) tea.Cmd {
+func createProjectCmd(b backend.Backend, input model.CreateProject) tea.Cmd {
 	return func() tea.Msg {
-		_, err := b.CreateProject(name)
+		_, err := b.CreateProject(input)
 		if err != nil {
 			return errMsg{err}
 		}
@@ -229,7 +237,7 @@ func undoCmd(b backend.Backend) tea.Cmd {
 	}
 }
 
-func fetchItemProjectsCmd(b backend.Backend, itemID int64) tea.Cmd {
+func fetchItemProjectsCmd(b backend.Backend, itemID string) tea.Cmd {
 	return func() tea.Msg {
 		projects, err := b.GetItemProjects(itemID)
 		if err != nil {
@@ -239,7 +247,7 @@ func fetchItemProjectsCmd(b backend.Backend, itemID int64) tea.Cmd {
 	}
 }
 
-func updateMembershipCmd(b backend.Backend, itemID int64, toAdd, toRemove []int64) tea.Cmd {
+func updateMembershipCmd(b backend.Backend, itemID string, toAdd, toRemove []string) tea.Cmd {
 	return func() tea.Msg {
 		for _, pid := range toAdd {
 			if err := b.AddToProject(itemID, pid); err != nil {
@@ -255,7 +263,7 @@ func updateMembershipCmd(b backend.Backend, itemID int64, toAdd, toRemove []int6
 	}
 }
 
-func fetchItemDetailCmd(b backend.Backend, itemID int64, isBlocked bool) tea.Cmd {
+func fetchItemDetailCmd(b backend.Backend, itemID string, isBlocked bool) tea.Cmd {
 	return func() tea.Msg {
 		detail, err := b.GetItem(itemID)
 		if err != nil {
@@ -282,7 +290,7 @@ func searchCmd(b backend.Backend, query string) tea.Cmd {
 	}
 }
 
-func searchNavigateCmd(b backend.Backend, itemID int64) tea.Cmd {
+func searchNavigateCmd(b backend.Backend, itemID string) tea.Cmd {
 	return func() tea.Msg {
 		detail, err := b.GetItem(itemID)
 		if err != nil {
@@ -292,7 +300,7 @@ func searchNavigateCmd(b backend.Backend, itemID int64) tea.Cmd {
 	}
 }
 
-func reorderItemCmd(b backend.Backend, itemID, projectID int64, newPos int) tea.Cmd {
+func reorderItemCmd(b backend.Backend, itemID, projectID string, newPos int) tea.Cmd {
 	return func() tea.Msg {
 		if err := b.ReorderItem(itemID, projectID, newPos); err != nil {
 			return errMsg{err}
@@ -311,7 +319,7 @@ func fetchDepCandidatesCmd(b backend.Backend) tea.Cmd {
 	}
 }
 
-func fetchDepBlockersCmd(b backend.Backend, itemID int64) tea.Cmd {
+func fetchDepBlockersCmd(b backend.Backend, itemID string) tea.Cmd {
 	return func() tea.Msg {
 		blockers, err := b.GetBlockers(itemID)
 		if err != nil {
@@ -321,7 +329,7 @@ func fetchDepBlockersCmd(b backend.Backend, itemID int64) tea.Cmd {
 	}
 }
 
-func addDependencyCmd(b backend.Backend, itemID, dependsOn int64) tea.Cmd {
+func addDependencyCmd(b backend.Backend, itemID, dependsOn string) tea.Cmd {
 	return func() tea.Msg {
 		if err := b.AddDependency(itemID, dependsOn); err != nil {
 			return errMsg{err}
@@ -330,7 +338,7 @@ func addDependencyCmd(b backend.Backend, itemID, dependsOn int64) tea.Cmd {
 	}
 }
 
-func removeDependencyCmd(b backend.Backend, itemID, dependsOn int64) tea.Cmd {
+func removeDependencyCmd(b backend.Backend, itemID, dependsOn string) tea.Cmd {
 	return func() tea.Msg {
 		if err := b.RemoveDependency(itemID, dependsOn); err != nil {
 			return errMsg{err}
@@ -370,14 +378,14 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.items = msg.items
 		m.blockedSet = msg.blocked
 		m.itemBlockers = msg.blockers
-		if m.pendingItemID > 0 {
+		if m.pendingItemID != "" {
 			for i, item := range m.items {
 				if item.ID == m.pendingItemID {
 					m.itemCursor = i
 					break
 				}
 			}
-			m.pendingItemID = 0
+			m.pendingItemID = ""
 		} else if m.itemCursor >= len(m.items) {
 			m.itemCursor = max(0, len(m.items)-1)
 		}
@@ -803,7 +811,7 @@ func (m *App) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			projectID := m.projects[m.projectCursor].ID
 			return m, createItemCmd(m.backend, model.CreateProjectItem{
 				Title:      value,
-				ProjectIDs: []int64{projectID},
+				ProjectIDs: []string{projectID},
 			})
 
 		case modeAddItemMulti:
@@ -817,7 +825,7 @@ func (m *App) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case modeAddProject:
 			m.appMode = modeNormal
 			m.titleInput.Blur()
-			return m, createProjectCmd(m.backend, value)
+			return m, createProjectCmd(m.backend, model.CreateProject{Name: value})
 
 		case modeEditTitle:
 			m.appMode = m.returnMode
@@ -1323,7 +1331,7 @@ func (m *App) renderDetailOverlay() string {
 		return ""
 	}
 
-	header := overlayTitleStyle.Render(fmt.Sprintf("Item #%d", d.ID))
+	header := overlayTitleStyle.Render(fmt.Sprintf("Item %s", shortID(d.ID)))
 
 	status := "○ incomplete"
 	if d.Completed {
@@ -1359,7 +1367,7 @@ func (m *App) renderDetailOverlay() string {
 		lines = append(lines, dimStyle.Render("  ─── Blocked by ────────────────────"))
 		for _, b := range m.detailBlockers {
 			lines = append(lines, blockerStyle.Render(
-				fmt.Sprintf("○ %s (#%d)", b.Title, b.ID),
+				fmt.Sprintf("○ %s (%s)", b.Title, shortID(b.ID)),
 			))
 		}
 	}
@@ -1383,10 +1391,10 @@ func (m *App) renderDetailOverlay() string {
 func (m *App) renderNotesOverlay() string {
 	var itemTitle string
 	if m.itemDetail != nil {
-		itemTitle = fmt.Sprintf("%s (#%d)", m.itemDetail.Title, m.itemDetail.ID)
+		itemTitle = fmt.Sprintf("%s (%s)", m.itemDetail.Title, shortID(m.itemDetail.ID))
 	} else if len(m.items) > 0 && m.itemCursor < len(m.items) {
 		item := m.items[m.itemCursor]
-		itemTitle = fmt.Sprintf("%s (#%d)", item.Title, item.ID)
+		itemTitle = fmt.Sprintf("%s (%s)", item.Title, shortID(item.ID))
 	}
 
 	var lines []string
@@ -1480,7 +1488,7 @@ func (m *App) renderSearchOverlay() string {
 		if item.Completed {
 			status = "✓"
 		}
-		line := fmt.Sprintf("%s %s  %s", status, item.Title, itemIDStyle.Render(fmt.Sprintf("#%d", item.ID)))
+		line := fmt.Sprintf("%s %s  %s", status, item.Title, itemIDStyle.Render(shortID(item.ID)))
 		if !m.searchFocused && i == m.searchCursor {
 			line = searchResultSelectedStyle.Render("> " + line)
 		} else {
@@ -1508,9 +1516,9 @@ func (m *App) renderSearchOverlay() string {
 func (m *App) renderDepLinkOverlay() string {
 	var header string
 	if m.appMode == modeDepUnlink {
-		header = fmt.Sprintf("Unlink dependency from: %s (#%d)", m.depItemName, m.depItemID)
+		header = fmt.Sprintf("Unlink dependency from: %s (%s)", m.depItemName, shortID(m.depItemID))
 	} else {
-		header = fmt.Sprintf("Link dependency for: %s (#%d)", m.depItemName, m.depItemID)
+		header = fmt.Sprintf("Link dependency for: %s (%s)", m.depItemName, shortID(m.depItemID))
 	}
 
 	var lines []string
@@ -1526,7 +1534,7 @@ func (m *App) renderDepLinkOverlay() string {
 		if item.Completed {
 			status = "✓"
 		}
-		line := fmt.Sprintf("%s %s  %s", status, item.Title, itemIDStyle.Render(fmt.Sprintf("#%d", item.ID)))
+		line := fmt.Sprintf("%s %s  %s", status, item.Title, itemIDStyle.Render(shortID(item.ID)))
 		if i == m.depCursor {
 			line = pickerSelectedStyle.Render("> " + line)
 		} else {
@@ -1654,7 +1662,7 @@ func (m *App) renderItemPane(width, height int) string {
 					break
 				}
 				blockerLine := blockerStyle.Render(
-					fmt.Sprintf("└─ blocked by: %s (#%d)", b.Title, b.ID),
+					fmt.Sprintf("└─ blocked by: %s (%s)", b.Title, shortID(b.ID)),
 				)
 				lines = append(lines, blockerLine)
 				linesUsed++
@@ -1700,7 +1708,7 @@ func (m *App) renderItemLine(item model.ProjectItemInProject, selected bool, wid
 		hasNotes = " ≡"
 	}
 
-	idText := fmt.Sprintf("#%d", item.ID)
+	idText := shortID(item.ID)
 
 	var content string
 	if item.Completed {

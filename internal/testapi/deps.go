@@ -6,14 +6,10 @@ import (
 )
 
 func (s *Server) addDependency(w http.ResponseWriter, r *http.Request) {
-	itemID, err := parseID(r, "itemID")
-	if err != nil {
-		writeDetail(w, http.StatusBadRequest, "invalid item ID")
-		return
-	}
+	itemID := getParam(r, "itemID")
 
 	var body struct {
-		DependsOnID int64 `json:"depends_on_id"`
+		DependsOnID string `json:"depends_on_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeDetail(w, http.StatusBadRequest, "invalid JSON")
@@ -28,17 +24,8 @@ func (s *Server) addDependency(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) removeDependency(w http.ResponseWriter, r *http.Request) {
-	itemID, err := parseID(r, "itemID")
-	if err != nil {
-		writeDetail(w, http.StatusBadRequest, "invalid item ID")
-		return
-	}
-
-	depID, err := parseID(r, "depID")
-	if err != nil {
-		writeDetail(w, http.StatusBadRequest, "invalid dependency ID")
-		return
-	}
+	itemID := getParam(r, "itemID")
+	depID := getParam(r, "depID")
 
 	if err := s.backend.RemoveDependency(itemID, depID); err != nil {
 		handleError(w, err)
@@ -48,11 +35,7 @@ func (s *Server) removeDependency(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getBlockers(w http.ResponseWriter, r *http.Request) {
-	itemID, err := parseID(r, "itemID")
-	if err != nil {
-		writeDetail(w, http.StatusBadRequest, "invalid item ID")
-		return
-	}
+	itemID := getParam(r, "itemID")
 
 	blockers, err := s.backend.GetBlockers(itemID)
 	if err != nil {
@@ -63,11 +46,7 @@ func (s *Server) getBlockers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getItemProjects(w http.ResponseWriter, r *http.Request) {
-	itemID, err := parseID(r, "itemID")
-	if err != nil {
-		writeDetail(w, http.StatusBadRequest, "invalid item ID")
-		return
-	}
+	itemID := getParam(r, "itemID")
 
 	projects, err := s.backend.GetItemProjects(itemID)
 	if err != nil {
@@ -78,14 +57,10 @@ func (s *Server) getItemProjects(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) addToProject(w http.ResponseWriter, r *http.Request) {
-	itemID, err := parseID(r, "itemID")
-	if err != nil {
-		writeDetail(w, http.StatusBadRequest, "invalid item ID")
-		return
-	}
+	itemID := getParam(r, "itemID")
 
 	var body struct {
-		ProjectID int64 `json:"project_id"`
+		ProjectID string `json:"project_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeDetail(w, http.StatusBadRequest, "invalid JSON")
@@ -100,17 +75,8 @@ func (s *Server) addToProject(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) removeFromProject(w http.ResponseWriter, r *http.Request) {
-	itemID, err := parseID(r, "itemID")
-	if err != nil {
-		writeDetail(w, http.StatusBadRequest, "invalid item ID")
-		return
-	}
-
-	projectID, err := parseID(r, "projectID")
-	if err != nil {
-		writeDetail(w, http.StatusBadRequest, "invalid project ID")
-		return
-	}
+	itemID := getParam(r, "itemID")
+	projectID := getParam(r, "projectID")
 
 	if err := s.backend.RemoveFromProject(itemID, projectID); err != nil {
 		handleError(w, err)

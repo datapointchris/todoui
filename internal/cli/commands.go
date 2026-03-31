@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -52,7 +51,7 @@ func (c *commands) addCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Printf("Created item #%d: %s\n", item.ID, item.Title)
+			fmt.Printf("Created item %s: %s\n", shortID(item.ID), item.Title)
 			for _, p := range item.Projects {
 				fmt.Printf("  → %s\n", p.Name)
 			}
@@ -69,16 +68,13 @@ func (c *commands) doneCmd() *cobra.Command {
 		Short: "Mark an item as done",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
-			id, err := parseID(args[0])
-			if err != nil {
-				return err
-			}
+			id := args[0]
 			done := true
 			item, err := c.backend().UpdateItem(id, model.UpdateProjectItem{Completed: &done})
 			if err != nil {
 				return err
 			}
-			fmt.Printf("Done: #%d %s\n", item.ID, item.Title)
+			fmt.Printf("Done: %s %s\n", shortID(item.ID), item.Title)
 			return nil
 		},
 	}
@@ -107,16 +103,13 @@ func (c *commands) archiveCmd() *cobra.Command {
 		Short: "Archive an item",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
-			id, err := parseID(args[0])
-			if err != nil {
-				return err
-			}
+			id := args[0]
 			archived := true
 			item, err := c.backend().UpdateItem(id, model.UpdateProjectItem{Archived: &archived})
 			if err != nil {
 				return err
 			}
-			fmt.Printf("Archived: #%d %s\n", item.ID, item.Title)
+			fmt.Printf("Archived: %s %s\n", shortID(item.ID), item.Title)
 			return nil
 		},
 	}
@@ -146,10 +139,7 @@ func (c *commands) projectsCmd() *cobra.Command {
 		Short: "View or manage an item's project memberships",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
-			id, err := parseID(args[0])
-			if err != nil {
-				return err
-			}
+			id := args[0]
 			b := c.backend()
 			if addProject != "" {
 				return addItemToProject(b, id, addProject)
@@ -167,16 +157,23 @@ func (c *commands) projectsCmd() *cobra.Command {
 
 // --- helpers ---
 
-func resolveProjects(b backend.Backend, names []string) ([]int64, error) {
+func shortID(id string) string {
+	if len(id) >= 8 {
+		return id[:8]
+	}
+	return id
+}
+
+func resolveProjects(b backend.Backend, names []string) ([]string, error) {
 	allProjects, err := b.ListProjects()
 	if err != nil {
 		return nil, fmt.Errorf("listing projects: %w", err)
 	}
-	byName := make(map[string]int64, len(allProjects))
+	byName := make(map[string]string, len(allProjects))
 	for _, p := range allProjects {
 		byName[strings.ToLower(p.Name)] = p.ID
 	}
-	ids := make([]int64, 0, len(names))
+	ids := make([]string, 0, len(names))
 	for _, name := range names {
 		id, ok := byName[strings.ToLower(name)]
 		if !ok {
@@ -187,10 +184,10 @@ func resolveProjects(b backend.Backend, names []string) ([]int64, error) {
 	return ids, nil
 }
 
-func findProjectByName(b backend.Backend, name string) (int64, error) {
+func findProjectByName(b backend.Backend, name string) (string, error) {
 	ids, err := resolveProjects(b, []string{name})
 	if err != nil {
-		return 0, err
+		return "", err
 	}
 	return ids[0], nil
 }
@@ -232,12 +229,12 @@ func listByProject(b backend.Backend, name string) error {
 	return nil
 }
 
-func showItemProjects(b backend.Backend, id int64) error {
+func showItemProjects(b backend.Backend, id string) error {
 	item, err := b.GetItem(id)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("#%d %s\n", item.ID, item.Title)
+	fmt.Printf("%s %s\n", shortID(item.ID), item.Title)
 	fmt.Println("Projects:")
 	for _, p := range item.Projects {
 		fmt.Printf("  • %s\n", p.Name)
@@ -245,7 +242,7 @@ func showItemProjects(b backend.Backend, id int64) error {
 	return nil
 }
 
-func addItemToProject(b backend.Backend, itemID int64, projectName string) error {
+func addItemToProject(b backend.Backend, itemID string, projectName string) error {
 	projectID, err := findProjectByName(b, projectName)
 	if err != nil {
 		return err
@@ -253,11 +250,11 @@ func addItemToProject(b backend.Backend, itemID int64, projectName string) error
 	if err := b.AddToProject(itemID, projectID); err != nil {
 		return err
 	}
-	fmt.Printf("Added #%d to %s\n", itemID, projectName)
+	fmt.Printf("Added %s to %s\n", shortID(itemID), projectName)
 	return nil
 }
 
-func removeItemFromProject(b backend.Backend, itemID int64, projectName string) error {
+func removeItemFromProject(b backend.Backend, itemID string, projectName string) error {
 	projectID, err := findProjectByName(b, projectName)
 	if err != nil {
 		return err
@@ -265,7 +262,7 @@ func removeItemFromProject(b backend.Backend, itemID int64, projectName string) 
 	if err := b.RemoveFromProject(itemID, projectID); err != nil {
 		return err
 	}
-	fmt.Printf("Removed #%d from %s\n", itemID, projectName)
+	fmt.Printf("Removed %s from %s\n", shortID(itemID), projectName)
 	return nil
 }
 
@@ -274,14 +271,5 @@ func printItem(item model.ProjectItem) {
 	if item.Completed {
 		marker = "✓"
 	}
-	fmt.Printf("  %s #%-4d %s\n", marker, item.ID, item.Title)
-}
-
-func parseID(s string) (int64, error) {
-	s = strings.TrimPrefix(s, "#")
-	id, err := strconv.ParseInt(s, 10, 64)
-	if err != nil {
-		return 0, fmt.Errorf("invalid item ID: %q", s)
-	}
-	return id, nil
+	fmt.Printf("  %s %-8s %s\n", marker, shortID(item.ID), item.Title)
 }

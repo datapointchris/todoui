@@ -13,7 +13,7 @@ import (
 	"github.com/datapointchris/todoui/internal/model"
 )
 
-// RemoteBackend connects to a todoui API server over HTTP.
+// RemoteBackend connects to the ichrisbirch API server over HTTP.
 type RemoteBackend struct {
 	client *http.Client
 	apiURL string // base URL without trailing slash
@@ -157,26 +157,26 @@ func (r *RemoteBackend) ListProjects() ([]model.ProjectWithItemCount, error) {
 	return projects, err
 }
 
-func (r *RemoteBackend) GetProject(id int64) (*model.ProjectWithItemCount, error) {
+func (r *RemoteBackend) GetProject(id string) (*model.ProjectWithItemCount, error) {
 	var project model.ProjectWithItemCount
-	err := r.get(fmt.Sprintf("/projects/%d/", id), &project)
+	err := r.get(fmt.Sprintf("/projects/%s/", id), &project)
 	return &project, err
 }
 
-func (r *RemoteBackend) CreateProject(name string) (*model.Project, error) {
+func (r *RemoteBackend) CreateProject(input model.CreateProject) (*model.Project, error) {
 	var project model.Project
-	err := r.post("/projects/", map[string]string{"name": name}, &project)
+	err := r.post("/projects/", input, &project)
 	return &project, err
 }
 
-func (r *RemoteBackend) UpdateProject(id int64, input model.UpdateProject) (*model.Project, error) {
+func (r *RemoteBackend) UpdateProject(id string, input model.UpdateProject) (*model.Project, error) {
 	var project model.Project
-	err := r.patch(fmt.Sprintf("/projects/%d/", id), input, &project)
+	err := r.patch(fmt.Sprintf("/projects/%s/", id), input, &project)
 	return &project, err
 }
 
-func (r *RemoteBackend) DeleteProject(id int64) error {
-	return r.delete(fmt.Sprintf("/projects/%d/", id))
+func (r *RemoteBackend) DeleteProject(id string) error {
+	return r.delete(fmt.Sprintf("/projects/%s/", id))
 }
 
 // --- Items ---
@@ -187,15 +187,15 @@ func (r *RemoteBackend) ListAllItems() ([]model.ProjectItem, error) {
 	return items, err
 }
 
-func (r *RemoteBackend) ListItemsByProject(projectID int64) ([]model.ProjectItemInProject, error) {
+func (r *RemoteBackend) ListItemsByProject(projectID string) ([]model.ProjectItemInProject, error) {
 	var items []model.ProjectItemInProject
-	err := r.get(fmt.Sprintf("/projects/%d/items", projectID), &items)
+	err := r.get(fmt.Sprintf("/projects/%s/items", projectID), &items)
 	return items, err
 }
 
-func (r *RemoteBackend) GetItem(id int64) (*model.ProjectItemDetail, error) {
+func (r *RemoteBackend) GetItem(id string) (*model.ProjectItemDetail, error) {
 	var detail model.ProjectItemDetail
-	err := r.get(fmt.Sprintf("/project-items/%d/", id), &detail)
+	err := r.get(fmt.Sprintf("/project-items/%s/", id), &detail)
 	return &detail, err
 }
 
@@ -205,60 +205,88 @@ func (r *RemoteBackend) CreateItem(input model.CreateProjectItem) (*model.Projec
 	return &detail, err
 }
 
-func (r *RemoteBackend) UpdateItem(id int64, input model.UpdateProjectItem) (*model.ProjectItem, error) {
+func (r *RemoteBackend) UpdateItem(id string, input model.UpdateProjectItem) (*model.ProjectItem, error) {
 	var item model.ProjectItem
-	err := r.patch(fmt.Sprintf("/project-items/%d/", id), input, &item)
+	err := r.patch(fmt.Sprintf("/project-items/%s/", id), input, &item)
 	return &item, err
 }
 
-func (r *RemoteBackend) DeleteItem(id int64) error {
-	return r.delete(fmt.Sprintf("/project-items/%d/", id))
+func (r *RemoteBackend) DeleteItem(id string) error {
+	return r.delete(fmt.Sprintf("/project-items/%s/", id))
 }
 
-func (r *RemoteBackend) ReorderItem(itemID int64, projectID int64, newPosition int) error {
+func (r *RemoteBackend) ReorderItem(itemID string, projectID string, newPosition int) error {
 	body := struct {
-		ProjectID int64 `json:"project_id"`
-		Position  int   `json:"position"`
+		ProjectID string `json:"project_id"`
+		Position  int    `json:"position"`
 	}{ProjectID: projectID, Position: newPosition}
-	return r.patch(fmt.Sprintf("/project-items/%d/reorder", itemID), body, nil)
+	return r.patch(fmt.Sprintf("/project-items/%s/reorder", itemID), body, nil)
 }
 
 // --- Multi-project membership ---
 
-func (r *RemoteBackend) AddToProject(itemID int64, projectID int64) error {
+func (r *RemoteBackend) AddToProject(itemID string, projectID string) error {
 	body := struct {
-		ProjectID int64 `json:"project_id"`
+		ProjectID string `json:"project_id"`
 	}{ProjectID: projectID}
-	return r.post(fmt.Sprintf("/project-items/%d/projects", itemID), body, nil)
+	return r.post(fmt.Sprintf("/project-items/%s/projects", itemID), body, nil)
 }
 
-func (r *RemoteBackend) RemoveFromProject(itemID int64, projectID int64) error {
-	return r.delete(fmt.Sprintf("/project-items/%d/projects/%d", itemID, projectID))
+func (r *RemoteBackend) RemoveFromProject(itemID string, projectID string) error {
+	return r.delete(fmt.Sprintf("/project-items/%s/projects/%s", itemID, projectID))
 }
 
-func (r *RemoteBackend) GetItemProjects(itemID int64) ([]model.Project, error) {
+func (r *RemoteBackend) GetItemProjects(itemID string) ([]model.Project, error) {
 	var projects []model.Project
-	err := r.get(fmt.Sprintf("/project-items/%d/projects", itemID), &projects)
+	err := r.get(fmt.Sprintf("/project-items/%s/projects", itemID), &projects)
 	return projects, err
 }
 
 // --- Dependencies ---
 
-func (r *RemoteBackend) AddDependency(itemID int64, dependsOn int64) error {
+func (r *RemoteBackend) AddDependency(itemID string, dependsOn string) error {
 	body := struct {
-		DependsOnID int64 `json:"depends_on_id"`
+		DependsOnID string `json:"depends_on_id"`
 	}{DependsOnID: dependsOn}
-	return r.post(fmt.Sprintf("/project-items/%d/dependencies", itemID), body, nil)
+	return r.post(fmt.Sprintf("/project-items/%s/dependencies", itemID), body, nil)
 }
 
-func (r *RemoteBackend) RemoveDependency(itemID int64, dependsOn int64) error {
-	return r.delete(fmt.Sprintf("/project-items/%d/dependencies/%d", itemID, dependsOn))
+func (r *RemoteBackend) RemoveDependency(itemID string, dependsOn string) error {
+	return r.delete(fmt.Sprintf("/project-items/%s/dependencies/%s", itemID, dependsOn))
 }
 
-func (r *RemoteBackend) GetBlockers(itemID int64) ([]model.ProjectItem, error) {
+func (r *RemoteBackend) GetBlockers(itemID string) ([]model.ProjectItem, error) {
 	var blockers []model.ProjectItem
-	err := r.get(fmt.Sprintf("/project-items/%d/blockers", itemID), &blockers)
+	err := r.get(fmt.Sprintf("/project-items/%s/blockers", itemID), &blockers)
 	return blockers, err
+}
+
+// --- Tasks ---
+
+func (r *RemoteBackend) ListTasks(itemID string) ([]model.ProjectItemTask, error) {
+	var tasks []model.ProjectItemTask
+	err := r.get(fmt.Sprintf("/project-items/%s/tasks/", itemID), &tasks)
+	return tasks, err
+}
+
+func (r *RemoteBackend) CreateTask(itemID string, input model.CreateProjectItemTask) (*model.ProjectItemTask, error) {
+	var task model.ProjectItemTask
+	err := r.post(fmt.Sprintf("/project-items/%s/tasks/", itemID), input, &task)
+	return &task, err
+}
+
+func (r *RemoteBackend) UpdateTask(itemID, taskID string, input model.UpdateProjectItemTask) (*model.ProjectItemTask, error) {
+	var task model.ProjectItemTask
+	err := r.patch(fmt.Sprintf("/project-items/%s/tasks/%s/", itemID, taskID), input, &task)
+	return &task, err
+}
+
+func (r *RemoteBackend) DeleteTask(itemID, taskID string) error {
+	return r.delete(fmt.Sprintf("/project-items/%s/tasks/%s/", itemID, taskID))
+}
+
+func (r *RemoteBackend) CompleteTask(itemID, taskID string) error {
+	return r.post(fmt.Sprintf("/project-items/%s/tasks/%s/complete/", itemID, taskID), nil, nil)
 }
 
 // --- Search ---
@@ -277,9 +305,9 @@ func (r *RemoteBackend) ListBlocked() ([]model.ProjectItem, error) {
 	return items, err
 }
 
-func (r *RemoteBackend) ListArchived(projectID int64) ([]model.ProjectItemInProject, error) {
+func (r *RemoteBackend) ListArchived(projectID string) ([]model.ProjectItemInProject, error) {
 	var items []model.ProjectItemInProject
-	err := r.get(fmt.Sprintf("/projects/%d/items?archived=true", projectID), &items)
+	err := r.get(fmt.Sprintf("/projects/%s/items?archived=true", projectID), &items)
 	return items, err
 }
 

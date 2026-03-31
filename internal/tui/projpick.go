@@ -8,7 +8,7 @@ import (
 )
 
 type pickerProject struct {
-	id       int64
+	id       string
 	name     string
 	selected bool
 	original bool // initial state, for diffing in manage mode
@@ -18,11 +18,11 @@ type projectPicker struct {
 	projects  []pickerProject
 	cursor    int
 	intent    pickerIntent
-	itemID    int64
+	itemID    string
 	itemTitle string
 }
 
-func newPickerForCreate(allProjects []model.ProjectWithItemCount, currentProjectID int64, title string) projectPicker {
+func newPickerForCreate(allProjects []model.ProjectWithItemCount, currentProjectID string, title string) projectPicker {
 	pp := make([]pickerProject, len(allProjects))
 	for i, p := range allProjects {
 		pp[i] = pickerProject{
@@ -39,7 +39,7 @@ func newPickerForCreate(allProjects []model.ProjectWithItemCount, currentProject
 }
 
 func newPickerForManage(allProjects []model.ProjectWithItemCount, currentProjects []model.Project, item model.ProjectItemInProject) projectPicker {
-	memberSet := make(map[int64]bool)
+	memberSet := make(map[string]bool)
 	for _, p := range currentProjects {
 		memberSet[p.ID] = true
 	}
@@ -94,8 +94,8 @@ func (p *projectPicker) selectedCount() int {
 	return n
 }
 
-func (p *projectPicker) selectedIDs() []int64 {
-	var ids []int64
+func (p *projectPicker) selectedIDs() []string {
+	var ids []string
 	for _, proj := range p.projects {
 		if proj.selected {
 			ids = append(ids, proj.id)
@@ -104,8 +104,8 @@ func (p *projectPicker) selectedIDs() []int64 {
 	return ids
 }
 
-func (p *projectPicker) toAdd() []int64 {
-	var ids []int64
+func (p *projectPicker) toAdd() []string {
+	var ids []string
 	for _, proj := range p.projects {
 		if proj.selected && !proj.original {
 			ids = append(ids, proj.id)
@@ -114,8 +114,8 @@ func (p *projectPicker) toAdd() []int64 {
 	return ids
 }
 
-func (p *projectPicker) toRemove() []int64 {
-	var ids []int64
+func (p *projectPicker) toRemove() []string {
+	var ids []string
 	for _, proj := range p.projects {
 		if !proj.selected && proj.original {
 			ids = append(ids, proj.id)
@@ -129,7 +129,7 @@ func (p *projectPicker) view(width int) string {
 	if p.intent == pickerCreate {
 		header = fmt.Sprintf("Projects for new item: %s", p.itemTitle)
 	} else {
-		header = fmt.Sprintf("Projects for: %s (#%d)", p.itemTitle, p.itemID)
+		header = fmt.Sprintf("Projects for: %s", p.itemTitle)
 	}
 
 	var lines []string

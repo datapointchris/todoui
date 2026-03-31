@@ -7,36 +7,43 @@ import "github.com/datapointchris/todoui/internal/model"
 type Backend interface {
 	// Projects
 	ListProjects() ([]model.ProjectWithItemCount, error)
-	GetProject(id int64) (*model.ProjectWithItemCount, error)
-	CreateProject(name string) (*model.Project, error)
-	UpdateProject(id int64, input model.UpdateProject) (*model.Project, error)
-	DeleteProject(id int64) error
+	GetProject(id string) (*model.ProjectWithItemCount, error)
+	CreateProject(input model.CreateProject) (*model.Project, error)
+	UpdateProject(id string, input model.UpdateProject) (*model.Project, error)
+	DeleteProject(id string) error
 
 	// Items
 	ListAllItems() ([]model.ProjectItem, error)
-	ListItemsByProject(projectID int64) ([]model.ProjectItemInProject, error)
-	GetItem(id int64) (*model.ProjectItemDetail, error)
+	ListItemsByProject(projectID string) ([]model.ProjectItemInProject, error)
+	GetItem(id string) (*model.ProjectItemDetail, error)
 	CreateItem(input model.CreateProjectItem) (*model.ProjectItemDetail, error)
-	UpdateItem(id int64, input model.UpdateProjectItem) (*model.ProjectItem, error)
-	DeleteItem(id int64) error
-	ReorderItem(itemID, projectID int64, newPosition int) error
+	UpdateItem(id string, input model.UpdateProjectItem) (*model.ProjectItem, error)
+	DeleteItem(id string) error
+	ReorderItem(itemID, projectID string, newPosition int) error
 
 	// Multi-project membership
-	AddToProject(itemID, projectID int64) error
-	RemoveFromProject(itemID, projectID int64) error
-	GetItemProjects(itemID int64) ([]model.Project, error)
+	AddToProject(itemID, projectID string) error
+	RemoveFromProject(itemID, projectID string) error
+	GetItemProjects(itemID string) ([]model.Project, error)
 
 	// Dependencies
-	AddDependency(itemID, dependsOn int64) error
-	RemoveDependency(itemID, dependsOn int64) error
-	GetBlockers(itemID int64) ([]model.ProjectItem, error)
+	AddDependency(itemID, dependsOn string) error
+	RemoveDependency(itemID, dependsOn string) error
+	GetBlockers(itemID string) ([]model.ProjectItem, error)
+
+	// Tasks
+	ListTasks(itemID string) ([]model.ProjectItemTask, error)
+	CreateTask(itemID string, input model.CreateProjectItemTask) (*model.ProjectItemTask, error)
+	UpdateTask(itemID, taskID string, input model.UpdateProjectItemTask) (*model.ProjectItemTask, error)
+	DeleteTask(itemID, taskID string) error
+	CompleteTask(itemID, taskID string) error
 
 	// Search
 	Search(query string) ([]model.ProjectItem, error)
 
 	// Filters
 	ListBlocked() ([]model.ProjectItem, error)
-	ListArchived(projectID int64) ([]model.ProjectItemInProject, error)
+	ListArchived(projectID string) ([]model.ProjectItemInProject, error)
 
 	// Undo
 	Undo() (string, error)
