@@ -31,3 +31,4 @@ Thumbs.db
 # Node (web frontend)
 web/node_modules/
 web/dist/
+.planning
