@@ -13,6 +13,7 @@ import (
 	"github.com/datapointchris/todoui/internal/cli"
 	"github.com/datapointchris/todoui/internal/config"
 	"github.com/datapointchris/todoui/internal/db"
+	"github.com/datapointchris/todoui/internal/sync"
 	"github.com/datapointchris/todoui/internal/tui"
 )
 
@@ -26,6 +27,7 @@ func main() {
 func rootCmd() *cobra.Command {
 	var b backend.Backend
 	var database *sql.DB
+	var syncEngine *sync.Engine
 	var mode string
 
 	root := &cobra.Command{
@@ -50,17 +52,28 @@ func rootCmd() *cobra.Command {
 					return fmt.Errorf("opening database: %w", err)
 				}
 				database = d
-				b = backend.NewLocalBackend(d)
+				local := backend.NewLocalBackend(d)
+
+				if cfg.Sync.Enabled {
+					syncEngine = sync.New(d, cfg.Sync.APIURL)
+					syncEngine.Start()
+					b = sync.NewSyncBackend(local, syncEngine)
+				} else {
+					b = local
+				}
 			}
 			return nil
 		},
 		RunE: func(_ *cobra.Command, _ []string) error {
-			app := tui.NewApp(b, mode)
+			app := tui.NewApp(b, mode, syncEngine)
 			p := tea.NewProgram(app, tea.WithAltScreen())
 			_, err := p.Run()
 			return err
 		},
 		PersistentPostRunE: func(_ *cobra.Command, _ []string) error {
+			if syncEngine != nil {
+				syncEngine.Stop()
+			}
 			if database != nil {
 				return database.Close()
 			}
@@ -76,7 +89,7 @@ func rootCmd() *cobra.Command {
 		Short: "Launch the TUI (default when no command given)",
 		Args:  cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			app := tui.NewApp(b, mode)
+			app := tui.NewApp(b, mode, syncEngine)
 			p := tea.NewProgram(app, tea.WithAltScreen())
 			_, err := p.Run()
 			return err

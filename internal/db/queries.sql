@@ -148,6 +148,100 @@ RETURNING *;
 -- name: DeleteTask :exec
 DELETE FROM project_item_tasks WHERE id = ?;
 
+-- Sync: pending operations
+
+-- name: InsertPendingSync :exec
+INSERT INTO pending_sync (operation, entity_type, entity_id, payload)
+VALUES (?, ?, ?, ?);
+
+-- name: ListPendingSync :many
+SELECT * FROM pending_sync ORDER BY id ASC;
+
+-- name: GetOldestPendingSync :one
+SELECT * FROM pending_sync ORDER BY id ASC LIMIT 1;
+
+-- name: DeletePendingSync :exec
+DELETE FROM pending_sync WHERE id = ?;
+
+-- name: UpdatePendingSyncError :exec
+UPDATE pending_sync SET attempts = attempts + 1, last_error = ? WHERE id = ?;
+
+-- name: CountPendingSync :one
+SELECT COUNT(*) FROM pending_sync;
+
+-- name: DeleteAllPendingSync :exec
+DELETE FROM pending_sync;
+
+-- Sync: state tracking
+
+-- name: GetSyncState :one
+SELECT * FROM sync_state WHERE entity_type = ?;
+
+-- name: UpsertSyncState :exec
+INSERT INTO sync_state (entity_type, last_pull_at, last_push_at)
+VALUES (?, ?, ?)
+ON CONFLICT(entity_type) DO UPDATE SET
+    last_pull_at = CASE WHEN excluded.last_pull_at > sync_state.last_pull_at THEN excluded.last_pull_at ELSE sync_state.last_pull_at END,
+    last_push_at = CASE WHEN excluded.last_push_at > sync_state.last_push_at THEN excluded.last_push_at ELSE sync_state.last_push_at END;
+
+-- Sync: pull reconciliation (upserts)
+
+-- name: UpsertProject :exec
+INSERT INTO projects (id, name, description, position, created_at)
+VALUES (?, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+    name = excluded.name,
+    description = excluded.description,
+    position = excluded.position;
+
+-- name: UpsertItem :exec
+INSERT INTO project_items (id, title, notes, completed, archived, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+    title = excluded.title,
+    notes = excluded.notes,
+    completed = excluded.completed,
+    archived = excluded.archived,
+    updated_at = excluded.updated_at;
+
+-- name: UpsertTask :exec
+INSERT INTO project_item_tasks (id, item_id, title, completed, position, created_at)
+VALUES (?, ?, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+    title = excluded.title,
+    completed = excluded.completed,
+    position = excluded.position;
+
+-- name: UpsertMembership :exec
+INSERT INTO project_item_memberships (item_id, project_id, position)
+VALUES (?, ?, ?)
+ON CONFLICT(item_id, project_id) DO UPDATE SET
+    position = excluded.position;
+
+-- name: UpsertDependency :exec
+INSERT OR IGNORE INTO project_item_dependencies (item_id, depends_on_id)
+VALUES (?, ?);
+
+-- name: DeleteAllMemberships :exec
+DELETE FROM project_item_memberships;
+
+-- name: DeleteAllDependencies :exec
+DELETE FROM project_item_dependencies;
+
+-- name: ListAllProjectsRaw :many
+SELECT * FROM projects ORDER BY position, name;
+
+-- name: ListAllItemsRaw :many
+SELECT * FROM project_items ORDER BY created_at DESC;
+
+-- name: ListAllMemberships :many
+SELECT * FROM project_item_memberships;
+
+-- name: ListAllTasks :many
+SELECT * FROM project_item_tasks ORDER BY item_id, position;
+
+-- Undo
+
 -- name: InsertUndoLog :exec
 INSERT INTO undo_log (action, entity_type, entity_id, previous_state)
 VALUES (?, ?, ?, ?);

@@ -8,6 +8,17 @@ import (
 	"database/sql"
 )
 
+type PendingSync struct {
+	ID         int64
+	Operation  string
+	EntityType string
+	EntityID   string
+	Payload    string
+	CreatedAt  string
+	Attempts   int64
+	LastError  sql.NullString
+}
+
 type Project struct {
 	ID          string
 	Name        string
@@ -44,6 +55,12 @@ type ProjectItemTask struct {
 	Completed int64
 	Position  int64
 	CreatedAt string
+}
+
+type SyncState struct {
+	EntityType string
+	LastPullAt string
+	LastPushAt string
 }
 
 type UndoLog struct {

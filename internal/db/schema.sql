@@ -41,6 +41,23 @@ CREATE TABLE project_item_tasks (
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
+CREATE TABLE pending_sync (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    operation TEXT NOT NULL,
+    entity_type TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    attempts INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT
+);
+
+CREATE TABLE sync_state (
+    entity_type TEXT PRIMARY KEY,
+    last_pull_at TEXT NOT NULL DEFAULT '1970-01-01T00:00:00.000Z',
+    last_push_at TEXT NOT NULL DEFAULT '1970-01-01T00:00:00.000Z'
+);
+
 CREATE TABLE undo_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     action TEXT NOT NULL,

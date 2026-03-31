@@ -11,6 +11,14 @@ mode = "local"
 # Env: TODOUI_API_URL
 api_url = "https://homelab.local:8080"
 
+[sync]
+# Enable background sync with ichrisbirch API
+# Env: TODOUI_SYNC
+enabled = false
+# API URL for sync (defaults to remote.api_url if not set)
+# Env: TODOUI_SYNC_URL
+# api_url = "https://homelab.local:8080"
+
 [local]
 # Path to SQLite database
 # Env: TODOUI_DB

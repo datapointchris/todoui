@@ -40,6 +40,17 @@ func (q *Queries) AddItemToProject(ctx context.Context, arg AddItemToProjectPara
 	return err
 }
 
+const countPendingSync = `-- name: CountPendingSync :one
+SELECT COUNT(*) FROM pending_sync
+`
+
+func (q *Queries) CountPendingSync(ctx context.Context) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countPendingSync)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countUndoLogs = `-- name: CountUndoLogs :one
 SELECT COUNT(*) FROM undo_log
 `
@@ -135,12 +146,48 @@ func (q *Queries) CreateTask(ctx context.Context, arg CreateTaskParams) (Project
 	return i, err
 }
 
+const deleteAllDependencies = `-- name: DeleteAllDependencies :exec
+DELETE FROM project_item_dependencies
+`
+
+func (q *Queries) DeleteAllDependencies(ctx context.Context) error {
+	_, err := q.db.ExecContext(ctx, deleteAllDependencies)
+	return err
+}
+
+const deleteAllMemberships = `-- name: DeleteAllMemberships :exec
+DELETE FROM project_item_memberships
+`
+
+func (q *Queries) DeleteAllMemberships(ctx context.Context) error {
+	_, err := q.db.ExecContext(ctx, deleteAllMemberships)
+	return err
+}
+
+const deleteAllPendingSync = `-- name: DeleteAllPendingSync :exec
+DELETE FROM pending_sync
+`
+
+func (q *Queries) DeleteAllPendingSync(ctx context.Context) error {
+	_, err := q.db.ExecContext(ctx, deleteAllPendingSync)
+	return err
+}
+
 const deleteItem = `-- name: DeleteItem :exec
 DELETE FROM project_items WHERE id = ?
 `
 
 func (q *Queries) DeleteItem(ctx context.Context, id string) error {
 	_, err := q.db.ExecContext(ctx, deleteItem, id)
+	return err
+}
+
+const deletePendingSync = `-- name: DeletePendingSync :exec
+DELETE FROM pending_sync WHERE id = ?
+`
+
+func (q *Queries) DeletePendingSync(ctx context.Context, id int64) error {
+	_, err := q.db.ExecContext(ctx, deletePendingSync, id)
 	return err
 }
 
@@ -337,6 +384,26 @@ func (q *Queries) GetLatestUndoLog(ctx context.Context) (UndoLog, error) {
 	return i, err
 }
 
+const getOldestPendingSync = `-- name: GetOldestPendingSync :one
+SELECT id, operation, entity_type, entity_id, payload, created_at, attempts, last_error FROM pending_sync ORDER BY id ASC LIMIT 1
+`
+
+func (q *Queries) GetOldestPendingSync(ctx context.Context) (PendingSync, error) {
+	row := q.db.QueryRowContext(ctx, getOldestPendingSync)
+	var i PendingSync
+	err := row.Scan(
+		&i.ID,
+		&i.Operation,
+		&i.EntityType,
+		&i.EntityID,
+		&i.Payload,
+		&i.CreatedAt,
+		&i.Attempts,
+		&i.LastError,
+	)
+	return i, err
+}
+
 const getProject = `-- name: GetProject :one
 SELECT id, name, description, position, created_at FROM projects WHERE id = ?
 `
@@ -386,6 +453,19 @@ func (q *Queries) GetProjectWithItemCount(ctx context.Context, id string) (GetPr
 	return i, err
 }
 
+const getSyncState = `-- name: GetSyncState :one
+
+SELECT entity_type, last_pull_at, last_push_at FROM sync_state WHERE entity_type = ?
+`
+
+// Sync: state tracking
+func (q *Queries) GetSyncState(ctx context.Context, entityType string) (SyncState, error) {
+	row := q.db.QueryRowContext(ctx, getSyncState, entityType)
+	var i SyncState
+	err := row.Scan(&i.EntityType, &i.LastPullAt, &i.LastPushAt)
+	return i, err
+}
+
 const getTask = `-- name: GetTask :one
 SELECT id, item_id, title, completed, position, created_at FROM project_item_tasks WHERE id = ?
 `
@@ -404,7 +484,32 @@ func (q *Queries) GetTask(ctx context.Context, id string) (ProjectItemTask, erro
 	return i, err
 }
 
+const insertPendingSync = `-- name: InsertPendingSync :exec
+
+INSERT INTO pending_sync (operation, entity_type, entity_id, payload)
+VALUES (?, ?, ?, ?)
+`
+
+type InsertPendingSyncParams struct {
+	Operation  string
+	EntityType string
+	EntityID   string
+	Payload    string
+}
+
+// Sync: pending operations
+func (q *Queries) InsertPendingSync(ctx context.Context, arg InsertPendingSyncParams) error {
+	_, err := q.db.ExecContext(ctx, insertPendingSync,
+		arg.Operation,
+		arg.EntityType,
+		arg.EntityID,
+		arg.Payload,
+	)
+	return err
+}
+
 const insertUndoLog = `-- name: InsertUndoLog :exec
+
 INSERT INTO undo_log (action, entity_type, entity_id, previous_state)
 VALUES (?, ?, ?, ?)
 `
@@ -416,6 +521,7 @@ type InsertUndoLogParams struct {
 	PreviousState sql.NullString
 }
 
+// Undo
 func (q *Queries) InsertUndoLog(ctx context.Context, arg InsertUndoLogParams) error {
 	_, err := q.db.ExecContext(ctx, insertUndoLog,
 		arg.Action,
@@ -449,6 +555,135 @@ func (q *Queries) ListAllItems(ctx context.Context) ([]ProjectItem, error) {
 			&i.Archived,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAllItemsRaw = `-- name: ListAllItemsRaw :many
+SELECT id, title, notes, completed, archived, created_at, updated_at FROM project_items ORDER BY created_at DESC
+`
+
+func (q *Queries) ListAllItemsRaw(ctx context.Context) ([]ProjectItem, error) {
+	rows, err := q.db.QueryContext(ctx, listAllItemsRaw)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ProjectItem
+	for rows.Next() {
+		var i ProjectItem
+		if err := rows.Scan(
+			&i.ID,
+			&i.Title,
+			&i.Notes,
+			&i.Completed,
+			&i.Archived,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAllMemberships = `-- name: ListAllMemberships :many
+SELECT item_id, project_id, position FROM project_item_memberships
+`
+
+func (q *Queries) ListAllMemberships(ctx context.Context) ([]ProjectItemMembership, error) {
+	rows, err := q.db.QueryContext(ctx, listAllMemberships)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ProjectItemMembership
+	for rows.Next() {
+		var i ProjectItemMembership
+		if err := rows.Scan(&i.ItemID, &i.ProjectID, &i.Position); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAllProjectsRaw = `-- name: ListAllProjectsRaw :many
+SELECT id, name, description, position, created_at FROM projects ORDER BY position, name
+`
+
+func (q *Queries) ListAllProjectsRaw(ctx context.Context) ([]Project, error) {
+	rows, err := q.db.QueryContext(ctx, listAllProjectsRaw)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Project
+	for rows.Next() {
+		var i Project
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Description,
+			&i.Position,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAllTasks = `-- name: ListAllTasks :many
+SELECT id, item_id, title, completed, position, created_at FROM project_item_tasks ORDER BY item_id, position
+`
+
+func (q *Queries) ListAllTasks(ctx context.Context) ([]ProjectItemTask, error) {
+	rows, err := q.db.QueryContext(ctx, listAllTasks)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ProjectItemTask
+	for rows.Next() {
+		var i ProjectItemTask
+		if err := rows.Scan(
+			&i.ID,
+			&i.ItemID,
+			&i.Title,
+			&i.Completed,
+			&i.Position,
+			&i.CreatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -595,6 +830,42 @@ func (q *Queries) ListItemsByProject(ctx context.Context, projectID string) ([]L
 			&i.UpdatedAt,
 			&i.MembershipPosition,
 			&i.ProjectCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPendingSync = `-- name: ListPendingSync :many
+SELECT id, operation, entity_type, entity_id, payload, created_at, attempts, last_error FROM pending_sync ORDER BY id ASC
+`
+
+func (q *Queries) ListPendingSync(ctx context.Context) ([]PendingSync, error) {
+	rows, err := q.db.QueryContext(ctx, listPendingSync)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []PendingSync
+	for rows.Next() {
+		var i PendingSync
+		if err := rows.Scan(
+			&i.ID,
+			&i.Operation,
+			&i.EntityType,
+			&i.EntityID,
+			&i.Payload,
+			&i.CreatedAt,
+			&i.Attempts,
+			&i.LastError,
 		); err != nil {
 			return nil, err
 		}
@@ -819,6 +1090,20 @@ func (q *Queries) UpdateItemPosition(ctx context.Context, arg UpdateItemPosition
 	return err
 }
 
+const updatePendingSyncError = `-- name: UpdatePendingSyncError :exec
+UPDATE pending_sync SET attempts = attempts + 1, last_error = ? WHERE id = ?
+`
+
+type UpdatePendingSyncErrorParams struct {
+	LastError sql.NullString
+	ID        int64
+}
+
+func (q *Queries) UpdatePendingSyncError(ctx context.Context, arg UpdatePendingSyncErrorParams) error {
+	_, err := q.db.ExecContext(ctx, updatePendingSyncError, arg.LastError, arg.ID)
+	return err
+}
+
 const updateProject = `-- name: UpdateProject :one
 UPDATE projects
 SET name = ?,
@@ -886,4 +1171,150 @@ func (q *Queries) UpdateTask(ctx context.Context, arg UpdateTaskParams) (Project
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const upsertDependency = `-- name: UpsertDependency :exec
+INSERT OR IGNORE INTO project_item_dependencies (item_id, depends_on_id)
+VALUES (?, ?)
+`
+
+type UpsertDependencyParams struct {
+	ItemID      string
+	DependsOnID string
+}
+
+func (q *Queries) UpsertDependency(ctx context.Context, arg UpsertDependencyParams) error {
+	_, err := q.db.ExecContext(ctx, upsertDependency, arg.ItemID, arg.DependsOnID)
+	return err
+}
+
+const upsertItem = `-- name: UpsertItem :exec
+INSERT INTO project_items (id, title, notes, completed, archived, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+    title = excluded.title,
+    notes = excluded.notes,
+    completed = excluded.completed,
+    archived = excluded.archived,
+    updated_at = excluded.updated_at
+`
+
+type UpsertItemParams struct {
+	ID        string
+	Title     string
+	Notes     sql.NullString
+	Completed int64
+	Archived  int64
+	CreatedAt string
+	UpdatedAt string
+}
+
+func (q *Queries) UpsertItem(ctx context.Context, arg UpsertItemParams) error {
+	_, err := q.db.ExecContext(ctx, upsertItem,
+		arg.ID,
+		arg.Title,
+		arg.Notes,
+		arg.Completed,
+		arg.Archived,
+		arg.CreatedAt,
+		arg.UpdatedAt,
+	)
+	return err
+}
+
+const upsertMembership = `-- name: UpsertMembership :exec
+INSERT INTO project_item_memberships (item_id, project_id, position)
+VALUES (?, ?, ?)
+ON CONFLICT(item_id, project_id) DO UPDATE SET
+    position = excluded.position
+`
+
+type UpsertMembershipParams struct {
+	ItemID    string
+	ProjectID string
+	Position  int64
+}
+
+func (q *Queries) UpsertMembership(ctx context.Context, arg UpsertMembershipParams) error {
+	_, err := q.db.ExecContext(ctx, upsertMembership, arg.ItemID, arg.ProjectID, arg.Position)
+	return err
+}
+
+const upsertProject = `-- name: UpsertProject :exec
+
+INSERT INTO projects (id, name, description, position, created_at)
+VALUES (?, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+    name = excluded.name,
+    description = excluded.description,
+    position = excluded.position
+`
+
+type UpsertProjectParams struct {
+	ID          string
+	Name        string
+	Description sql.NullString
+	Position    int64
+	CreatedAt   string
+}
+
+// Sync: pull reconciliation (upserts)
+func (q *Queries) UpsertProject(ctx context.Context, arg UpsertProjectParams) error {
+	_, err := q.db.ExecContext(ctx, upsertProject,
+		arg.ID,
+		arg.Name,
+		arg.Description,
+		arg.Position,
+		arg.CreatedAt,
+	)
+	return err
+}
+
+const upsertSyncState = `-- name: UpsertSyncState :exec
+INSERT INTO sync_state (entity_type, last_pull_at, last_push_at)
+VALUES (?, ?, ?)
+ON CONFLICT(entity_type) DO UPDATE SET
+    last_pull_at = CASE WHEN excluded.last_pull_at > sync_state.last_pull_at THEN excluded.last_pull_at ELSE sync_state.last_pull_at END,
+    last_push_at = CASE WHEN excluded.last_push_at > sync_state.last_push_at THEN excluded.last_push_at ELSE sync_state.last_push_at END
+`
+
+type UpsertSyncStateParams struct {
+	EntityType string
+	LastPullAt string
+	LastPushAt string
+}
+
+func (q *Queries) UpsertSyncState(ctx context.Context, arg UpsertSyncStateParams) error {
+	_, err := q.db.ExecContext(ctx, upsertSyncState, arg.EntityType, arg.LastPullAt, arg.LastPushAt)
+	return err
+}
+
+const upsertTask = `-- name: UpsertTask :exec
+INSERT INTO project_item_tasks (id, item_id, title, completed, position, created_at)
+VALUES (?, ?, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+    title = excluded.title,
+    completed = excluded.completed,
+    position = excluded.position
+`
+
+type UpsertTaskParams struct {
+	ID        string
+	ItemID    string
+	Title     string
+	Completed int64
+	Position  int64
+	CreatedAt string
+}
+
+func (q *Queries) UpsertTask(ctx context.Context, arg UpsertTaskParams) error {
+	_, err := q.db.ExecContext(ctx, upsertTask,
+		arg.ID,
+		arg.ItemID,
+		arg.Title,
+		arg.Completed,
+		arg.Position,
+		arg.CreatedAt,
+	)
+	return err
 }

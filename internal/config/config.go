@@ -13,6 +13,13 @@ type Config struct {
 	Mode   string       `mapstructure:"mode"`
 	Remote RemoteConfig `mapstructure:"remote"`
 	Local  LocalConfig  `mapstructure:"local"`
+	Sync   SyncConfig   `mapstructure:"sync"`
+}
+
+// SyncConfig holds settings for background sync with the remote API.
+type SyncConfig struct {
+	Enabled bool   `mapstructure:"enabled"`
+	APIURL  string `mapstructure:"api_url"`
 }
 
 // RemoteConfig holds settings for the remote API mode.
@@ -49,11 +56,13 @@ func Load() (*Config, error) {
 		}
 	}
 
-	// Env var overrides: TODOUI_MODE, TODOUI_API_URL, TODOUI_DB
+	// Env var overrides
 	v.SetEnvPrefix("TODOUI")
 	_ = v.BindEnv("mode", "TODOUI_MODE")
 	_ = v.BindEnv("remote.api_url", "TODOUI_API_URL")
 	_ = v.BindEnv("local.db_path", "TODOUI_DB")
+	_ = v.BindEnv("sync.enabled", "TODOUI_SYNC")
+	_ = v.BindEnv("sync.api_url", "TODOUI_SYNC_URL")
 
 	var cfg Config
 	if err := v.Unmarshal(&cfg); err != nil {
@@ -62,6 +71,14 @@ func Load() (*Config, error) {
 
 	if cfg.Mode == "remote" && cfg.Remote.APIURL == "" {
 		return nil, fmt.Errorf("remote.api_url is required when mode=remote (set in config or TODOUI_API_URL)")
+	}
+
+	// Sync falls back to remote.api_url if sync.api_url is not set
+	if cfg.Sync.Enabled && cfg.Sync.APIURL == "" {
+		cfg.Sync.APIURL = cfg.Remote.APIURL
+	}
+	if cfg.Sync.Enabled && cfg.Sync.APIURL == "" {
+		return nil, fmt.Errorf("sync.api_url is required when sync is enabled (set in config, TODOUI_SYNC_URL, or remote.api_url)")
 	}
 
 	return &cfg, nil

@@ -1,8 +1,10 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -11,6 +13,7 @@ import (
 
 	"github.com/datapointchris/todoui/internal/backend"
 	"github.com/datapointchris/todoui/internal/model"
+	"github.com/datapointchris/todoui/internal/sync"
 )
 
 // App is the top-level Bubble Tea model for the TUI.
@@ -67,10 +70,15 @@ type App struct {
 
 	errorMsg string // transient error shown in status bar
 	loading  bool   // true while an async operation is in-flight
+
+	// Sync
+	syncEngine *sync.Engine
+	syncStatus sync.SyncStatus
 }
 
 // NewApp creates a new TUI application backed by the given Backend.
-func NewApp(b backend.Backend, mode string) *App {
+// syncEngine may be nil when sync is disabled.
+func NewApp(b backend.Backend, mode string, syncEngine *sync.Engine) *App {
 	ti := textinput.New()
 	ti.CharLimit = 200
 
@@ -85,6 +93,7 @@ func NewApp(b backend.Backend, mode string) *App {
 		itemBlockers: make(map[string][]model.ProjectItem),
 		titleInput:   ti,
 		notesInput:   ta,
+		syncEngine:   syncEngine,
 	}
 }
 
@@ -128,12 +137,36 @@ type depBlockersForUnlinkMsg []model.ProjectItem
 
 type errMsg struct{ error }
 
+// Sync messages
+type (
+	syncStatusMsg   sync.SyncStatus
+	syncPullDoneMsg struct{}
+	syncPullErrMsg  struct{ error }
+)
+
 // shortID returns the first 8 characters of a UUID for display.
 func shortID(id string) string {
 	if len(id) >= 8 {
 		return id[:8]
 	}
 	return id
+}
+
+// --- Sync commands ---
+
+func syncPullCmd(e *sync.Engine) tea.Cmd {
+	return func() tea.Msg {
+		if err := e.Pull(context.Background()); err != nil {
+			return syncPullErrMsg{err}
+		}
+		return syncPullDoneMsg{}
+	}
+}
+
+func syncStatusTickCmd(e *sync.Engine) tea.Cmd {
+	return tea.Tick(2*time.Second, func(_ time.Time) tea.Msg {
+		return syncStatusMsg(e.Status())
+	})
 }
 
 // --- Commands ---
@@ -350,6 +383,13 @@ func removeDependencyCmd(b backend.Backend, itemID, dependsOn string) tea.Cmd {
 // --- Bubble Tea interface ---
 
 func (m *App) Init() tea.Cmd {
+	if m.syncEngine != nil {
+		return tea.Batch(
+			fetchProjectsCmd(m.backend),
+			syncPullCmd(m.syncEngine),
+			syncStatusTickCmd(m.syncEngine),
+		)
+	}
 	return fetchProjectsCmd(m.backend)
 }
 
@@ -502,6 +542,21 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case errMsg:
 		m.loading = false
 		m.errorMsg = msg.Error()
+		return m, nil
+
+	case syncPullDoneMsg:
+		m.statusMsg = "Synced with server"
+		return m, fetchProjectsCmd(m.backend)
+
+	case syncPullErrMsg:
+		m.errorMsg = fmt.Sprintf("Sync: %v", msg.error)
+		return m, nil
+
+	case syncStatusMsg:
+		m.syncStatus = sync.SyncStatus(msg)
+		if m.syncEngine != nil {
+			return m, syncStatusTickCmd(m.syncEngine)
+		}
 		return m, nil
 	}
 
@@ -1772,9 +1827,22 @@ func (m *App) renderStatusBar() string {
 	}
 
 	var modeStr string
-	if m.mode == "remote" {
+	switch {
+	case m.syncEngine != nil:
+		s := m.syncStatus
+		switch {
+		case s.Syncing:
+			modeStr = syncingStyle.Render("SYNCING...")
+		case s.LastError != "":
+			modeStr = syncErrorStyle.Render("SYNC ERR")
+		case s.PendingCount > 0:
+			modeStr = syncPendingStyle.Render(fmt.Sprintf("PENDING (%d)", s.PendingCount))
+		default:
+			modeStr = syncOKStyle.Render("SYNCED")
+		}
+	case m.mode == "remote":
 		modeStr = modeRemoteStyle.Render("REMOTE")
-	} else {
+	default:
 		modeStr = modeLocalStyle.Render("LOCAL")
 	}
 

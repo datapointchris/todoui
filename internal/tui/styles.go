@@ -55,6 +55,18 @@ var (
 	modeRemoteStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("69")).
 			Bold(true)
+	syncOKStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("42")).
+			Bold(true)
+	syncingStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("220")).
+			Bold(true)
+	syncPendingStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("220")).
+				Bold(true)
+	syncErrorStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("196")).
+			Bold(true)
 
 	// Titles
 	paneTitleStyle = lipgloss.NewStyle().
