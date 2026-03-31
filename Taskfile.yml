@@ -1,0 +1,48 @@
+version: "3"
+
+vars:
+  BINARY_NAME: todoui
+  BUILD_DIR: .
+  INSTALL_DIR: "{{.HOME}}/go/bin"
+
+tasks:
+  default:
+    desc: Build the todoui binary (default)
+    cmds:
+      - task: build
+
+  build:
+    desc: Build the todoui binary
+    cmds:
+      - echo "Building {{.BINARY_NAME}}..."
+      - go build -o {{.BUILD_DIR}}/{{.BINARY_NAME}} ./cmd/{{.BINARY_NAME}}
+      - echo "Build complete{{":"}} {{.BUILD_DIR}}/{{.BINARY_NAME}}"
+    sources:
+      - "**/*.go"
+      - go.mod
+      - go.sum
+    generates:
+      - "{{.BINARY_NAME}}"
+
+  test:
+    desc: Run all tests
+    cmds:
+      - echo "Running tests..."
+      - go test -v ./...
+
+  install:
+    desc: Build and install to ~/go/bin
+    deps:
+      - build
+    cmds:
+      - echo "Installing {{.BINARY_NAME}} to {{.INSTALL_DIR}}..."
+      - mkdir -p {{.INSTALL_DIR}}
+      - cp {{.BUILD_DIR}}/{{.BINARY_NAME}} {{.INSTALL_DIR}}/{{.BINARY_NAME}}
+      - chmod +x {{.INSTALL_DIR}}/{{.BINARY_NAME}}
+      - echo "Installed{{":"}} {{.INSTALL_DIR}}/{{.BINARY_NAME}}"
+
+  clean:
+    desc: Remove build artifacts
+    cmds:
+      - echo "Cleaning..."
+      - rm -f {{.BUILD_DIR}}/{{.BINARY_NAME}}

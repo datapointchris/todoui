@@ -6,6 +6,9 @@
 # Go
 vendor/
 
+# Task
+.task/
+
 # SQLite
 *.db
 *.db-journal
