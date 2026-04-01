@@ -26,7 +26,6 @@ vendor/
 Thumbs.db
 
 # Planning (local only)
-.planning/
 
 # Node (web frontend)
 web/node_modules/
