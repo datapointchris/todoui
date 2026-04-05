@@ -50,6 +50,9 @@ func New(db *sql.DB, apiURL, apiKey string) *Engine {
 	}
 }
 
+// APIURL returns the remote API base URL this engine syncs with.
+func (e *Engine) APIURL() string { return e.apiURL }
+
 // authTransport injects an Authorization header into every outgoing request.
 type authTransport struct {
 	key  string

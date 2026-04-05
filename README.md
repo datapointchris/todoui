@@ -53,12 +53,13 @@ todoui projects <id> --remove work    # remove from project
 | --- | ------ |
 | `j/k` | Navigate up/down |
 | `h/l` | Switch panes |
+| `Enter` | Item detail view |
+| `space` | Toggle done/incomplete |
 | `a` | Add item/project |
 | `A` | Add item to multiple projects |
 | `e` | Edit title |
 | `n` | Edit notes |
-| `d` | Mark done |
-| `D` | Delete |
+| `t` | Tasks (focus task list or add first task) |
 | `x` | Archive |
 | `m` | Reorder (move mode) |
 | `b/B` | Link/unlink dependency |

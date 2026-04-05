@@ -28,13 +28,15 @@ func rootCmd() *cobra.Command {
 	var b backend.Backend
 	var database *sql.DB
 	var syncEngine *sync.Engine
+	var cfg *config.Config
 
 	root := &cobra.Command{
 		Use:     "todoui",
 		Short:   "Personal project organization",
 		Version: cli.Version(),
 		PersistentPreRunE: func(_ *cobra.Command, _ []string) error {
-			cfg, err := config.Load()
+			var err error
+			cfg, err = config.Load()
 			if err != nil {
 				return err
 			}
@@ -59,7 +61,7 @@ func rootCmd() *cobra.Command {
 			return nil
 		},
 		RunE: func(_ *cobra.Command, _ []string) error {
-			app := tui.NewApp(b, syncEngine)
+			app := tui.NewApp(b, syncEngine, cfg.Local.DBPath)
 			p := tea.NewProgram(app, tea.WithAltScreen())
 			_, err := p.Run()
 			return err
@@ -83,7 +85,7 @@ func rootCmd() *cobra.Command {
 		Short: "Launch the TUI (default when no command given)",
 		Args:  cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			app := tui.NewApp(b, syncEngine)
+			app := tui.NewApp(b, syncEngine, cfg.Local.DBPath)
 			p := tea.NewProgram(app, tea.WithAltScreen())
 			_, err := p.Run()
 			return err
