@@ -28,6 +28,8 @@ func RegisterAll(parent *cobra.Command, b *backend.Backend) {
 	parent.AddCommand(c.archiveCmd())
 	parent.AddCommand(c.undoCmd())
 	parent.AddCommand(c.projectsCmd())
+	parent.AddCommand(updateCmd())
+	parent.AddCommand(versionCmd())
 }
 
 func (c *commands) addCmd() *cobra.Command {

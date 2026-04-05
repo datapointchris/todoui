@@ -30,8 +30,9 @@ func rootCmd() *cobra.Command {
 	var syncEngine *sync.Engine
 
 	root := &cobra.Command{
-		Use:   "todoui",
-		Short: "Personal project organization",
+		Use:     "todoui",
+		Short:   "Personal project organization",
+		Version: cli.Version(),
 		PersistentPreRunE: func(_ *cobra.Command, _ []string) error {
 			cfg, err := config.Load()
 			if err != nil {
