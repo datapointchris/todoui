@@ -81,6 +81,11 @@ type App struct {
 	depFilter    textinput.Model
 	depFiltering bool // true when typing in filter input
 
+	// All Items view
+	showingAll       bool            // true when the "All" pseudo-project is selected
+	allGroups        []allItemGroup  // project groups for rendering headers in grouped views
+	selectedProjects map[string]bool // multi-select: project IDs toggled via space
+
 	// Navigation
 	pendingItemID string // after fetch, select this item
 
@@ -125,6 +130,13 @@ func NewApp(b backend.Backend, syncEngine *sync.Engine, dbPath string) *App {
 type depGroup struct {
 	projectName string
 	items       []model.ProjectItem
+}
+
+// allItemGroup holds items belonging to a single project, for display in the All Items view.
+type allItemGroup struct {
+	projectName string
+	projectID   string
+	startIndex  int // index into the flat m.items slice where this group starts
 }
 
 func flattenDepGroups(groups []depGroup) []model.ProjectItem {
@@ -196,6 +208,11 @@ type searchResultsMsg []model.ProjectItem
 type searchNavigateMsg struct {
 	itemID   string
 	projects []model.Project
+}
+
+type allItemsMsg struct {
+	itemsMsg
+	groups []allItemGroup
 }
 
 type depCandidatesMsg []depGroup
@@ -367,6 +384,146 @@ func fetchItemsCmd(b backend.Backend, projectID string, filter filterMode) tea.C
 
 		return itemsMsg{items: items, blocked: blockedSet, blockers: blockers, projectNames: projectNames, hasIncompleteTasks: hasIncompleteTasks, taskCounts: taskCounts, itemTasks: allTasks}
 	}
+}
+
+func fetchAllItemsCmd(b backend.Backend, projects []model.ProjectWithItemCount, filter filterMode) tea.Cmd {
+	return func() tea.Msg {
+		var groups []allItemGroup
+		var allItems []model.ProjectItemInProject
+
+		for _, p := range projects {
+			items, err := b.ListItemsByProject(p.ID)
+			if err != nil {
+				return errMsg{err}
+			}
+			if filter == filterAll {
+				archived, err := b.ListArchived(p.ID)
+				if err != nil {
+					return errMsg{err}
+				}
+				items = append(items, archived...)
+			}
+			if len(items) > 0 {
+				groups = append(groups, allItemGroup{
+					projectName: p.Name,
+					projectID:   p.ID,
+					startIndex:  len(allItems),
+				})
+				allItems = append(allItems, items...)
+			}
+		}
+
+		blockedItems, err := b.ListBlocked()
+		if err != nil {
+			return errMsg{err}
+		}
+		blockedSet := make(map[string]bool)
+		for _, bi := range blockedItems {
+			blockedSet[bi.ID] = true
+		}
+
+		blockers := make(map[string][]model.ProjectItem)
+		projectNames := make(map[string][]string)
+		for _, item := range allItems {
+			if blockedSet[item.ID] {
+				bs, err := b.GetBlockers(item.ID)
+				if err != nil {
+					return errMsg{err}
+				}
+				blockers[item.ID] = bs
+				for _, blocker := range bs {
+					if _, seen := projectNames[blocker.ID]; !seen {
+						ps, err := b.GetItemProjects(blocker.ID)
+						if err != nil {
+							return errMsg{err}
+						}
+						var names []string
+						for _, pp := range ps {
+							names = append(names, pp.Name)
+						}
+						projectNames[blocker.ID] = names
+					}
+				}
+			}
+		}
+
+		hasIncompleteTasks := make(map[string]bool)
+		taskCounts := make(map[string][2]int)
+		allTasks := make(map[string][]model.ProjectItemTask)
+		seen := make(map[string]bool)
+		for _, item := range allItems {
+			if seen[item.ID] {
+				continue
+			}
+			seen[item.ID] = true
+			tasks, err := b.ListTasks(item.ID)
+			if err != nil {
+				return errMsg{err}
+			}
+			if len(tasks) > 0 {
+				allTasks[item.ID] = tasks
+				done := 0
+				for _, t := range tasks {
+					if t.Completed {
+						done++
+					}
+				}
+				taskCounts[item.ID] = [2]int{done, len(tasks)}
+				if done < len(tasks) {
+					hasIncompleteTasks[item.ID] = true
+				}
+			}
+		}
+
+		if filter == filterBlocked {
+			var filteredItems []model.ProjectItemInProject
+			var filteredGroups []allItemGroup
+			for _, g := range groups {
+				start := len(filteredItems)
+				end := g.startIndex + groupItemCount(groups, g, len(allItems))
+				for i := g.startIndex; i < end; i++ {
+					if blockedSet[allItems[i].ID] {
+						filteredItems = append(filteredItems, allItems[i])
+					}
+				}
+				if len(filteredItems) > start {
+					filteredGroups = append(filteredGroups, allItemGroup{
+						projectName: g.projectName,
+						projectID:   g.projectID,
+						startIndex:  start,
+					})
+				}
+			}
+			allItems = filteredItems
+			groups = filteredGroups
+		}
+
+		return allItemsMsg{
+			itemsMsg: itemsMsg{
+				items:              allItems,
+				blocked:            blockedSet,
+				blockers:           blockers,
+				projectNames:       projectNames,
+				hasIncompleteTasks: hasIncompleteTasks,
+				taskCounts:         taskCounts,
+				itemTasks:          allTasks,
+			},
+			groups: groups,
+		}
+	}
+}
+
+// groupItemCount returns the number of items in a group.
+func groupItemCount(groups []allItemGroup, g allItemGroup, totalItems int) int {
+	for i, gg := range groups {
+		if gg.startIndex == g.startIndex {
+			if i+1 < len(groups) {
+				return groups[i+1].startIndex - g.startIndex
+			}
+			return totalItems - g.startIndex
+		}
+	}
+	return 0
 }
 
 func createItemCmd(b backend.Backend, input model.CreateProjectItem) tea.Cmd {
@@ -577,6 +734,84 @@ func removeDependencyCmd(b backend.Backend, itemID, dependsOn string) tea.Cmd {
 
 // --- Bubble Tea interface ---
 
+// fetchItems returns the appropriate fetch command for the current view.
+func (m *App) fetchItems() tea.Cmd {
+	if len(m.selectedProjects) > 0 {
+		var selected []model.ProjectWithItemCount
+		for _, p := range m.projects {
+			if m.selectedProjects[p.ID] {
+				selected = append(selected, p)
+			}
+		}
+		return fetchAllItemsCmd(m.backend, selected, m.filter)
+	}
+	if m.showingAll {
+		return fetchAllItemsCmd(m.backend, m.projects, m.filter)
+	}
+	if len(m.projects) > 0 && m.projectCursor < len(m.projects) {
+		return fetchItemsCmd(m.backend, m.projects[m.projectCursor].ID, m.filter)
+	}
+	return nil
+}
+
+// isGroupedView returns true when the item pane shows items from multiple projects.
+func (m *App) isGroupedView() bool {
+	return m.showingAll || len(m.selectedProjects) > 0
+}
+
+// toggleProjectSelection toggles the current project in/out of the multi-select set.
+func (m *App) toggleProjectSelection() (tea.Model, tea.Cmd) {
+	if len(m.projects) == 0 {
+		return m, nil
+	}
+
+	if m.selectedProjects == nil {
+		m.selectedProjects = make(map[string]bool)
+	}
+
+	if m.showingAll {
+		// Space on "All": toggle all projects
+		if len(m.selectedProjects) == len(m.projects) {
+			// All selected → deselect all
+			m.selectedProjects = nil
+			m.itemCursor = 0
+			return m, fetchAllItemsCmd(m.backend, m.projects, m.filter)
+		}
+		// Select all
+		for _, p := range m.projects {
+			m.selectedProjects[p.ID] = true
+		}
+		m.itemCursor = 0
+		cmd := m.fetchItems()
+		return m, cmd
+	}
+
+	// Toggle individual project
+	p := m.projects[m.projectCursor]
+	if m.selectedProjects[p.ID] {
+		delete(m.selectedProjects, p.ID)
+		if len(m.selectedProjects) == 0 {
+			m.selectedProjects = nil
+		}
+	} else {
+		m.selectedProjects[p.ID] = true
+	}
+
+	m.itemCursor = 0
+	cmd := m.fetchItems()
+	return m, cmd
+}
+
+// groupHeaderAt returns the project name if the item at idx starts a new group in All view.
+func (m *App) groupHeaderAt(idx int) string {
+	for _, g := range m.allGroups {
+		if g.startIndex == idx {
+			return g.projectName
+		}
+	}
+	return ""
+}
+
 func (m *App) Init() tea.Cmd {
 	if m.syncEngine != nil {
 		return tea.Batch(
@@ -604,9 +839,24 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.projectCursor = max(0, len(m.projects)-1)
 		}
 		if len(m.projects) > 0 {
-			return m, fetchItemsCmd(m.backend, m.projects[m.projectCursor].ID, m.filter)
+			cmd := m.fetchItems()
+			return m, cmd
 		}
 		m.items = nil
+		return m, nil
+
+	case allItemsMsg:
+		m.allGroups = msg.groups
+		m.items = msg.items
+		m.blockedSet = msg.blocked
+		m.itemBlockers = msg.blockers
+		m.itemProjectNames = msg.projectNames
+		m.hasIncompleteTasks = msg.hasIncompleteTasks
+		m.taskCounts = msg.taskCounts
+		m.itemTasks = msg.itemTasks
+		if m.itemCursor >= len(m.items) {
+			m.itemCursor = max(0, len(m.items)-1)
+		}
 		return m, nil
 
 	case itemsMsg:
@@ -635,8 +885,8 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, fetchItemDetailCmd(m.backend, m.itemDetail.ID, m.blockedSet[m.itemDetail.ID])
 		}
 		// Refresh item list to update task counts and inline tasks
-		if len(m.projects) > 0 && m.projectCursor < len(m.projects) {
-			return m, fetchItemsCmd(m.backend, m.projects[m.projectCursor].ID, m.filter)
+		if cmd := m.fetchItems(); cmd != nil {
+			return m, cmd
 		}
 		return m, nil
 
@@ -707,6 +957,9 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.appMode = modeNormal
 		m.searchResults = nil
 		m.filter = filterNone
+		m.showingAll = false
+		m.allGroups = nil
+		m.selectedProjects = nil
 		for i, p := range m.projects {
 			for _, sp := range msg.projects {
 				if p.ID == sp.ID {
@@ -721,8 +974,8 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case reorderDoneMsg:
 		flashCmd := m.flash("Item reordered")
-		if len(m.projects) > 0 {
-			return m, tea.Batch(fetchItemsCmd(m.backend, m.projects[m.projectCursor].ID, m.filter), flashCmd)
+		if cmd := m.fetchItems(); cmd != nil {
+			return m, tea.Batch(cmd, flashCmd)
 		}
 		return m, flashCmd
 
@@ -897,6 +1150,15 @@ func (m *App) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "q":
 		return m, tea.Quit
 
+	case "esc":
+		if len(m.selectedProjects) > 0 {
+			m.selectedProjects = nil
+			m.itemCursor = 0
+			cmd := m.fetchItems()
+			return m, cmd
+		}
+		return m, nil
+
 	case "tab", "h", "l", "left", "right":
 		if m.activePane == projectPane {
 			m.activePane = itemPane
@@ -915,9 +1177,13 @@ func (m *App) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "g":
 		if m.activePane == projectPane {
-			if m.projectCursor > 0 {
-				m.projectCursor = 0
-				return m, fetchItemsCmd(m.backend, m.projects[0].ID, m.filter)
+			hasSelections := len(m.selectedProjects) > 0
+			if !m.showingAll {
+				m.showingAll = true
+				if !hasSelections {
+					m.itemCursor = 0
+					return m, fetchAllItemsCmd(m.backend, m.projects, m.filter)
+				}
 			}
 		} else {
 			m.itemCursor = 0
@@ -926,10 +1192,20 @@ func (m *App) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "G":
 		if m.activePane == projectPane {
+			hasSelections := len(m.selectedProjects) > 0
 			last := len(m.projects) - 1
-			if last >= 0 && m.projectCursor != last {
+			if last >= 0 {
+				if m.showingAll {
+					m.showingAll = false
+					if !hasSelections {
+						m.allGroups = nil
+					}
+				}
 				m.projectCursor = last
-				return m, fetchItemsCmd(m.backend, m.projects[last].ID, m.filter)
+				if !hasSelections {
+					m.itemCursor = 0
+					return m, fetchItemsCmd(m.backend, m.projects[last].ID, m.filter)
+				}
 			}
 		} else {
 			if last := len(m.items) - 1; last >= 0 {
@@ -944,9 +1220,21 @@ func (m *App) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			half = 1
 		}
 		if m.activePane == projectPane {
-			m.projectCursor = min(m.projectCursor+half, max(0, len(m.projects)-1))
-			if len(m.projects) > 0 {
-				return m, fetchItemsCmd(m.backend, m.projects[m.projectCursor].ID, m.filter)
+			hasSelections := len(m.selectedProjects) > 0
+			if m.showingAll {
+				m.showingAll = false
+				if !hasSelections {
+					m.allGroups = nil
+				}
+				m.projectCursor = min(half-1, max(0, len(m.projects)-1))
+			} else {
+				m.projectCursor = min(m.projectCursor+half, max(0, len(m.projects)-1))
+			}
+			if !hasSelections {
+				m.itemCursor = 0
+				if len(m.projects) > 0 {
+					return m, fetchItemsCmd(m.backend, m.projects[m.projectCursor].ID, m.filter)
+				}
 			}
 		} else {
 			m.itemCursor = min(m.itemCursor+half, max(0, len(m.items)-1))
@@ -959,9 +1247,25 @@ func (m *App) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			half = 1
 		}
 		if m.activePane == projectPane {
-			m.projectCursor = max(m.projectCursor-half, 0)
-			if len(m.projects) > 0 {
-				return m, fetchItemsCmd(m.backend, m.projects[m.projectCursor].ID, m.filter)
+			hasSelections := len(m.selectedProjects) > 0
+			if m.showingAll {
+				return m, nil // already at top
+			}
+			newCursor := m.projectCursor - half
+			if newCursor < 0 {
+				m.showingAll = true
+				if !hasSelections {
+					m.itemCursor = 0
+					return m, fetchAllItemsCmd(m.backend, m.projects, m.filter)
+				}
+				return m, nil
+			}
+			m.projectCursor = newCursor
+			if !hasSelections {
+				m.itemCursor = 0
+				if len(m.projects) > 0 {
+					return m, fetchItemsCmd(m.backend, m.projects[m.projectCursor].ID, m.filter)
+				}
 			}
 		} else {
 			m.itemCursor = max(m.itemCursor-half, 0)
@@ -969,9 +1273,12 @@ func (m *App) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "enter":
-		if m.activePane == projectPane && len(m.projects) > 0 {
-			m.activePane = itemPane
-			return m, fetchItemsCmd(m.backend, m.projects[m.projectCursor].ID, m.filter)
+		if m.activePane == projectPane {
+			if m.showingAll || len(m.projects) > 0 {
+				m.activePane = itemPane
+				cmd := m.fetchItems()
+				return m, cmd
+			}
 		}
 		if m.activePane == itemPane && len(m.items) > 0 {
 			item := m.items[m.itemCursor]
@@ -987,6 +1294,10 @@ func (m *App) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.titleInput.Placeholder = "Enter project name..."
 			cmd := m.titleInput.Focus()
 			m.appMode = modeAddProject
+			return m, cmd
+		}
+		if m.isGroupedView() {
+			cmd := m.flash("Use A to add items in multi-project view")
 			return m, cmd
 		}
 		if len(m.projects) > 0 {
@@ -1009,6 +1320,9 @@ func (m *App) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case " ":
+		if m.activePane == projectPane {
+			return m.toggleProjectSelection()
+		}
 		if m.activePane == itemPane && len(m.items) > 0 {
 			item := m.items[m.itemCursor]
 			if !item.Completed && m.hasIncompleteTasks[item.ID] {
@@ -1105,8 +1419,8 @@ func (m *App) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		} else {
 			m.filter = filterBlocked
 		}
-		if len(m.projects) > 0 {
-			return m, fetchItemsCmd(m.backend, m.projects[m.projectCursor].ID, m.filter)
+		if cmd := m.fetchItems(); cmd != nil {
+			return m, cmd
 		}
 		return m, nil
 
@@ -1116,15 +1430,15 @@ func (m *App) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		} else {
 			m.filter = filterAll
 		}
-		if len(m.projects) > 0 {
-			return m, fetchItemsCmd(m.backend, m.projects[m.projectCursor].ID, m.filter)
+		if cmd := m.fetchItems(); cmd != nil {
+			return m, cmd
 		}
 		return m, nil
 
 	case "0":
 		m.filter = filterNone
-		if len(m.projects) > 0 {
-			return m, fetchItemsCmd(m.backend, m.projects[m.projectCursor].ID, m.filter)
+		if cmd := m.fetchItems(); cmd != nil {
+			return m, cmd
 		}
 		return m, nil
 
@@ -1139,6 +1453,10 @@ func (m *App) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case "m":
+		if m.isGroupedView() {
+			cmd := m.flash("Reorder not available in multi-project view")
+			return m, cmd
+		}
 		if m.activePane == itemPane && len(m.items) > 1 {
 			m.moveOrigPos = m.itemCursor
 			m.appMode = modeMove
@@ -1188,7 +1506,10 @@ func (m *App) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case modeAddItemMulti:
 			m.pendingTitle = value
 			m.titleInput.Blur()
-			currentProjectID := m.projects[m.projectCursor].ID
+			currentProjectID := ""
+			if !m.isGroupedView() && m.projectCursor < len(m.projects) {
+				currentProjectID = m.projects[m.projectCursor].ID
+			}
 			m.picker = newPickerForCreate(m.projects, currentProjectID, value)
 			m.appMode = modeProjectPicker
 			return m, nil
@@ -1574,8 +1895,8 @@ func (m *App) handleMoveKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "esc":
 		m.appMode = modeNormal
-		if len(m.projects) > 0 {
-			return m, fetchItemsCmd(m.backend, m.projects[m.projectCursor].ID, m.filter)
+		if cmd := m.fetchItems(); cmd != nil {
+			return m, cmd
 		}
 		return m, nil
 	}
@@ -1668,28 +1989,53 @@ func (m *App) handleDepLinkKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m *App) cursorDown() tea.Cmd {
 	if m.activePane == projectPane {
-		if m.projectCursor < len(m.projects)-1 {
+		hasSelections := len(m.selectedProjects) > 0
+		if m.showingAll {
+			// Move from All to first real project
+			if len(m.projects) > 0 {
+				m.showingAll = false
+				m.projectCursor = 0
+				if !hasSelections {
+					m.allGroups = nil
+					m.itemCursor = 0
+					return fetchItemsCmd(m.backend, m.projects[0].ID, m.filter)
+				}
+			}
+		} else if m.projectCursor < len(m.projects)-1 {
 			m.projectCursor++
-			return fetchItemsCmd(m.backend, m.projects[m.projectCursor].ID, m.filter)
+			if !hasSelections {
+				m.itemCursor = 0
+				return fetchItemsCmd(m.backend, m.projects[m.projectCursor].ID, m.filter)
+			}
 		}
-	} else {
-		if m.itemCursor < len(m.items)-1 {
-			m.itemCursor++
-		}
+	} else if m.itemCursor < len(m.items)-1 {
+		m.itemCursor++
 	}
 	return nil
 }
 
 func (m *App) cursorUp() tea.Cmd {
 	if m.activePane == projectPane {
+		hasSelections := len(m.selectedProjects) > 0
+		if m.showingAll {
+			return nil // already at top
+		}
 		if m.projectCursor > 0 {
 			m.projectCursor--
-			return fetchItemsCmd(m.backend, m.projects[m.projectCursor].ID, m.filter)
+			if !hasSelections {
+				m.itemCursor = 0
+				return fetchItemsCmd(m.backend, m.projects[m.projectCursor].ID, m.filter)
+			}
+			return nil
 		}
-	} else {
-		if m.itemCursor > 0 {
-			m.itemCursor--
+		// At first project, move up to All
+		m.showingAll = true
+		if !hasSelections {
+			m.itemCursor = 0
+			return fetchAllItemsCmd(m.backend, m.projects, m.filter)
 		}
+	} else if m.itemCursor > 0 {
+		m.itemCursor--
 	}
 	return nil
 }
@@ -1988,7 +2334,9 @@ func (m *App) renderHelpOverlay() string {
 	if m.activePane == projectPane {
 		actions := `
   Project Pane
-  a              Add project`
+  a              Add project
+  space          Toggle multi-select
+  Esc            Clear selections`
 		lines = append(lines, actions)
 	} else {
 		actions := `
@@ -2188,7 +2536,12 @@ func (m *App) renderDepLinkOverlay() string {
 
 func (m *App) projectPaneWidth() int {
 	const minWidth = 20
-	maxName := 0
+	// Account for "All" entry
+	totalItems := 0
+	for _, p := range m.projects {
+		totalItems += p.ItemCount
+	}
+	maxName := lipgloss.Width(fmt.Sprintf("> All (%d)", totalItems))
 	for _, p := range m.projects {
 		// "> name (count)" — 2 prefix + space + parens + digits
 		w := lipgloss.Width(fmt.Sprintf("> %s (%d)", p.Name, p.ItemCount))
@@ -2220,42 +2573,88 @@ func (m *App) renderProjectPane(width, height int) string {
 	}
 
 	viewHeight := height - 1 // subtract title
-	m.projectScroll = syncScroll(m.projectCursor, m.projectScroll, viewHeight)
+
+	// Build a virtual list: All entry at index 0, real projects at 1..N
+	totalEntries := len(m.projects) + 1
+	virtualCursor := m.projectCursor + 1 // offset for All entry
+	if m.showingAll {
+		virtualCursor = 0
+	}
+	m.projectScroll = syncScroll(virtualCursor, m.projectScroll, viewHeight)
 
 	end := m.projectScroll + viewHeight
-	if end > len(m.projects) {
-		end = len(m.projects)
+	if end > totalEntries {
+		end = totalEntries
 	}
 
-	for i := m.projectScroll; i < end; i++ {
-		p := m.projects[i]
-		name := p.Name
-		count := fmt.Sprintf("(%d)", p.ItemCount)
-
-		var prefix string
-		if i == m.projectCursor {
-			prefix = "> "
+	hasSelections := len(m.selectedProjects) > 0
+	for vi := m.projectScroll; vi < end; vi++ {
+		if vi == 0 {
+			// "All" entry
+			totalItems := 0
+			for _, p := range m.projects {
+				totalItems += p.ItemCount
+			}
+			isCursor := m.showingAll
+			allSelected := hasSelections && len(m.selectedProjects) == len(m.projects)
+			var prefix string
+			if isCursor {
+				prefix = "> "
+			} else {
+				prefix = "  "
+			}
+			label := "All"
+			if allSelected {
+				label = "● All"
+			}
+			line := fmt.Sprintf("%s%s (%d)", prefix, label, totalItems)
+			if len(line) > width {
+				line = line[:width]
+			}
+			switch {
+			case isCursor:
+				line = allProjectStyle.Render(line)
+			case allSelected:
+				line = projectMultiSelectedStyle.Render(line)
+			default:
+				line = projectNormalStyle.Render(line)
+			}
+			lines = append(lines, line)
 		} else {
-			prefix = "  "
+			// Real project at index vi-1
+			pi := vi - 1
+			p := m.projects[pi]
+			isCursor := !m.showingAll && pi == m.projectCursor
+			isSelected := m.selectedProjects[p.ID]
+			var prefix string
+			if isCursor {
+				prefix = "> "
+			} else {
+				prefix = "  "
+			}
+			name := p.Name
+			if isSelected {
+				name = "● " + name
+			}
+			line := fmt.Sprintf("%s%s (%d)", prefix, name, p.ItemCount)
+			if len(line) > width {
+				line = line[:width]
+			}
+			switch {
+			case isCursor:
+				line = projectSelectedStyle.Render(line)
+			case isSelected:
+				line = projectMultiSelectedStyle.Render(line)
+			default:
+				line = projectNormalStyle.Render(line)
+			}
+			lines = append(lines, line)
 		}
-
-		// Truncate plain text before styling to avoid slicing ANSI sequences
-		line := fmt.Sprintf("%s%s %s", prefix, name, count)
-		if len(line) > width {
-			line = line[:width]
-		}
-
-		if i == m.projectCursor {
-			line = projectSelectedStyle.Render(line)
-		} else {
-			line = projectNormalStyle.Render(line)
-		}
-
-		lines = append(lines, line)
 	}
 
-	if len(m.projects) > viewHeight {
-		scrollInfo := dimStyle.Render(fmt.Sprintf(" %d/%d", m.projectCursor+1, len(m.projects)))
+	if totalEntries > viewHeight {
+		pos := virtualCursor + 1
+		scrollInfo := dimStyle.Render(fmt.Sprintf(" %d/%d", pos, totalEntries))
 		lines = append(lines, scrollInfo)
 	}
 
@@ -2264,9 +2663,14 @@ func (m *App) renderProjectPane(width, height int) string {
 
 func (m *App) renderItemPane(width, height int) string {
 	var titleText string
-	if len(m.projects) > 0 && m.projectCursor < len(m.projects) {
+	switch {
+	case len(m.selectedProjects) > 0:
+		titleText = fmt.Sprintf("Selected (%d)", len(m.selectedProjects))
+	case m.showingAll:
+		titleText = "All Items"
+	case len(m.projects) > 0 && m.projectCursor < len(m.projects):
 		titleText = m.projects[m.projectCursor].Name
-	} else {
+	default:
 		titleText = "Items"
 	}
 
@@ -2304,6 +2708,26 @@ func (m *App) renderItemPane(width, height int) string {
 
 	linesUsed := 0
 	for i := m.itemScroll; i < end; i++ {
+		if linesUsed >= viewHeight {
+			break
+		}
+
+		// In grouped views, insert project group headers with spacing between groups
+		if m.isGroupedView() {
+			if groupName := m.groupHeaderAt(i); groupName != "" {
+				if i > 0 && linesUsed < viewHeight {
+					lines = append(lines, "")
+					linesUsed++
+				}
+				header := groupHeaderStyle.Render(fmt.Sprintf("── %s ──", groupName))
+				lines = append(lines, header)
+				linesUsed++
+				if linesUsed >= viewHeight {
+					break
+				}
+			}
+		}
+
 		item := m.items[i]
 		isMoving := m.appMode == modeMove && i == m.itemCursor
 		line := m.renderItemLine(item, i == m.itemCursor, width, isMoving)
@@ -2337,7 +2761,7 @@ func (m *App) renderItemPane(width, height int) string {
 
 		if blockers, ok := m.itemBlockers[item.ID]; ok && len(blockers) > 0 {
 			currentProject := ""
-			if m.projectCursor < len(m.projects) {
+			if !m.isGroupedView() && m.projectCursor < len(m.projects) {
 				currentProject = m.projects[m.projectCursor].Name
 			}
 			for _, b := range blockers {

@@ -22,6 +22,21 @@ var (
 				PaddingLeft(0).
 				Foreground(lipgloss.Color("2")).
 				Bold(true)
+	projectMultiSelectedStyle = lipgloss.NewStyle().
+					PaddingLeft(1).
+					Foreground(lipgloss.Color("5"))
+
+	// All pseudo-project
+	allProjectStyle = lipgloss.NewStyle().
+			PaddingLeft(0).
+			Foreground(lipgloss.Color("6")).
+			Bold(true)
+
+	// Group header in All Items view
+	groupHeaderStyle = lipgloss.NewStyle().
+				PaddingLeft(1).
+				Foreground(lipgloss.Color("6")).
+				Bold(true)
 
 	// Item list
 	itemNormalStyle   = lipgloss.NewStyle().PaddingLeft(1)

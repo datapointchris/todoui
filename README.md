@@ -6,6 +6,7 @@ Personal project organization tool. Local-first SQLite with optional background 
 
 - **TUI** (primary) — two-pane Bubble Tea interface with vim keybindings
 - **CLI** — quick actions without entering the TUI
+- **All Items / multi-select** — view all items at once or toggle specific projects to compare
 - **Multi-project items** — items can belong to multiple projects
 - **Dependencies** — items can block other items, with cycle detection
 - **Sub-tasks** — checklist tasks on each item
@@ -54,8 +55,13 @@ todoui projects <id> --remove work    # remove from project
 | `j/k` | Navigate up/down |
 | `h/l` | Switch panes |
 | `Enter` | Item detail view |
+| **Project pane** | |
+| `space` | Toggle multi-select |
+| `Esc` | Clear selections |
+| `a` | Add project |
+| **Item pane** | |
 | `space` | Toggle done/incomplete |
-| `a` | Add item/project |
+| `a` | Add item to current project |
 | `A` | Add item to multiple projects |
 | `e` | Edit title |
 | `n` | Edit notes |
@@ -64,6 +70,7 @@ todoui projects <id> --remove work    # remove from project
 | `m` | Reorder (move mode) |
 | `b/B` | Link/unlink dependency |
 | `p` | Manage project membership |
+| **Global** | |
 | `u` | Undo |
 | `/` | Search |
 | `1` | Filter: blocked items |
