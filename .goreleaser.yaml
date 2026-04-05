@@ -5,7 +5,7 @@ builds:
     binary: todoui
     ldflags:
       - -s -w
-      - -X github.com/datapointchris/todoui/internal/cli.version={{ .Version }}
+      - -X github.com/datapointchris/todoui/internal/cli.version={{ .Tag }}
     env:
       - CGO_ENABLED=0
     goos:
