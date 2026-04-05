@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"os"
 	"runtime/debug"
 	"time"
 
@@ -64,8 +65,12 @@ func updateCmd() *cobra.Command {
 				return nil
 			}
 
+			exe, err := os.Executable()
+			if err != nil {
+				return fmt.Errorf("finding executable path: %w", err)
+			}
 			fmt.Printf("Updating to %s...\n", latest.Version())
-			if err := updater.UpdateTo(ctx, latest, ""); err != nil {
+			if err := updater.UpdateTo(ctx, latest, exe); err != nil {
 				return fmt.Errorf("updating binary: %w", err)
 			}
 
