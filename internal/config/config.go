@@ -34,11 +34,10 @@ func Load() (*Config, error) {
 	// Defaults
 	v.SetDefault("local.db_path", defaultDBPath())
 
-	// Config file: ~/.config/todoui/config.toml
-	configDir, err := os.UserConfigDir()
-	if err == nil {
-		v.AddConfigPath(filepath.Join(configDir, "todoui"))
-	}
+	// Config file: $XDG_CONFIG_HOME/todoui/config.toml or ~/.config/todoui/config.toml
+	// Use XDG explicitly rather than Go's UserConfigDir, which returns
+	// ~/Library/Application Support on macOS — not where CLI tools put config.
+	v.AddConfigPath(filepath.Join(userConfigDir(), "todoui"))
 	v.SetConfigName("config")
 	v.SetConfigType("toml")
 
@@ -71,8 +70,19 @@ func defaultDBPath() string {
 	return filepath.Join(userDataDir(), "todoui", "todoui.db")
 }
 
+// userConfigDir returns $XDG_CONFIG_HOME or ~/.config.
+func userConfigDir() string {
+	if dir := os.Getenv("XDG_CONFIG_HOME"); dir != "" {
+		return dir
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "."
+	}
+	return filepath.Join(home, ".config")
+}
+
 // userDataDir returns the XDG data directory ($XDG_DATA_HOME or ~/.local/share).
-// Go's stdlib only provides UserConfigDir, not UserDataDir.
 func userDataDir() string {
 	if dir := os.Getenv("XDG_DATA_HOME"); dir != "" {
 		return dir

@@ -21,6 +21,9 @@ vendor/
 *.swp
 *.swo
 
+# direnv
+.envrc
+
 # OS
 .DS_Store
 Thumbs.db

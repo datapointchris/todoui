@@ -4,6 +4,7 @@ import "testing"
 
 func TestLoad_Defaults(t *testing.T) {
 	// No config file, no env vars — should use defaults
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("TODOUI_SYNC", "")
 	t.Setenv("TODOUI_SYNC_URL", "")
 	t.Setenv("TODOUI_DB", "")
@@ -43,6 +44,7 @@ func TestLoad_EnvOverrides(t *testing.T) {
 }
 
 func TestLoad_SyncEnabledWithoutURL(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("TODOUI_SYNC", "true")
 	t.Setenv("TODOUI_SYNC_URL", "")
 
