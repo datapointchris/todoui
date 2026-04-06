@@ -61,6 +61,9 @@ type App struct {
 	detailTaskFocused     bool // true when navigating in the task list
 	addingTask            bool // true when typing a new task title
 
+	// Project detail view
+	projectDetail *model.ProjectWithItemCount
+
 	// Filters
 	filter filterMode
 
@@ -182,6 +185,7 @@ type (
 	itemCreatedMsg       struct{}
 	itemUpdatedMsg       struct{}
 	projectCreatedMsg    struct{}
+	projectUpdatedMsg    struct{}
 	undoResultMsg        string
 	itemProjectsMsg      []model.Project
 	membershipUpdatedMsg struct{}
@@ -556,6 +560,30 @@ func createProjectCmd(b backend.Backend, input model.CreateProject) tea.Cmd {
 	}
 }
 
+func updateProjectCmd(b backend.Backend, id string, input model.UpdateProject) tea.Cmd {
+	return func() tea.Msg {
+		_, err := b.UpdateProject(id, input)
+		if err != nil {
+			return errMsg{err}
+		}
+		return projectUpdatedMsg{}
+	}
+}
+
+func fetchProjectDetailCmd(b backend.Backend, projectID string) tea.Cmd {
+	return func() tea.Msg {
+		p, err := b.GetProject(projectID)
+		if err != nil {
+			return errMsg{err}
+		}
+		return projectDetailMsg{project: p}
+	}
+}
+
+type projectDetailMsg struct {
+	project *model.ProjectWithItemCount
+}
+
 func undoCmd(b backend.Backend) tea.Cmd {
 	return func() tea.Msg {
 		desc, err := b.Undo()
@@ -912,6 +940,22 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		flashCmd := m.flash("Project created")
 		return m, tea.Batch(fetchProjectsCmd(m.backend), flashCmd)
 
+	case projectUpdatedMsg:
+		flashCmd := m.flash("Project updated")
+		if m.appMode == modeProjectDetail && m.projectDetail != nil {
+			return m, tea.Batch(
+				fetchProjectsCmd(m.backend),
+				fetchProjectDetailCmd(m.backend, m.projectDetail.ID),
+				flashCmd,
+			)
+		}
+		return m, tea.Batch(fetchProjectsCmd(m.backend), flashCmd)
+
+	case projectDetailMsg:
+		m.projectDetail = msg.project
+		m.appMode = modeProjectDetail
+		return m, nil
+
 	case undoResultMsg:
 		flashCmd := m.flash(fmt.Sprintf("Undo: %s", string(msg)))
 		return m, tea.Batch(fetchProjectsCmd(m.backend), flashCmd)
@@ -1067,8 +1111,12 @@ func (m *App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handlePickerKey(msg)
 	case modeItemDetail:
 		return m.handleDetailKey(msg)
-	case modeEditNotes:
+	case modeEditNotes, modeEditProjectDesc:
 		return m.handleNotesKey(msg)
+	case modeProjectDetail:
+		return m.handleProjectDetailKey(msg)
+	case modeEditProjectName:
+		return m.handleInputKey(msg)
 	case modeHelp:
 		return m.handleHelpKey(msg)
 	case modeSearch:
@@ -1274,10 +1322,8 @@ func (m *App) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "enter":
 		if m.activePane == projectPane {
-			if m.showingAll || len(m.projects) > 0 {
-				m.activePane = itemPane
-				cmd := m.fetchItems()
-				return m, cmd
+			if !m.showingAll && m.projectCursor < len(m.projects) {
+				return m, fetchProjectDetailCmd(m.backend, m.projects[m.projectCursor].ID)
 			}
 		}
 		if m.activePane == itemPane && len(m.items) > 0 {
@@ -1524,6 +1570,13 @@ func (m *App) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.titleInput.Blur()
 			item := m.items[m.itemCursor]
 			return m, updateItemCmd(m.backend, item.ID, model.UpdateProjectItem{Title: &value})
+
+		case modeEditProjectName:
+			m.appMode = m.returnMode
+			m.titleInput.Blur()
+			if m.projectDetail != nil {
+				return m, updateProjectCmd(m.backend, m.projectDetail.ID, model.UpdateProject{Name: &value})
+			}
 		}
 
 	case "esc":
@@ -1756,14 +1809,19 @@ func (m *App) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m *App) handleNotesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+s":
-		notes := m.notesInput.Value()
+		value := m.notesInput.Value()
 		m.appMode = m.returnMode
 		m.notesInput.Blur()
+
+		if m.returnMode == modeProjectDetail && m.projectDetail != nil {
+			return m, updateProjectCmd(m.backend, m.projectDetail.ID, model.UpdateProject{Description: &value})
+		}
+
 		itemID := m.items[m.itemCursor].ID
 		if m.itemDetail != nil {
 			itemID = m.itemDetail.ID
 		}
-		return m, updateItemCmd(m.backend, itemID, model.UpdateProjectItem{Notes: &notes})
+		return m, updateItemCmd(m.backend, itemID, model.UpdateProjectItem{Notes: &value})
 
 	case "esc":
 		m.appMode = m.returnMode
@@ -1775,6 +1833,40 @@ func (m *App) handleNotesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.notesInput, cmd = m.notesInput.Update(msg)
 		return m, cmd
 	}
+}
+
+func (m *App) handleProjectDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.projectDetail == nil {
+		return m, nil
+	}
+
+	switch msg.String() {
+	case "esc", "q":
+		m.appMode = modeNormal
+		m.projectDetail = nil
+		return m, nil
+
+	case "e":
+		m.titleInput.SetValue(m.projectDetail.Name)
+		m.titleInput.Placeholder = ""
+		cmd := m.titleInput.Focus()
+		m.returnMode = modeProjectDetail
+		m.appMode = modeEditProjectName
+		return m, cmd
+
+	case "d":
+		desc := ""
+		if m.projectDetail.Description != nil {
+			desc = *m.projectDetail.Description
+		}
+		m.notesInput.SetValue(desc)
+		cmd := m.notesInput.Focus()
+		m.returnMode = modeProjectDetail
+		m.appMode = modeEditProjectDesc
+		return m, cmd
+	}
+
+	return m, nil
 }
 
 func (m *App) handleHelpKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -2071,7 +2163,7 @@ func (m *App) View() string {
 	}
 
 	switch m.appMode {
-	case modeAddItem, modeAddItemMulti, modeAddProject, modeEditTitle:
+	case modeAddItem, modeAddItemMulti, modeAddProject, modeEditTitle, modeEditProjectName:
 		overlay := m.renderInputOverlay()
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, overlay)
 	case modeProjectPicker:
@@ -2080,7 +2172,10 @@ func (m *App) View() string {
 	case modeItemDetail:
 		overlay := m.renderDetailOverlay()
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, overlay)
-	case modeEditNotes:
+	case modeProjectDetail:
+		overlay := m.renderProjectDetailOverlay()
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, overlay)
+	case modeEditNotes, modeEditProjectDesc:
 		overlay := m.renderNotesOverlay()
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, overlay)
 	case modeHelp:
@@ -2140,6 +2235,8 @@ func (m *App) renderInputOverlay() string {
 		prompt = "New project"
 	case modeEditTitle:
 		prompt = "Edit title"
+	case modeEditProjectName:
+		prompt = "Edit project name"
 	}
 
 	var lines []string
@@ -2281,13 +2378,60 @@ func (m *App) renderDetailOverlay() string {
 	return overlayBoxStyle.Width(boxWidth).Render(content)
 }
 
+func (m *App) renderProjectDetailOverlay() string {
+	p := m.projectDetail
+	if p == nil {
+		return ""
+	}
+
+	header := overlayTitleStyle.Render(fmt.Sprintf("Project %s", shortID(p.ID)))
+
+	var lines []string
+	lines = append(lines, header)
+	lines = append(lines, "")
+	lines = append(lines, fmt.Sprintf("  %s    %s",
+		p.Name,
+		dimStyle.Render(fmt.Sprintf("%d items", p.ItemCount)),
+	))
+	lines = append(lines, dimStyle.Render(fmt.Sprintf("  Created: %s", p.CreatedAt.Format("Jan 2, 2006"))))
+
+	if p.Description != nil && *p.Description != "" {
+		lines = append(lines, "")
+		lines = append(lines, dimStyle.Render("  ─── Description ───────────────────"))
+		for _, line := range strings.Split(*p.Description, "\n") {
+			lines = append(lines, "  "+line)
+		}
+	}
+
+	lines = append(lines, "")
+	lines = append(lines, dimStyle.Render("  [e]dit name  [d]escription  [Esc]close"))
+
+	content := strings.Join(lines, "\n")
+
+	boxWidth := m.width - 4
+	if boxWidth > 70 {
+		boxWidth = 70
+	}
+	if boxWidth < 40 {
+		boxWidth = 40
+	}
+
+	return overlayBoxStyle.Width(boxWidth).Render(content)
+}
+
 func (m *App) renderNotesOverlay() string {
-	var itemTitle string
-	if m.itemDetail != nil {
-		itemTitle = fmt.Sprintf("%s (%s)", m.itemDetail.Title, shortID(m.itemDetail.ID))
-	} else if len(m.items) > 0 && m.itemCursor < len(m.items) {
-		item := m.items[m.itemCursor]
-		itemTitle = fmt.Sprintf("%s (%s)", item.Title, shortID(item.ID))
+	var title, subtitle string
+	if m.appMode == modeEditProjectDesc && m.projectDetail != nil {
+		title = "Edit Description"
+		subtitle = fmt.Sprintf("  Project: %s", m.projectDetail.Name)
+	} else {
+		title = "Edit Notes"
+		if m.itemDetail != nil {
+			subtitle = fmt.Sprintf("  Item: %s (%s)", m.itemDetail.Title, shortID(m.itemDetail.ID))
+		} else if len(m.items) > 0 && m.itemCursor < len(m.items) {
+			item := m.items[m.itemCursor]
+			subtitle = fmt.Sprintf("  Item: %s (%s)", item.Title, shortID(item.ID))
+		}
 	}
 
 	boxWidth := m.width * 3 / 4
@@ -2304,8 +2448,8 @@ func (m *App) renderNotesOverlay() string {
 	m.notesInput.SetHeight(boxHeight - 7)
 
 	var lines []string
-	lines = append(lines, overlayTitleStyle.Render("Edit Notes"))
-	lines = append(lines, dimStyle.Render(fmt.Sprintf("  Item: %s", itemTitle)))
+	lines = append(lines, overlayTitleStyle.Render(title))
+	lines = append(lines, dimStyle.Render(subtitle))
 	lines = append(lines, "")
 	lines = append(lines, m.notesInput.View())
 	lines = append(lines, "")
@@ -2334,6 +2478,7 @@ func (m *App) renderHelpOverlay() string {
 	if m.activePane == projectPane {
 		actions := `
   Project Pane
+  Enter          Project detail
   a              Add project
   space          Toggle multi-select
   Esc            Clear selections`

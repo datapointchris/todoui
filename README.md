@@ -11,6 +11,7 @@ Personal project organization tool. Local-first SQLite with optional background 
 - **Dependencies** — items can block other items, with cycle detection
 - **Sub-tasks** — checklist tasks on each item
 - **Notes** — multiline notes on items
+- **Project descriptions** — long-form notes/decisions per project, viewable and editable in project detail
 - **Undo** — revert the last mutation
 - **Search** — find items across all projects
 - **Sync** — optional background push/pull to ichrisbirch API
@@ -54,11 +55,13 @@ todoui projects <id> --remove work    # remove from project
 | --- | ------ |
 | `j/k` | Navigate up/down |
 | `h/l` | Switch panes |
-| `Enter` | Item detail view |
+| `Enter` | Detail view (item or project) |
 | **Project pane** | |
 | `space` | Toggle multi-select |
 | `Esc` | Clear selections |
 | `a` | Add project |
+| `e` | Edit project name (in detail) |
+| `d` | Edit project description (in detail) |
 | **Item pane** | |
 | `space` | Toggle done/incomplete |
 | `a` | Add item to current project |

@@ -10,19 +10,22 @@ const (
 type appMode int
 
 const (
-	modeNormal        appMode = iota
-	modeAddItem               // text input: new item in current project
-	modeAddItemMulti          // text input → project picker: multi-project add
-	modeAddProject            // text input: new project
-	modeEditTitle             // text input: edit existing item title
-	modeProjectPicker         // checkbox picker: manage project membership
-	modeItemDetail            // expanded item view (read-only with action keys)
-	modeEditNotes             // multiline textarea for notes editing
-	modeHelp                  // keybinding reference overlay
-	modeSearch                // search text input + results
-	modeMove                  // grab item, j/k to reposition
-	modeDepLink               // pick item to add as dependency
-	modeDepUnlink             // pick existing dependency to remove
+	modeNormal          appMode = iota
+	modeAddItem                 // text input: new item in current project
+	modeAddItemMulti            // text input → project picker: multi-project add
+	modeAddProject              // text input: new project
+	modeEditTitle               // text input: edit existing item title
+	modeProjectPicker           // checkbox picker: manage project membership
+	modeItemDetail              // expanded item view (read-only with action keys)
+	modeEditNotes               // multiline textarea for notes editing
+	modeHelp                    // keybinding reference overlay
+	modeSearch                  // search text input + results
+	modeMove                    // grab item, j/k to reposition
+	modeDepLink                 // pick item to add as dependency
+	modeDepUnlink               // pick existing dependency to remove
+	modeProjectDetail           // expanded project view (read-only with action keys)
+	modeEditProjectName         // text input: edit project name
+	modeEditProjectDesc         // multiline textarea for project description editing
 )
 
 type pickerIntent int
