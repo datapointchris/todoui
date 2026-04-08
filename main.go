@@ -9,12 +9,12 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 
-	"github.com/datapointchris/todoui/internal/backend"
-	"github.com/datapointchris/todoui/internal/cli"
-	"github.com/datapointchris/todoui/internal/config"
-	"github.com/datapointchris/todoui/internal/db"
-	"github.com/datapointchris/todoui/internal/sync"
-	"github.com/datapointchris/todoui/internal/tui"
+	"github.com/datapointchris/todoui/backend"
+	"github.com/datapointchris/todoui/cli"
+	"github.com/datapointchris/todoui/config"
+	"github.com/datapointchris/todoui/db"
+	"github.com/datapointchris/todoui/sync"
+	"github.com/datapointchris/todoui/tui"
 )
 
 func main() {

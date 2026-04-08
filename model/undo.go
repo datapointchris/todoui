@@ -1,4 +1,4 @@
-package undo
+package model
 
 // Action represents a recorded action that can be undone.
 type Action struct {

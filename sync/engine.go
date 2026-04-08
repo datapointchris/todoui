@@ -10,7 +10,7 @@ import (
 	gosync "sync"
 	"time"
 
-	"github.com/datapointchris/todoui/internal/db/generated"
+	"github.com/datapointchris/todoui/db/generated"
 )
 
 // Engine orchestrates push and pull synchronization with the remote API.

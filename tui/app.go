@@ -11,9 +11,9 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/datapointchris/todoui/internal/backend"
-	"github.com/datapointchris/todoui/internal/model"
-	"github.com/datapointchris/todoui/internal/sync"
+	"github.com/datapointchris/todoui/backend"
+	"github.com/datapointchris/todoui/model"
+	"github.com/datapointchris/todoui/sync"
 )
 
 // App is the top-level Bubble Tea model for the TUI.

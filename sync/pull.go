@@ -9,8 +9,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/datapointchris/todoui/internal/db/generated"
-	"github.com/datapointchris/todoui/internal/model"
+	"github.com/datapointchris/todoui/db/generated"
+	"github.com/datapointchris/todoui/model"
 )
 
 // Pull fetches all data from the remote API and reconciles it with the local database.

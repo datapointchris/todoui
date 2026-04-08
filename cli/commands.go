@@ -6,8 +6,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/datapointchris/todoui/internal/backend"
-	"github.com/datapointchris/todoui/internal/model"
+	"github.com/datapointchris/todoui/backend"
+	"github.com/datapointchris/todoui/model"
 )
 
 // commands takes a pointer to the Backend interface so that commands can be

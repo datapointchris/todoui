@@ -1,8 +1,8 @@
 package sync
 
 import (
-	"github.com/datapointchris/todoui/internal/backend"
-	"github.com/datapointchris/todoui/internal/model"
+	"github.com/datapointchris/todoui/backend"
+	"github.com/datapointchris/todoui/model"
 )
 
 // SyncBackend wraps LocalBackend and queues sync operations after mutations.

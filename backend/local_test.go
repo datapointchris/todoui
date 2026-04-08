@@ -3,8 +3,8 @@ package backend
 import (
 	"testing"
 
-	"github.com/datapointchris/todoui/internal/db"
-	"github.com/datapointchris/todoui/internal/model"
+	"github.com/datapointchris/todoui/db"
+	"github.com/datapointchris/todoui/model"
 )
 
 func newTestBackend(t *testing.T) *LocalBackend {
