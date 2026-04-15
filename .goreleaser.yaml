@@ -1,11 +1,11 @@
 version: 2
 
 builds:
-  - main: ./cmd/todoui
+  - main: .
     binary: todoui
     ldflags:
       - -s -w
-      - -X github.com/datapointchris/todoui/internal/cli.version={{ .Tag }}
+      - -X github.com/datapointchris/todoui/cli.version={{ .Tag }}
     env:
       - CGO_ENABLED=0
     goos:
