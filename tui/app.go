@@ -29,16 +29,18 @@ type App struct {
 	taskCounts         map[string][2]int // item ID → [completed, total]
 	itemTasks          map[string][]model.ProjectItemTask
 
-	// Task focus in item pane
-	itemTaskFocused bool
-	itemTaskCursor  int
-	itemAddingTask  bool
+	// Unified item-pane cursor. The pane shows items and their sub-tasks
+	// as one scrollable list; m.rows is the navigable view of that list
+	// and m.rowCursor indexes into it. Task rows carry their owning
+	// item's index, so item-scoped actions still have a clear target.
+	rows           []paneRow
+	itemAddingTask bool
 
 	activePane    pane
 	projectCursor int
-	itemCursor    int
+	rowCursor     int
 	projectScroll int // viewport scroll offset for projects
-	itemScroll    int // viewport scroll offset for items
+	rowScroll     int // viewport scroll offset for item pane rows
 
 	width  int
 	height int
@@ -57,9 +59,11 @@ type App struct {
 	detailBlockers        []model.ProjectItem
 	detailBlockerProjects map[string][]string
 	detailTasks           []model.ProjectItemTask
-	detailTaskCursor      int
-	detailTaskFocused     bool // true when navigating in the task list
-	addingTask            bool // true when typing a new task title
+	// detailTaskCursor is the unified detail-view cursor:
+	//   -1 = cursor is on the item (its fields/meta header)
+	//    0..N-1 = cursor is on that task
+	detailTaskCursor int
+	addingTask       bool // true when typing a new task title
 
 	// Project detail view
 	projectDetail *model.ProjectWithItemCount
@@ -72,8 +76,10 @@ type App struct {
 	searchCursor  int
 	searchFocused bool // true = typing in input, false = browsing results
 
-	// Move/reorder
-	moveOrigPos int
+	// Move/reorder — the item-space index of the item being moved.
+	// Maintained independently of rowCursor since move mode only
+	// operates on items.
+	moveItemPos int
 
 	// Dependency linking
 	depItems     []model.ProjectItem // flat list of selectable items (filtered view)
@@ -802,14 +808,14 @@ func (m *App) toggleProjectSelection() (tea.Model, tea.Cmd) {
 		if len(m.selectedProjects) == len(m.projects) {
 			// All selected → deselect all
 			m.selectedProjects = nil
-			m.itemCursor = 0
+			m.rowCursor = 0
 			return m, fetchAllItemsCmd(m.backend, m.projects, m.filter)
 		}
 		// Select all
 		for _, p := range m.projects {
 			m.selectedProjects[p.ID] = true
 		}
-		m.itemCursor = 0
+		m.rowCursor = 0
 		cmd := m.fetchItems()
 		return m, cmd
 	}
@@ -825,7 +831,7 @@ func (m *App) toggleProjectSelection() (tea.Model, tea.Cmd) {
 		m.selectedProjects[p.ID] = true
 	}
 
-	m.itemCursor = 0
+	m.rowCursor = 0
 	cmd := m.fetchItems()
 	return m, cmd
 }
@@ -871,6 +877,8 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 		m.items = nil
+		m.rows = nil
+		m.rowCursor = 0
 		return m, nil
 
 	case allItemsMsg:
@@ -882,9 +890,7 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.hasIncompleteTasks = msg.hasIncompleteTasks
 		m.taskCounts = msg.taskCounts
 		m.itemTasks = msg.itemTasks
-		if m.itemCursor >= len(m.items) {
-			m.itemCursor = max(0, len(m.items)-1)
-		}
+		m.rebuildRows()
 		return m, nil
 
 	case itemsMsg:
@@ -895,16 +901,15 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.hasIncompleteTasks = msg.hasIncompleteTasks
 		m.taskCounts = msg.taskCounts
 		m.itemTasks = msg.itemTasks
+		m.rebuildRows()
 		if m.pendingItemID != "" {
 			for i, item := range m.items {
 				if item.ID == m.pendingItemID {
-					m.itemCursor = i
+					m.rowCursor = m.firstRowForItem(i)
 					break
 				}
 			}
 			m.pendingItemID = ""
-		} else if m.itemCursor >= len(m.items) {
-			m.itemCursor = max(0, len(m.items)-1)
 		}
 		return m, nil
 
@@ -961,20 +966,31 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(fetchProjectsCmd(m.backend), flashCmd)
 
 	case itemDetailMsg:
+		// Preserve the cursor when the overlay is already open (so
+		// toggling/deleting a task doesn't snap focus back to the item
+		// header). Only reset when entering the overlay fresh.
+		opening := m.appMode != modeItemDetail
 		m.itemDetail = msg.detail
 		m.detailBlockers = msg.blockers
 		m.detailBlockerProjects = msg.projectNames
 		m.detailTasks = msg.tasks
-		m.detailTaskCursor = 0
-		m.detailTaskFocused = false
-		m.addingTask = false
+		if opening {
+			m.detailTaskCursor = -1 // start on the item; tasks are >= 0
+			m.addingTask = false
+		} else if m.detailTaskCursor >= len(m.detailTasks) {
+			// Tasks shortened (e.g. delete) — clamp so we don't index
+			// past the end. Falling back to the item header is safe.
+			m.detailTaskCursor = len(m.detailTasks) - 1
+			if m.detailTaskCursor < -1 {
+				m.detailTaskCursor = -1
+			}
+		}
 		m.appMode = modeItemDetail
 		return m, nil
 
 	case itemProjectsMsg:
-		if len(m.items) > 0 && m.itemCursor < len(m.items) {
-			item := m.items[m.itemCursor]
-			m.picker = newPickerForManage(m.projects, msg, item)
+		if item := m.currentItem(); item != nil {
+			m.picker = newPickerForManage(m.projects, msg, *item)
 			m.appMode = modeProjectPicker
 		}
 		return m, nil
@@ -1130,7 +1146,8 @@ func (m *App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *App) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// Adding a task in item pane
+	// Adding a task in item pane — target item is the owning item of the
+	// row the user pressed `t` on (works whether on item or task row).
 	if m.itemAddingTask {
 		switch msg.String() {
 		case "enter":
@@ -1140,7 +1157,10 @@ func (m *App) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if title == "" {
 				return m, nil
 			}
-			item := m.items[m.itemCursor]
+			item := m.currentItem()
+			if item == nil {
+				return m, nil
+			}
 			return m, createTaskCmd(m.backend, item.ID, title)
 		case "esc":
 			m.itemAddingTask = false
@@ -1153,46 +1173,7 @@ func (m *App) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// Task list focused in item pane
-	if m.itemTaskFocused {
-		item := m.items[m.itemCursor]
-		tasks := m.itemTasks[item.ID]
-		switch msg.String() {
-		case "j", "down":
-			if m.itemTaskCursor < len(tasks)-1 {
-				m.itemTaskCursor++
-			}
-			return m, nil
-		case "k", "up":
-			if m.itemTaskCursor > 0 {
-				m.itemTaskCursor--
-			}
-			return m, nil
-		case " ":
-			if len(tasks) > 0 {
-				return m, toggleTaskCmd(m.backend, item.ID, tasks[m.itemTaskCursor])
-			}
-			return m, nil
-		case "d":
-			if len(tasks) > 0 {
-				task := tasks[m.itemTaskCursor]
-				if m.itemTaskCursor >= len(tasks)-1 && m.itemTaskCursor > 0 {
-					m.itemTaskCursor--
-				}
-				return m, deleteTaskCmd(m.backend, item.ID, task.ID)
-			}
-			return m, nil
-		case "t":
-			m.itemAddingTask = true
-			m.titleInput.SetValue("")
-			m.titleInput.Placeholder = "New task..."
-			return m, m.titleInput.Focus()
-		case "esc", "tab":
-			m.itemTaskFocused = false
-			return m, nil
-		}
-		return m, nil
-	}
+	row := m.currentRow() // nil when item pane is empty
 
 	switch msg.String() {
 	case "q":
@@ -1201,7 +1182,7 @@ func (m *App) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "esc":
 		if len(m.selectedProjects) > 0 {
 			m.selectedProjects = nil
-			m.itemCursor = 0
+			m.rowCursor = 0
 			cmd := m.fetchItems()
 			return m, cmd
 		}
@@ -1223,18 +1204,30 @@ func (m *App) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		cmd := m.cursorUp()
 		return m, cmd
 
+	case "J":
+		if m.activePane == itemPane {
+			m.rowCursor = m.nextItemRow(m.rowCursor, +1)
+		}
+		return m, nil
+
+	case "K":
+		if m.activePane == itemPane {
+			m.rowCursor = m.nextItemRow(m.rowCursor, -1)
+		}
+		return m, nil
+
 	case "g":
 		if m.activePane == projectPane {
 			hasSelections := len(m.selectedProjects) > 0
 			if !m.showingAll {
 				m.showingAll = true
 				if !hasSelections {
-					m.itemCursor = 0
+					m.rowCursor = 0
 					return m, fetchAllItemsCmd(m.backend, m.projects, m.filter)
 				}
 			}
 		} else {
-			m.itemCursor = 0
+			m.rowCursor = 0
 		}
 		return m, nil
 
@@ -1251,13 +1244,13 @@ func (m *App) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				}
 				m.projectCursor = last
 				if !hasSelections {
-					m.itemCursor = 0
+					m.rowCursor = 0
 					return m, fetchItemsCmd(m.backend, m.projects[last].ID, m.filter)
 				}
 			}
 		} else {
-			if last := len(m.items) - 1; last >= 0 {
-				m.itemCursor = last
+			if last := len(m.rows) - 1; last >= 0 {
+				m.rowCursor = last
 			}
 		}
 		return m, nil
@@ -1279,13 +1272,13 @@ func (m *App) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.projectCursor = min(m.projectCursor+half, max(0, len(m.projects)-1))
 			}
 			if !hasSelections {
-				m.itemCursor = 0
+				m.rowCursor = 0
 				if len(m.projects) > 0 {
 					return m, fetchItemsCmd(m.backend, m.projects[m.projectCursor].ID, m.filter)
 				}
 			}
 		} else {
-			m.itemCursor = min(m.itemCursor+half, max(0, len(m.items)-1))
+			m.rowCursor = min(m.rowCursor+half, max(0, len(m.rows)-1))
 		}
 		return m, nil
 
@@ -1303,20 +1296,20 @@ func (m *App) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if newCursor < 0 {
 				m.showingAll = true
 				if !hasSelections {
-					m.itemCursor = 0
+					m.rowCursor = 0
 					return m, fetchAllItemsCmd(m.backend, m.projects, m.filter)
 				}
 				return m, nil
 			}
 			m.projectCursor = newCursor
 			if !hasSelections {
-				m.itemCursor = 0
+				m.rowCursor = 0
 				if len(m.projects) > 0 {
 					return m, fetchItemsCmd(m.backend, m.projects[m.projectCursor].ID, m.filter)
 				}
 			}
 		} else {
-			m.itemCursor = max(m.itemCursor-half, 0)
+			m.rowCursor = max(m.rowCursor-half, 0)
 		}
 		return m, nil
 
@@ -1326,10 +1319,11 @@ func (m *App) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, fetchProjectDetailCmd(m.backend, m.projects[m.projectCursor].ID)
 			}
 		}
-		if m.activePane == itemPane && len(m.items) > 0 {
-			item := m.items[m.itemCursor]
+		if m.activePane == itemPane && row != nil && row.kind == rowItem {
+			item := m.currentItem()
 			return m, fetchItemDetailCmd(m.backend, item.ID, m.blockedSet[item.ID])
 		}
+		// Task row: enter is inert — users press K to jump to the item first.
 		return m, nil
 
 	// --- Actions ---
@@ -1369,30 +1363,51 @@ func (m *App) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.activePane == projectPane {
 			return m.toggleProjectSelection()
 		}
-		if m.activePane == itemPane && len(m.items) > 0 {
-			item := m.items[m.itemCursor]
-			if !item.Completed && m.hasIncompleteTasks[item.ID] {
-				cmd := m.flash("Cannot complete: item has incomplete tasks")
-				return m, cmd
+		if m.activePane != itemPane || row == nil {
+			return m, nil
+		}
+		if row.kind == rowTask {
+			tasks := m.itemTasks[m.items[row.itemIdx].ID]
+			return m, toggleTaskCmd(m.backend, m.items[row.itemIdx].ID, tasks[row.taskIdx])
+		}
+		item := m.currentItem()
+		if !item.Completed && m.hasIncompleteTasks[item.ID] {
+			flashCmd := m.flash("Cannot complete: item has incomplete tasks")
+			return m, flashCmd
+		}
+		if m.blockedSet[item.ID] && !item.Completed {
+			flashCmd := m.flash("Cannot complete: item has unresolved blockers")
+			return m, flashCmd
+		}
+		toggled := !item.Completed
+		var flashCmd tea.Cmd
+		if toggled {
+			flashCmd = m.flash("Marked done")
+		} else {
+			flashCmd = m.flash("Marked incomplete")
+		}
+		return m, tea.Batch(updateItemCmd(m.backend, item.ID, model.UpdateProjectItem{Completed: &toggled}), flashCmd)
+
+	case "d":
+		if m.activePane == itemPane && row != nil && row.kind == rowTask {
+			tasks := m.itemTasks[m.items[row.itemIdx].ID]
+			task := tasks[row.taskIdx]
+			// If this was the last row, nudge the cursor up so we don't
+			// end up past the end after the row list rebuilds.
+			if m.rowCursor >= len(m.rows)-1 && m.rowCursor > 0 {
+				m.rowCursor--
 			}
-			if m.blockedSet[item.ID] && !item.Completed {
-				cmd := m.flash("Cannot complete: item has unresolved blockers")
-				return m, cmd
-			}
-			toggled := !item.Completed
-			var flashCmd tea.Cmd
-			if toggled {
-				flashCmd = m.flash("Marked done")
-			} else {
-				flashCmd = m.flash("Marked incomplete")
-			}
-			return m, tea.Batch(updateItemCmd(m.backend, item.ID, model.UpdateProjectItem{Completed: &toggled}), flashCmd)
+			return m, deleteTaskCmd(m.backend, m.items[row.itemIdx].ID, task.ID)
 		}
 		return m, nil
 
 	case "x":
-		if m.activePane == itemPane && len(m.items) > 0 {
-			item := m.items[m.itemCursor]
+		if m.activePane == itemPane && row != nil {
+			if row.kind == rowTask {
+				flashCmd := m.flash("Archive is only for items")
+				return m, flashCmd
+			}
+			item := m.currentItem()
 			archived := true
 			flashCmd := m.flash("Archived")
 			return m, tea.Batch(updateItemCmd(m.backend, item.ID, model.UpdateProjectItem{Archived: &archived}), flashCmd)
@@ -1400,8 +1415,12 @@ func (m *App) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "e":
-		if m.activePane == itemPane && len(m.items) > 0 {
-			item := m.items[m.itemCursor]
+		if m.activePane == itemPane && row != nil {
+			if row.kind == rowTask {
+				flashCmd := m.flash("Edit is only for items")
+				return m, flashCmd
+			}
+			item := m.currentItem()
 			m.titleInput.SetValue(item.Title)
 			m.titleInput.Placeholder = ""
 			cmd := m.titleInput.Focus()
@@ -1412,8 +1431,12 @@ func (m *App) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "n":
-		if m.activePane == itemPane && len(m.items) > 0 {
-			item := m.items[m.itemCursor]
+		if m.activePane == itemPane && row != nil {
+			if row.kind == rowTask {
+				flashCmd := m.flash("Notes are only for items")
+				return m, flashCmd
+			}
+			item := m.currentItem()
 			notes := ""
 			if item.Notes != nil {
 				notes = *item.Notes
@@ -1427,22 +1450,19 @@ func (m *App) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "p":
-		if m.activePane == itemPane && len(m.items) > 0 {
-			item := m.items[m.itemCursor]
+		if m.activePane == itemPane && row != nil {
+			if row.kind == rowTask {
+				flashCmd := m.flash("Project membership is only for items")
+				return m, flashCmd
+			}
+			item := m.currentItem()
 			m.returnMode = modeNormal
 			return m, fetchItemProjectsCmd(m.backend, item.ID)
 		}
 		return m, nil
 
 	case "t":
-		if m.activePane == itemPane && len(m.items) > 0 {
-			item := m.items[m.itemCursor]
-			if tasks, ok := m.itemTasks[item.ID]; ok && len(tasks) > 0 {
-				m.itemTaskFocused = true
-				m.itemTaskCursor = 0
-				return m, nil
-			}
-			// No tasks yet — go straight to adding one
+		if m.activePane == itemPane && row != nil {
 			m.itemAddingTask = true
 			m.titleInput.SetValue("")
 			m.titleInput.Placeholder = "New task..."
@@ -1503,15 +1523,25 @@ func (m *App) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			cmd := m.flash("Reorder not available in multi-project view")
 			return m, cmd
 		}
-		if m.activePane == itemPane && len(m.items) > 1 {
-			m.moveOrigPos = m.itemCursor
-			m.appMode = modeMove
+		if m.activePane == itemPane && row != nil {
+			if row.kind == rowTask {
+				flashCmd := m.flash("Reorder is only for items")
+				return m, flashCmd
+			}
+			if len(m.items) > 1 {
+				m.moveItemPos = row.itemIdx
+				m.appMode = modeMove
+			}
 		}
 		return m, nil
 
 	case "b":
-		if m.activePane == itemPane && len(m.items) > 0 {
-			item := m.items[m.itemCursor]
+		if m.activePane == itemPane && row != nil {
+			if row.kind == rowTask {
+				flashCmd := m.flash("Dependency linking is only for items")
+				return m, flashCmd
+			}
+			item := m.currentItem()
 			m.depItemID = item.ID
 			m.depItemName = item.Title
 			return m, fetchDepCandidatesCmd(m.backend, m.projects)
@@ -1519,8 +1549,12 @@ func (m *App) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "B":
-		if m.activePane == itemPane && len(m.items) > 0 {
-			item := m.items[m.itemCursor]
+		if m.activePane == itemPane && row != nil {
+			if row.kind == rowTask {
+				flashCmd := m.flash("Dependency unlinking is only for items")
+				return m, flashCmd
+			}
+			item := m.currentItem()
 			m.depItemID = item.ID
 			m.depItemName = item.Title
 			return m, fetchDepBlockersCmd(m.backend, item.ID)
@@ -1568,8 +1602,17 @@ func (m *App) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case modeEditTitle:
 			m.appMode = m.returnMode
 			m.titleInput.Blur()
-			item := m.items[m.itemCursor]
-			return m, updateItemCmd(m.backend, item.ID, model.UpdateProjectItem{Title: &value})
+			// Edit can be entered from either the main pane (currentItem)
+			// or the detail overlay (itemDetail).
+			var itemID string
+			if m.returnMode == modeItemDetail && m.itemDetail != nil {
+				itemID = m.itemDetail.ID
+			} else if item := m.currentItem(); item != nil {
+				itemID = item.ID
+			} else {
+				return m, nil
+			}
+			return m, updateItemCmd(m.backend, itemID, model.UpdateProjectItem{Title: &value})
 
 		case modeEditProjectName:
 			m.appMode = m.returnMode
@@ -1654,7 +1697,9 @@ func (m *App) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Adding a new task — route to text input
+	// Adding a new task — route to text input. Applies regardless of
+	// where the detail cursor is, since `t` always creates under the
+	// overlay's single item.
 	if m.addingTask {
 		switch msg.String() {
 		case "enter":
@@ -1676,39 +1721,10 @@ func (m *App) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// Task list focused — navigate and act on tasks
-	if m.detailTaskFocused && len(m.detailTasks) > 0 {
-		switch msg.String() {
-		case "j", "down":
-			if m.detailTaskCursor < len(m.detailTasks)-1 {
-				m.detailTaskCursor++
-			}
-			return m, nil
-		case "k", "up":
-			if m.detailTaskCursor > 0 {
-				m.detailTaskCursor--
-			}
-			return m, nil
-		case " ":
-			task := m.detailTasks[m.detailTaskCursor]
-			return m, toggleTaskCmd(m.backend, m.itemDetail.ID, task)
-		case "d":
-			task := m.detailTasks[m.detailTaskCursor]
-			if m.detailTaskCursor >= len(m.detailTasks)-1 && m.detailTaskCursor > 0 {
-				m.detailTaskCursor--
-			}
-			return m, deleteTaskCmd(m.backend, m.itemDetail.ID, task.ID)
-		case "t":
-			m.addingTask = true
-			m.titleInput.SetValue("")
-			m.titleInput.Placeholder = "New task..."
-			return m, m.titleInput.Focus()
-		case "esc", "tab":
-			m.detailTaskFocused = false
-			return m, nil
-		}
-		return m, nil
-	}
+	// detailTaskCursor encodes position:
+	//   -1 = on the item
+	//    0..len(detailTasks)-1 = on that task
+	onTask := m.detailTaskCursor >= 0 && m.detailTaskCursor < len(m.detailTasks)
 
 	switch msg.String() {
 	case "esc", "q":
@@ -1718,17 +1734,44 @@ func (m *App) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.detailTasks = nil
 		return m, nil
 
+	case "j", "down":
+		// Walk -1 → 0 → 1 → … → len-1 (clamped).
+		if m.detailTaskCursor < len(m.detailTasks)-1 {
+			m.detailTaskCursor++
+		}
+		return m, nil
+
+	case "k", "up":
+		// Walk toward the item header, clamped at -1.
+		if m.detailTaskCursor > -1 {
+			m.detailTaskCursor--
+		}
+		return m, nil
+
+	case "tab":
+		// Toggle between item zone and first task; a quick keyboard jump
+		// without having to j/k through any tasks in between.
+		if onTask {
+			m.detailTaskCursor = -1
+		} else if len(m.detailTasks) > 0 {
+			m.detailTaskCursor = 0
+		}
+		return m, nil
+
 	case " ":
-		// Check for incomplete tasks
+		if onTask {
+			return m, toggleTaskCmd(m.backend, m.itemDetail.ID, m.detailTasks[m.detailTaskCursor])
+		}
+		// Item-level: same incomplete-task/blocked guards as main pane.
 		for _, task := range m.detailTasks {
 			if !task.Completed {
-				cmd := m.flash("Cannot complete: item has incomplete tasks")
-				return m, cmd
+				flashCmd := m.flash("Cannot complete: item has incomplete tasks")
+				return m, flashCmd
 			}
 		}
 		if m.blockedSet[m.itemDetail.ID] && !m.itemDetail.Completed {
-			cmd := m.flash("Cannot complete: item has unresolved blockers")
-			return m, cmd
+			flashCmd := m.flash("Cannot complete: item has unresolved blockers")
+			return m, flashCmd
 		}
 		toggled := !m.itemDetail.Completed
 		var flashCmd tea.Cmd
@@ -1739,7 +1782,30 @@ func (m *App) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(updateItemCmd(m.backend, m.itemDetail.ID, model.UpdateProjectItem{Completed: &toggled}), flashCmd)
 
+	case "d":
+		if onTask {
+			task := m.detailTasks[m.detailTaskCursor]
+			// Nudge cursor up if we're deleting the last task row so the
+			// post-refresh cursor doesn't land past the end.
+			if m.detailTaskCursor >= len(m.detailTasks)-1 && m.detailTaskCursor > 0 {
+				m.detailTaskCursor--
+			} else if m.detailTaskCursor >= len(m.detailTasks)-1 {
+				// Deleting the only task — return to the item.
+				m.detailTaskCursor = -1
+			}
+			return m, deleteTaskCmd(m.backend, m.itemDetail.ID, task.ID)
+		}
+		return m, nil
+
+	case "enter":
+		// Inert on task rows (matches main pane).
+		return m, nil
+
 	case "x":
+		if onTask {
+			flashCmd := m.flash("Archive is only for items")
+			return m, flashCmd
+		}
 		archived := true
 		id := m.itemDetail.ID
 		flashCmd := m.flash("Archived")
@@ -1748,6 +1814,10 @@ func (m *App) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(updateItemCmd(m.backend, id, model.UpdateProjectItem{Archived: &archived}), flashCmd)
 
 	case "e":
+		if onTask {
+			flashCmd := m.flash("Edit is only for items")
+			return m, flashCmd
+		}
 		m.titleInput.SetValue(m.itemDetail.Title)
 		m.titleInput.Placeholder = ""
 		cmd := m.titleInput.Focus()
@@ -1756,6 +1826,10 @@ func (m *App) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case "n":
+		if onTask {
+			flashCmd := m.flash("Notes are only for items")
+			return m, flashCmd
+		}
 		notes := ""
 		if m.itemDetail.Notes != nil {
 			notes = *m.itemDetail.Notes
@@ -1767,37 +1841,38 @@ func (m *App) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case "p":
+		if onTask {
+			flashCmd := m.flash("Project membership is only for items")
+			return m, flashCmd
+		}
 		m.returnMode = modeItemDetail
 		return m, fetchItemProjectsCmd(m.backend, m.itemDetail.ID)
 
 	case "b":
+		if onTask {
+			flashCmd := m.flash("Dependency linking is only for items")
+			return m, flashCmd
+		}
 		m.depItemID = m.itemDetail.ID
 		m.depItemName = m.itemDetail.Title
 		return m, fetchDepCandidatesCmd(m.backend, m.projects)
 
 	case "B":
+		if onTask {
+			flashCmd := m.flash("Dependency unlinking is only for items")
+			return m, flashCmd
+		}
 		m.depItemID = m.itemDetail.ID
 		m.depItemName = m.itemDetail.Title
 		return m, fetchDepBlockersCmd(m.backend, m.itemDetail.ID)
 
 	case "t":
-		if len(m.detailTasks) > 0 {
-			m.detailTaskFocused = true
-			m.detailTaskCursor = 0
-			return m, nil
-		}
-		// No tasks yet — go straight to adding one
+		// Always creates a task under the overlay's item, regardless of
+		// whether the cursor is on the item or on an existing task.
 		m.addingTask = true
 		m.titleInput.SetValue("")
 		m.titleInput.Placeholder = "New task..."
 		return m, m.titleInput.Focus()
-
-	case "tab":
-		if len(m.detailTasks) > 0 {
-			m.detailTaskFocused = true
-			m.detailTaskCursor = 0
-		}
-		return m, nil
 
 	case "u":
 		return m, undoCmd(m.backend)
@@ -1817,9 +1892,13 @@ func (m *App) handleNotesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, updateProjectCmd(m.backend, m.projectDetail.ID, model.UpdateProject{Description: &value})
 		}
 
-		itemID := m.items[m.itemCursor].ID
+		var itemID string
 		if m.itemDetail != nil {
 			itemID = m.itemDetail.ID
+		} else if item := m.currentItem(); item != nil {
+			itemID = item.ID
+		} else {
+			return m, nil
 		}
 		return m, updateItemCmd(m.backend, itemID, model.UpdateProjectItem{Notes: &value})
 
@@ -1950,40 +2029,51 @@ func (m *App) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *App) handleMoveKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// moveItemPos is the item-space index of the item being moved.
+	// After every swap, rebuild m.rows and pin m.rowCursor to that
+	// item's new header row so the visible cursor follows the item.
 	switch msg.String() {
 	case "j", "down":
-		if m.itemCursor < len(m.items)-1 {
-			m.items[m.itemCursor], m.items[m.itemCursor+1] = m.items[m.itemCursor+1], m.items[m.itemCursor]
-			m.itemCursor++
+		if m.moveItemPos < len(m.items)-1 {
+			m.items[m.moveItemPos], m.items[m.moveItemPos+1] = m.items[m.moveItemPos+1], m.items[m.moveItemPos]
+			m.moveItemPos++
+			m.rebuildRows()
+			m.rowCursor = m.firstRowForItem(m.moveItemPos)
 		}
 		return m, nil
 
 	case "k", "up":
-		if m.itemCursor > 0 {
-			m.items[m.itemCursor], m.items[m.itemCursor-1] = m.items[m.itemCursor-1], m.items[m.itemCursor]
-			m.itemCursor--
+		if m.moveItemPos > 0 {
+			m.items[m.moveItemPos], m.items[m.moveItemPos-1] = m.items[m.moveItemPos-1], m.items[m.moveItemPos]
+			m.moveItemPos--
+			m.rebuildRows()
+			m.rowCursor = m.firstRowForItem(m.moveItemPos)
 		}
 		return m, nil
 
 	case "g":
-		for m.itemCursor > 0 {
-			m.items[m.itemCursor], m.items[m.itemCursor-1] = m.items[m.itemCursor-1], m.items[m.itemCursor]
-			m.itemCursor--
+		for m.moveItemPos > 0 {
+			m.items[m.moveItemPos], m.items[m.moveItemPos-1] = m.items[m.moveItemPos-1], m.items[m.moveItemPos]
+			m.moveItemPos--
 		}
+		m.rebuildRows()
+		m.rowCursor = m.firstRowForItem(m.moveItemPos)
 		return m, nil
 
 	case "G":
-		for m.itemCursor < len(m.items)-1 {
-			m.items[m.itemCursor], m.items[m.itemCursor+1] = m.items[m.itemCursor+1], m.items[m.itemCursor]
-			m.itemCursor++
+		for m.moveItemPos < len(m.items)-1 {
+			m.items[m.moveItemPos], m.items[m.moveItemPos+1] = m.items[m.moveItemPos+1], m.items[m.moveItemPos]
+			m.moveItemPos++
 		}
+		m.rebuildRows()
+		m.rowCursor = m.firstRowForItem(m.moveItemPos)
 		return m, nil
 
 	case "enter":
 		m.appMode = modeNormal
-		item := m.items[m.itemCursor]
+		item := m.items[m.moveItemPos]
 		projectID := m.projects[m.projectCursor].ID
-		return m, reorderItemCmd(m.backend, item.ID, projectID, m.itemCursor)
+		return m, reorderItemCmd(m.backend, item.ID, projectID, m.moveItemPos)
 
 	case "esc":
 		m.appMode = modeNormal
@@ -2077,6 +2167,68 @@ func (m *App) handleDepLinkKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// --- Row model helpers ---
+
+// rebuildRows regenerates m.rows from m.items and m.itemTasks. Call this
+// whenever either changes. Rows are: one item row per item, followed by
+// one task row per task belonging to that item (in task order).
+func (m *App) rebuildRows() {
+	rows := make([]paneRow, 0, len(m.items))
+	for i, item := range m.items {
+		rows = append(rows, paneRow{kind: rowItem, itemIdx: i, taskIdx: -1})
+		for ti := range m.itemTasks[item.ID] {
+			rows = append(rows, paneRow{kind: rowTask, itemIdx: i, taskIdx: ti})
+		}
+	}
+	m.rows = rows
+	if m.rowCursor >= len(m.rows) {
+		m.rowCursor = max(0, len(m.rows)-1)
+	}
+}
+
+// currentRow returns the row under the cursor, or nil if the item pane
+// is empty.
+func (m *App) currentRow() *paneRow {
+	if m.rowCursor < 0 || m.rowCursor >= len(m.rows) {
+		return nil
+	}
+	return &m.rows[m.rowCursor]
+}
+
+// currentItem returns the item owned by the row under the cursor — for
+// a task row this is the task's parent item. Returns nil when the pane
+// is empty.
+func (m *App) currentItem() *model.ProjectItemInProject {
+	row := m.currentRow()
+	if row == nil {
+		return nil
+	}
+	return &m.items[row.itemIdx]
+}
+
+// firstRowForItem returns the row index of the item row for the item at
+// itemIdx. Returns 0 when no match (shouldn't happen for a valid item).
+func (m *App) firstRowForItem(itemIdx int) int {
+	for i, r := range m.rows {
+		if r.kind == rowItem && r.itemIdx == itemIdx {
+			return i
+		}
+	}
+	return 0
+}
+
+// nextItemRow returns the row index of the next (dir == +1) or previous
+// (dir == -1) item row relative to fromRow. When no such row exists, it
+// returns fromRow unchanged — J/K stays put at list ends.
+func (m *App) nextItemRow(fromRow, dir int) int {
+	for i := fromRow + dir; i >= 0 && i < len(m.rows); i += dir {
+		if m.rows[i].kind == rowItem {
+			return i
+		}
+	}
+	return fromRow
+}
+
 // --- Cursor movement ---
 
 func (m *App) cursorDown() tea.Cmd {
@@ -2089,19 +2241,19 @@ func (m *App) cursorDown() tea.Cmd {
 				m.projectCursor = 0
 				if !hasSelections {
 					m.allGroups = nil
-					m.itemCursor = 0
+					m.rowCursor = 0
 					return fetchItemsCmd(m.backend, m.projects[0].ID, m.filter)
 				}
 			}
 		} else if m.projectCursor < len(m.projects)-1 {
 			m.projectCursor++
 			if !hasSelections {
-				m.itemCursor = 0
+				m.rowCursor = 0
 				return fetchItemsCmd(m.backend, m.projects[m.projectCursor].ID, m.filter)
 			}
 		}
-	} else if m.itemCursor < len(m.items)-1 {
-		m.itemCursor++
+	} else if m.rowCursor < len(m.rows)-1 {
+		m.rowCursor++
 	}
 	return nil
 }
@@ -2115,7 +2267,7 @@ func (m *App) cursorUp() tea.Cmd {
 		if m.projectCursor > 0 {
 			m.projectCursor--
 			if !hasSelections {
-				m.itemCursor = 0
+				m.rowCursor = 0
 				return fetchItemsCmd(m.backend, m.projects[m.projectCursor].ID, m.filter)
 			}
 			return nil
@@ -2123,11 +2275,11 @@ func (m *App) cursorUp() tea.Cmd {
 		// At first project, move up to All
 		m.showingAll = true
 		if !hasSelections {
-			m.itemCursor = 0
+			m.rowCursor = 0
 			return fetchAllItemsCmd(m.backend, m.projects, m.filter)
 		}
-	} else if m.itemCursor > 0 {
-		m.itemCursor--
+	} else if m.rowCursor > 0 {
+		m.rowCursor--
 	}
 	return nil
 }
@@ -2283,7 +2435,11 @@ func (m *App) renderDetailOverlay() string {
 	var lines []string
 	lines = append(lines, header)
 	lines = append(lines, "")
-	lines = append(lines, fmt.Sprintf("  %s    %s", d.Title, dimStyle.Render(status)))
+	itemPrefix := "  "
+	if m.detailTaskCursor == -1 {
+		itemPrefix = itemSelectedStyle.Render("> ")
+	}
+	lines = append(lines, fmt.Sprintf("%s%s    %s", itemPrefix, d.Title, dimStyle.Render(status)))
 	lines = append(lines, "")
 	lines = append(lines, dimStyle.Render(fmt.Sprintf("  Projects: %s", strings.Join(projectNames, ", "))))
 	lines = append(lines, dimStyle.Render(fmt.Sprintf("  Created: %s", d.CreatedAt.Format("Jan 2, 2006"))))
@@ -2342,7 +2498,7 @@ func (m *App) renderDetailOverlay() string {
 				title = taskCompletedStyle.Render(title)
 			}
 			line := fmt.Sprintf("%s %s", check, title)
-			if m.detailTaskFocused && i == m.detailTaskCursor {
+			if i == m.detailTaskCursor {
 				lines = append(lines, taskSelectedStyle.Render("> "+line))
 			} else {
 				lines = append(lines, taskNormalStyle.Render(line))
@@ -2355,13 +2511,14 @@ func (m *App) renderDetailOverlay() string {
 
 	lines = append(lines, "")
 	var hints string
+	onTask := m.detailTaskCursor >= 0 && m.detailTaskCursor < len(m.detailTasks)
 	switch {
-	case m.detailTaskFocused:
-		hints = "  [space]toggle  [t]add task  [d]elete  [Tab/Esc]back"
 	case m.addingTask:
 		hints = "  [Enter]create  [Esc]cancel"
+	case onTask:
+		hints = "  [space]toggle  [d]elete  [t]add task  [Tab]item  [j/k]navigate  [Esc]close"
 	default:
-		hints = "  [e]dit  [n]otes  [p]rojects  [t]asks  [b]lock  [B]unblock  [space]done  [x]archive  [Esc]close"
+		hints = "  [e]dit  [n]otes  [p]rojects  [t]ask  [b]lock  [B]unblock  [space]done  [x]archive  [Tab/j]tasks  [Esc]close"
 	}
 	lines = append(lines, dimStyle.Render(hints))
 
@@ -2428,8 +2585,7 @@ func (m *App) renderNotesOverlay() string {
 		title = "Edit Notes"
 		if m.itemDetail != nil {
 			subtitle = fmt.Sprintf("  Item: %s (%s)", m.itemDetail.Title, shortID(m.itemDetail.ID))
-		} else if len(m.items) > 0 && m.itemCursor < len(m.items) {
-			item := m.items[m.itemCursor]
+		} else if item := m.currentItem(); item != nil {
 			subtitle = fmt.Sprintf("  Item: %s (%s)", item.Title, shortID(item.ID))
 		}
 	}
@@ -2466,7 +2622,8 @@ func (m *App) renderHelpOverlay() string {
 	lines = append(lines, "")
 
 	nav := `  Navigation
-  j/k ↑/↓       Navigate items
+  j/k ↑/↓       Navigate rows (items & tasks)
+  J/K            Jump to next/prev item (skip tasks)
   g/G            Jump to top/bottom
   Ctrl+d/u       Half-page down/up
   h/l ←/→       Switch panes
@@ -2485,17 +2642,23 @@ func (m *App) renderHelpOverlay() string {
 		lines = append(lines, actions)
 	} else {
 		actions := `
-  Item Actions
+  On an item row
   space          Toggle done
   a              Add item
   A              Add item to multiple projects
   e              Edit title
   n              Edit notes
+  t              Add a task
   x              Archive item
   p              Manage project membership
   b              Link dependency (blocked by)
   B              Unlink dependency
-  m              Move/reorder item`
+  m              Move/reorder item
+
+  On a task row
+  space          Toggle task done
+  d              Delete task
+  t              Add a sibling task`
 		lines = append(lines, actions)
 	}
 
@@ -2844,64 +3007,78 @@ func (m *App) renderItemPane(width, height int) string {
 	}
 
 	viewHeight := height - 1 // subtract title
-	m.itemScroll = syncScroll(m.itemCursor, m.itemScroll, viewHeight)
+	m.rowScroll = syncScroll(m.rowCursor, m.rowScroll, viewHeight)
 
-	end := m.itemScroll + viewHeight
-	if end > len(m.items) {
-		end = len(m.items)
+	end := m.rowScroll + viewHeight
+	if end > len(m.rows) {
+		end = len(m.rows)
 	}
 
+	curRow := m.currentRow()
 	linesUsed := 0
-	for i := m.itemScroll; i < end; i++ {
+	for i := m.rowScroll; i < end; i++ {
+		if linesUsed >= viewHeight {
+			break
+		}
+		row := m.rows[i]
+		item := m.items[row.itemIdx]
+
+		switch row.kind {
+		case rowItem:
+			// Group headers live on item rows only.
+			if m.isGroupedView() {
+				if groupName := m.groupHeaderAt(row.itemIdx); groupName != "" {
+					if row.itemIdx > 0 && linesUsed < viewHeight {
+						lines = append(lines, "")
+						linesUsed++
+					}
+					if linesUsed < viewHeight {
+						header := groupHeaderStyle.Render(fmt.Sprintf("── %s ──", groupName))
+						lines = append(lines, header)
+						linesUsed++
+					}
+					if linesUsed >= viewHeight {
+						break
+					}
+				}
+			}
+			isMoving := m.appMode == modeMove && row.itemIdx == m.moveItemPos
+			lines = append(lines, m.renderItemLine(item, i == m.rowCursor, width, isMoving))
+			linesUsed++
+
+		case rowTask:
+			tasks := m.itemTasks[item.ID]
+			t := tasks[row.taskIdx]
+			check := "○"
+			title := t.Title
+			if t.Completed {
+				check = "✓"
+				title = taskCompletedStyle.Render(title)
+			}
+			taskLine := fmt.Sprintf("%s %s", check, title)
+			if i == m.rowCursor {
+				lines = append(lines, taskSelectedStyle.Render("> "+taskLine))
+			} else {
+				lines = append(lines, taskNormalStyle.Render(taskLine))
+			}
+			linesUsed++
+		}
+
+		// Emit per-item trailers (add-task input, blockers, notes) after
+		// the *last* row for this item. A row is the last of its item
+		// when the next row belongs to a different item or we're at the
+		// end of the rows slice.
+		lastRowOfItem := i == len(m.rows)-1 || m.rows[i+1].itemIdx != row.itemIdx
+		if !lastRowOfItem {
+			continue
+		}
 		if linesUsed >= viewHeight {
 			break
 		}
 
-		// In grouped views, insert project group headers with spacing between groups
-		if m.isGroupedView() {
-			if groupName := m.groupHeaderAt(i); groupName != "" {
-				if i > 0 && linesUsed < viewHeight {
-					lines = append(lines, "")
-					linesUsed++
-				}
-				header := groupHeaderStyle.Render(fmt.Sprintf("── %s ──", groupName))
-				lines = append(lines, header)
-				linesUsed++
-				if linesUsed >= viewHeight {
-					break
-				}
-			}
-		}
-
-		item := m.items[i]
-		isMoving := m.appMode == modeMove && i == m.itemCursor
-		line := m.renderItemLine(item, i == m.itemCursor, width, isMoving)
-		lines = append(lines, line)
-		linesUsed++
-
-		if tasks, ok := m.itemTasks[item.ID]; ok && len(tasks) > 0 && linesUsed < viewHeight {
-			for ti, t := range tasks {
-				if linesUsed >= viewHeight {
-					break
-				}
-				check := "○"
-				title := t.Title
-				if t.Completed {
-					check = "✓"
-					title = taskCompletedStyle.Render(title)
-				}
-				line := fmt.Sprintf("%s %s", check, title)
-				if m.itemTaskFocused && i == m.itemCursor && ti == m.itemTaskCursor {
-					lines = append(lines, taskSelectedStyle.Render("> "+line))
-				} else {
-					lines = append(lines, taskNormalStyle.Render(line))
-				}
-				linesUsed++
-			}
-			if m.itemAddingTask && i == m.itemCursor && linesUsed < viewHeight {
-				lines = append(lines, "     "+m.titleInput.View())
-				linesUsed++
-			}
+		if m.itemAddingTask && curRow != nil && curRow.itemIdx == row.itemIdx && linesUsed < viewHeight {
+			lines = append(lines, "     "+m.titleInput.View())
+			linesUsed++
 		}
 
 		if blockers, ok := m.itemBlockers[item.ID]; ok && len(blockers) > 0 {
@@ -2913,7 +3090,6 @@ func (m *App) renderItemPane(width, height int) string {
 				if linesUsed >= viewHeight {
 					break
 				}
-				// Show "Project: Title" if blocker is NOT in the current project
 				prefix := ""
 				if names, ok := m.itemProjectNames[b.ID]; ok {
 					inCurrent := false
@@ -2927,10 +3103,9 @@ func (m *App) renderItemPane(width, height int) string {
 						prefix = blockerProjectStyle.Render(names[0] + ": ")
 					}
 				}
-				blockerLine := blockerStyle.Render(
+				lines = append(lines, blockerStyle.Render(
 					fmt.Sprintf("└─ blocked by: %s%s (%s)", prefix, b.Title, shortID(b.ID)),
-				)
-				lines = append(lines, blockerLine)
+				))
 				linesUsed++
 			}
 		}
@@ -2968,8 +3143,8 @@ func (m *App) renderItemPane(width, height int) string {
 		}
 	}
 
-	if len(m.items) > viewHeight {
-		scrollInfo := dimStyle.Render(fmt.Sprintf(" %d/%d", m.itemCursor+1, len(m.items)))
+	if len(m.rows) > viewHeight {
+		scrollInfo := dimStyle.Render(fmt.Sprintf(" %d/%d", m.rowCursor+1, len(m.rows)))
 		lines = append(lines, scrollInfo)
 	}
 
@@ -3044,15 +3219,16 @@ func (m *App) statusBarHints() string {
 		return hints
 	case m.itemAddingTask:
 		return "[Enter]create task  [Esc]cancel"
-	case m.itemTaskFocused:
-		return "[space]toggle  [t]add task  [d]elete  [Tab/Esc]back"
-	default:
-		hints := "[Enter]detail [space]done [a]dd [x]archive [e]dit [n]otes [t]asks [b]lock [B]unblock [/]search [?]help"
-		if m.filter != filterNone {
-			hints += " [0]reset"
-		}
-		return hints
 	}
+	// Hints depend on whether the cursor is on an item or a task row.
+	if row := m.currentRow(); row != nil && row.kind == rowTask {
+		return "[space]toggle [d]elete [t]ask [J/K]next/prev item [/]search [?]help"
+	}
+	hints := "[Enter]detail [space]done [a]dd [x]archive [e]dit [n]otes [t]ask [J/K]item [m]ove [b]lock [B]unblock [/]search [?]help"
+	if m.filter != filterNone {
+		hints += " [0]reset"
+	}
+	return hints
 }
 
 func (m *App) renderStatusBar() string {

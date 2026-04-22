@@ -28,6 +28,25 @@ const (
 	modeEditProjectDesc         // multiline textarea for project description editing
 )
 
+// rowKind identifies what a navigable row in the item pane represents.
+// The item pane presents items and their sub-tasks as one unified list;
+// rowKind tells the renderer and key handlers how to treat each row.
+type rowKind int
+
+const (
+	rowItem rowKind = iota
+	rowTask
+)
+
+// paneRow is one navigable row in the item pane's unified cursor space.
+// itemIdx is always the owning item's index in m.items. taskIdx is the
+// task's index in m.itemTasks[item.ID] when kind == rowTask, else -1.
+type paneRow struct {
+	kind    rowKind
+	itemIdx int
+	taskIdx int
+}
+
 type pickerIntent int
 
 const (

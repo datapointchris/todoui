@@ -53,7 +53,8 @@ todoui projects <id> --remove work    # remove from project
 
 | Key | Action |
 | --- | ------ |
-| `j/k` | Navigate up/down |
+| `j/k` | Navigate up/down (walks items AND tasks as one list) |
+| `J/K` | Jump to next/prev item (skip tasks) |
 | `h/l` | Switch panes |
 | `Enter` | Detail view (item or project) |
 | **Project pane** | |
@@ -62,17 +63,21 @@ todoui projects <id> --remove work    # remove from project
 | `a` | Add project |
 | `e` | Edit project name (in detail) |
 | `d` | Edit project description (in detail) |
-| **Item pane** | |
+| **On an item row** | |
 | `space` | Toggle done/incomplete |
 | `a` | Add item to current project |
 | `A` | Add item to multiple projects |
 | `e` | Edit title |
 | `n` | Edit notes |
-| `t` | Tasks (focus task list or add first task) |
+| `t` | Add a sub-task |
 | `x` | Archive |
 | `m` | Reorder (move mode) |
 | `b/B` | Link/unlink dependency |
 | `p` | Manage project membership |
+| **On a task row** | |
+| `space` | Toggle task done |
+| `d` | Delete task |
+| `t` | Add a sibling task to the same item |
 | **Global** | |
 | `u` | Undo |
 | `/` | Search |
