@@ -19,7 +19,7 @@ Personal project organization tool. Local-first SQLite with optional background 
 ## Install
 
 ```bash
-go install github.com/datapointchris/todoui/cmd/todoui@latest
+go install github.com/datapointchris/todoui@latest
 ```
 
 Or build from source:
@@ -27,7 +27,7 @@ Or build from source:
 ```bash
 git clone https://github.com/datapointchris/todoui
 cd todoui
-go build -o todoui ./cmd/todoui
+go build -o todoui .
 ```
 
 ## Usage
