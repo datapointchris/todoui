@@ -21,6 +21,7 @@ const (
 	modeHelp                    // keybinding reference overlay
 	modeSearch                  // search text input + results
 	modeMove                    // grab item, j/k to reposition
+	modeMoveProject             // grab project, j/k to reposition
 	modeDepLink                 // pick item to add as dependency
 	modeDepUnlink               // pick existing dependency to remove
 	modeProjectDetail           // expanded project view (read-only with action keys)

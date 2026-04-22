@@ -61,6 +61,7 @@ todoui projects <id> --remove work    # remove from project
 | `space` | Toggle multi-select |
 | `Esc` | Clear selections |
 | `a` | Add project |
+| `m` | Reorder (move mode) |
 | `e` | Edit project name (in detail) |
 | `d` | Edit project description (in detail) |
 | **On an item row** | |

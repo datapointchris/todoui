@@ -117,6 +117,13 @@ func (b *LocalBackend) DeleteProject(id string) error {
 	return b.q.DeleteProject(b.ctx(), id)
 }
 
+func (b *LocalBackend) ReorderProject(projectID string, newPosition int) error {
+	return b.q.UpdateProjectPosition(b.ctx(), generated.UpdateProjectPositionParams{
+		ID:       projectID,
+		Position: int64(newPosition),
+	})
+}
+
 // --- Items ---
 
 func (b *LocalBackend) ListAllItems() ([]model.ProjectItem, error) {

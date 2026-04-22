@@ -1138,6 +1138,20 @@ func (q *Queries) UpdateProject(ctx context.Context, arg UpdateProjectParams) (P
 	return i, err
 }
 
+const updateProjectPosition = `-- name: UpdateProjectPosition :exec
+UPDATE projects SET position = ? WHERE id = ?
+`
+
+type UpdateProjectPositionParams struct {
+	Position int64
+	ID       string
+}
+
+func (q *Queries) UpdateProjectPosition(ctx context.Context, arg UpdateProjectPositionParams) error {
+	_, err := q.db.ExecContext(ctx, updateProjectPosition, arg.Position, arg.ID)
+	return err
+}
+
 const updateTask = `-- name: UpdateTask :one
 UPDATE project_item_tasks
 SET title = ?,

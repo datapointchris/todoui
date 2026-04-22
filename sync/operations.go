@@ -7,6 +7,7 @@ const (
 	OpCreateProject     OpType = "create_project"
 	OpUpdateProject     OpType = "update_project"
 	OpDeleteProject     OpType = "delete_project"
+	OpReorderProject    OpType = "reorder_project"
 	OpCreateItem        OpType = "create_item"
 	OpUpdateItem        OpType = "update_item"
 	OpDeleteItem        OpType = "delete_item"
@@ -24,7 +25,7 @@ const (
 // entityType returns the entity category for the pending_sync table.
 func (o OpType) entityType() string {
 	switch o {
-	case OpCreateProject, OpUpdateProject, OpDeleteProject:
+	case OpCreateProject, OpUpdateProject, OpDeleteProject, OpReorderProject:
 		return "project"
 	case OpCreateItem, OpUpdateItem, OpDeleteItem, OpReorderItem:
 		return "item"

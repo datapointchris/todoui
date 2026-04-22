@@ -81,6 +81,9 @@ type App struct {
 	// operates on items.
 	moveItemPos int
 
+	// Project move — index into m.projects of the project being moved.
+	moveProjectPos int
+
 	// Dependency linking
 	depItems     []model.ProjectItem // flat list of selectable items (filtered view)
 	depAllItems  []depGroup          // all items grouped by project (source of truth)
@@ -195,7 +198,8 @@ type (
 	undoResultMsg        string
 	itemProjectsMsg      []model.Project
 	membershipUpdatedMsg struct{}
-	reorderDoneMsg       struct{}
+	itemReorderedMsg     struct{}
+	projectReorderedMsg  struct{}
 	depLinkedMsg         struct{}
 	depUnlinkedMsg       struct{}
 )
@@ -714,7 +718,16 @@ func reorderItemCmd(b backend.Backend, itemID, projectID string, newPos int) tea
 		if err := b.ReorderItem(itemID, projectID, newPos); err != nil {
 			return errMsg{err}
 		}
-		return reorderDoneMsg{}
+		return itemReorderedMsg{}
+	}
+}
+
+func reorderProjectCmd(b backend.Backend, projectID string, newPos int) tea.Cmd {
+	return func() tea.Msg {
+		if err := b.ReorderProject(projectID, newPos); err != nil {
+			return errMsg{err}
+		}
+		return projectReorderedMsg{}
 	}
 }
 
@@ -1032,12 +1045,16 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case reorderDoneMsg:
+	case itemReorderedMsg:
 		flashCmd := m.flash("Item reordered")
 		if cmd := m.fetchItems(); cmd != nil {
 			return m, tea.Batch(cmd, flashCmd)
 		}
 		return m, flashCmd
+
+	case projectReorderedMsg:
+		flashCmd := m.flash("Project reordered")
+		return m, tea.Batch(fetchProjectsCmd(m.backend), flashCmd)
 
 	case depCandidatesMsg:
 		// Filter out the item itself from each group
@@ -1139,6 +1156,8 @@ func (m *App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleSearchKey(msg)
 	case modeMove:
 		return m.handleMoveKey(msg)
+	case modeMoveProject:
+		return m.handleMoveProjectKey(msg)
 	case modeDepLink, modeDepUnlink:
 		return m.handleDepLinkKey(msg)
 	}
@@ -1519,6 +1538,17 @@ func (m *App) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case "m":
+		if m.activePane == projectPane {
+			if m.showingAll {
+				flashCmd := m.flash("Reorder is only for real projects")
+				return m, flashCmd
+			}
+			if len(m.projects) > 1 {
+				m.moveProjectPos = m.projectCursor
+				m.appMode = modeMoveProject
+			}
+			return m, nil
+		}
 		if m.isGroupedView() {
 			cmd := m.flash("Reorder not available in multi-project view")
 			return m, cmd
@@ -2086,6 +2116,59 @@ func (m *App) handleMoveKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// handleMoveProjectKey mirrors handleMoveKey but operates on m.projects.
+// Each swap updates projectCursor so the highlighted project follows its
+// new position. Items are not refetched on swap (project reorder doesn't
+// change the current project's item list). On enter, the new position
+// is persisted via reorderProjectCmd. On esc, the project list is
+// refetched to revert any in-memory reordering.
+func (m *App) handleMoveProjectKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "j", "down":
+		if m.moveProjectPos < len(m.projects)-1 {
+			m.projects[m.moveProjectPos], m.projects[m.moveProjectPos+1] = m.projects[m.moveProjectPos+1], m.projects[m.moveProjectPos]
+			m.moveProjectPos++
+			m.projectCursor = m.moveProjectPos
+		}
+		return m, nil
+
+	case "k", "up":
+		if m.moveProjectPos > 0 {
+			m.projects[m.moveProjectPos], m.projects[m.moveProjectPos-1] = m.projects[m.moveProjectPos-1], m.projects[m.moveProjectPos]
+			m.moveProjectPos--
+			m.projectCursor = m.moveProjectPos
+		}
+		return m, nil
+
+	case "g":
+		for m.moveProjectPos > 0 {
+			m.projects[m.moveProjectPos], m.projects[m.moveProjectPos-1] = m.projects[m.moveProjectPos-1], m.projects[m.moveProjectPos]
+			m.moveProjectPos--
+		}
+		m.projectCursor = m.moveProjectPos
+		return m, nil
+
+	case "G":
+		for m.moveProjectPos < len(m.projects)-1 {
+			m.projects[m.moveProjectPos], m.projects[m.moveProjectPos+1] = m.projects[m.moveProjectPos+1], m.projects[m.moveProjectPos]
+			m.moveProjectPos++
+		}
+		m.projectCursor = m.moveProjectPos
+		return m, nil
+
+	case "enter":
+		m.appMode = modeNormal
+		project := m.projects[m.moveProjectPos]
+		return m, reorderProjectCmd(m.backend, project.ID, m.moveProjectPos)
+
+	case "esc":
+		m.appMode = modeNormal
+		return m, fetchProjectsCmd(m.backend)
+	}
+
+	return m, nil
+}
+
 func (m *App) handleDepLinkKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// When filtering, route most keys to the text input
 	if m.depFiltering {
@@ -2637,6 +2720,7 @@ func (m *App) renderHelpOverlay() string {
   Project Pane
   Enter          Project detail
   a              Add project
+  m              Move/reorder project
   space          Toggle multi-select
   Esc            Clear selections`
 		lines = append(lines, actions)
@@ -2934,27 +3018,33 @@ func (m *App) renderProjectPane(width, height int) string {
 			p := m.projects[pi]
 			isCursor := !m.showingAll && pi == m.projectCursor
 			isSelected := m.selectedProjects[p.ID]
-			var prefix string
-			if isCursor {
-				prefix = "> "
-			} else {
-				prefix = "  "
-			}
+			isMoving := m.appMode == modeMoveProject && pi == m.moveProjectPos
 			name := p.Name
 			if isSelected {
 				name = "● " + name
 			}
-			line := fmt.Sprintf("%s%s (%d)", prefix, name, p.ItemCount)
-			if len(line) > width {
-				line = line[:width]
-			}
-			switch {
-			case isCursor:
-				line = projectSelectedStyle.Render(line)
-			case isSelected:
-				line = projectMultiSelectedStyle.Render(line)
-			default:
-				line = projectNormalStyle.Render(line)
+			body := fmt.Sprintf("%s (%d)", name, p.ItemCount)
+
+			var line string
+			if isMoving {
+				line = moveIndicatorStyle.Render("▶ " + body + " ◀ MOVING")
+			} else {
+				prefix := "  "
+				if isCursor {
+					prefix = "> "
+				}
+				line = prefix + body
+				if len(line) > width {
+					line = line[:width]
+				}
+				switch {
+				case isCursor:
+					line = projectSelectedStyle.Render(line)
+				case isSelected:
+					line = projectMultiSelectedStyle.Render(line)
+				default:
+					line = projectNormalStyle.Render(line)
+				}
 			}
 			lines = append(lines, line)
 		}
@@ -3210,9 +3300,11 @@ func (m *App) statusBarHints() string {
 	case m.statusMsg != "":
 		return statusMsgStyle.Render(m.statusMsg)
 	case m.appMode == modeMove:
-		return moveIndicatorStyle.Render("[j/k] Move  [g/G] Top/Bottom  [Enter] Confirm  [Esc] Cancel")
+		return moveIndicatorStyle.Render("[j/k] Move item  [g/G] Top/Bottom  [Enter] Confirm  [Esc] Cancel")
+	case m.appMode == modeMoveProject:
+		return moveIndicatorStyle.Render("[j/k] Move project  [g/G] Top/Bottom  [Enter] Confirm  [Esc] Cancel")
 	case m.activePane == projectPane:
-		hints := "[a]dd project [Enter]select [Tab]items [/]search [?]help"
+		hints := "[a]dd project [Enter]select [m]ove [Tab]items [/]search [?]help"
 		if m.filter != filterNone {
 			hints += " [0]reset filter"
 		}

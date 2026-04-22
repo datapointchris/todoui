@@ -105,6 +105,17 @@ func (s *SyncBackend) DeleteProject(id string) error {
 	return nil
 }
 
+func (s *SyncBackend) ReorderProject(projectID string, newPosition int) error {
+	if err := s.local.ReorderProject(projectID, newPosition); err != nil {
+		return err
+	}
+	_ = s.engine.QueueOp(OpReorderProject, projectID, projectReorderPayload{
+		Position: newPosition,
+	})
+	s.engine.Notify()
+	return nil
+}
+
 func (s *SyncBackend) CreateItem(input model.CreateProjectItem) (*model.ProjectItemDetail, error) {
 	result, err := s.local.CreateItem(input)
 	if err != nil {
@@ -256,6 +267,10 @@ type createItemPayload struct {
 type reorderPayload struct {
 	ProjectID string `json:"project_id"`
 	Position  int    `json:"position"`
+}
+
+type projectReorderPayload struct {
+	Position int `json:"position"`
 }
 
 type projectIDPayload struct {

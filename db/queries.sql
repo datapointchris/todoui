@@ -33,6 +33,9 @@ RETURNING *;
 -- name: DeleteProject :exec
 DELETE FROM projects WHERE id = ?;
 
+-- name: UpdateProjectPosition :exec
+UPDATE projects SET position = ? WHERE id = ?;
+
 -- name: ListAllItems :many
 SELECT * FROM project_items
 WHERE archived = 0

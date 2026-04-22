@@ -25,6 +25,8 @@ func (e *Engine) executePush(op generated.PendingSync) error {
 		return e.pushJSON(http.MethodPatch, fmt.Sprintf("/projects/%s/", op.EntityID), op.Payload)
 	case OpDeleteProject:
 		return e.pushDelete(fmt.Sprintf("/projects/%s/", op.EntityID))
+	case OpReorderProject:
+		return e.pushJSON(http.MethodPatch, fmt.Sprintf("/projects/%s/reorder", op.EntityID), op.Payload)
 
 	case OpCreateItem:
 		return e.pushJSON(http.MethodPost, "/project-items/", op.Payload)

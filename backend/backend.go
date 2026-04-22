@@ -11,6 +11,7 @@ type Backend interface {
 	CreateProject(input model.CreateProject) (*model.Project, error)
 	UpdateProject(id string, input model.UpdateProject) (*model.Project, error)
 	DeleteProject(id string) error
+	ReorderProject(projectID string, newPosition int) error
 
 	// Items
 	ListAllItems() ([]model.ProjectItem, error)
