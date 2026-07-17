@@ -1,3 +1,4 @@
+default_stages: [pre-commit]
 repos:
   # Conventional commits enforcement
   - repo: https://github.com/compilerla/conventional-pre-commit
