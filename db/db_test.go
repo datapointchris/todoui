@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"path/filepath"
 	"testing"
 )
 
@@ -182,4 +183,71 @@ func TestMigrate_AddsRepoColumnToExistingDatabase(t *testing.T) {
 	if err := migrate(database); err != nil {
 		t.Fatalf("second migrate: %v", err)
 	}
+}
+
+// The index set silently vanished once already, when schema.sql replaced the
+// original migration file and its CREATE INDEX statements were not carried
+// over. Nothing reported it because a missing index only costs performance.
+func TestOpen_CreatesIndexes(t *testing.T) {
+	want := []string{
+		"idx_deps_depends",
+		"idx_items_active",
+		"idx_memberships_position",
+		"idx_tasks_item",
+		"idx_undo_recent",
+	}
+
+	assertIndexes := func(t *testing.T, database *sql.DB) {
+		t.Helper()
+		for _, index := range want {
+			var name string
+			err := database.QueryRow(
+				"SELECT name FROM sqlite_master WHERE type='index' AND name=?", index,
+			).Scan(&name)
+			if err != nil {
+				t.Errorf("index %q not found: %v", index, err)
+			}
+		}
+	}
+
+	t.Run("fresh database", func(t *testing.T) {
+		database, err := Open(":memory:")
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		defer func() { _ = database.Close() }()
+
+		assertIndexes(t, database)
+	})
+
+	// Indexes must reach databases that already exist, not only new ones —
+	// otherwise every database in use stays unindexed forever.
+	t.Run("pre-existing database", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "existing.db")
+
+		legacy, err := sql.Open("sqlite", path)
+		if err != nil {
+			t.Fatalf("opening raw db: %v", err)
+		}
+		if _, err := legacy.Exec(schema); err != nil {
+			t.Fatalf("applying schema: %v", err)
+		}
+		if _, err := legacy.Exec("INSERT INTO project_items (id, title) VALUES ('i1', 'existing')"); err != nil {
+			t.Fatalf("inserting test data: %v", err)
+		}
+		_ = legacy.Close()
+
+		database, err := Open(path)
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		defer func() { _ = database.Close() }()
+
+		assertIndexes(t, database)
+
+		var title string
+		if err := database.QueryRow("SELECT title FROM project_items WHERE id='i1'").Scan(&title); err != nil {
+			t.Fatalf("existing data lost: %v", err)
+		}
+	})
 }

@@ -11,6 +11,9 @@ import (
 //go:embed schema.sql
 var schema string
 
+//go:embed indexes.sql
+var indexes string
+
 // Open creates a SQLite connection and ensures the schema exists.
 func Open(path string) (*sql.DB, error) {
 	db, err := sql.Open("sqlite", path)
@@ -38,6 +41,11 @@ func Open(path string) (*sql.DB, error) {
 	if err := migrate(db); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("running migrations: %w", err)
+	}
+
+	if _, err := db.Exec(indexes); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("creating indexes: %w", err)
 	}
 
 	return db, nil
