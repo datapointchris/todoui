@@ -41,6 +41,15 @@ repos:
         args: [--fix]
         stages: [pre-commit]
 
+  - repo: local
+    hooks:
+      - id: prepare-commit-msg
+        name: Strip AI branding from commits
+        entry: bash -c 'exec "$HOME/.claude/hooks/prepare-commit-msg" "$@"' --
+        language: system
+        always_run: true
+        stages: [prepare-commit-msg]
+
   # Go hooks
   - repo: https://github.com/tekwizely/pre-commit-golang
     rev: v1.0.0-rc.1
@@ -69,11 +78,3 @@ repos:
         files: ^db/.*\.(sql|yaml)$
         pass_filenames: false
         stages: [pre-commit]
-
-      # Strip Claude Code branding from commit messages
-      - id: prepare-commit-msg
-        name: Strip AI branding from commits
-        entry: /Users/chris/.claude/hooks/prepare-commit-msg
-        language: system
-        always_run: true
-        stages: [prepare-commit-msg]
