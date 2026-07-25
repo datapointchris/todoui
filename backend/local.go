@@ -539,7 +539,7 @@ func (b *LocalBackend) Undo() (string, error) {
 
 	qtx := b.q.WithTx(tx)
 
-	description := fmt.Sprintf("undid %s on %s %s", entry.Action, entry.EntityType, entry.EntityID[:8])
+	description := fmt.Sprintf("undid %s on %s %s", entry.Action, entry.EntityType, shortEntityID(entry.EntityID))
 
 	switch entry.Action {
 	case "create":
@@ -576,16 +576,6 @@ func (b *LocalBackend) Undo() (string, error) {
 				return "", fmt.Errorf("recreating deleted item: %w", err)
 			}
 		}
-	case "complete":
-		if _, err := qtx.UpdateItem(ctx, generated.UpdateItemParams{
-			Title:     "",
-			Notes:     sql.NullString{},
-			Completed: 0,
-			Archived:  0,
-			ID:        entry.EntityID,
-		}); err != nil {
-			return "", fmt.Errorf("undoing complete: %w", err)
-		}
 	}
 
 	if err := qtx.DeleteUndoLog(ctx, entry.ID); err != nil {
@@ -597,6 +587,15 @@ func (b *LocalBackend) Undo() (string, error) {
 	}
 
 	return description, nil
+}
+
+// UUIDv7 front-loads the millisecond timestamp, so a prefix is identical for
+// everything created in the same ~65s window. Matches the CLI and TUI display.
+func shortEntityID(id string) string {
+	if len(id) >= 8 {
+		return id[len(id)-8:]
+	}
+	return id
 }
 
 func (b *LocalBackend) CanUndo() (bool, error) {
