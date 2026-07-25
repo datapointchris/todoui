@@ -58,7 +58,7 @@ repos:
       - id: golangci-lint-repo-mod
         stages: [pre-commit]
 
-  # Local hooks
+# > custom:after:go - sqlc generated code freshness
   - repo: local
     hooks:
       # Catches a schema or query edit committed without regenerating.
