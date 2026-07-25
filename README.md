@@ -62,6 +62,10 @@ todoui reorder <id> -p work --position 0
 todoui delete <id> --yes
 todoui undo
 
+# Sync
+todoui sync                           # push queued changes, then pull
+todoui --no-sync list                 # use local data as-is
+
 # Sub-tasks
 todoui tasks <id>
 todoui add-task <id> "wire up the endpoint"
@@ -90,6 +94,12 @@ ambiguous id is reported rather than guessed at.
 
 **`--json`** is available on `list`, `view`, `search`, `tasks`, `blockers`, and
 `blocked`, and emits full ids.
+
+**Freshness**: when sync is enabled, a CLI command refreshes from the API first
+if the last pull is more than two minutes old, so a burst of commands pulls
+once rather than every time. An unreachable API warns on stderr and falls back
+to local data — todoui is local-first and never blocks on the network. Force a
+reconcile with `todoui sync`; skip it with `--no-sync`.
 
 ## TUI Keybindings
 

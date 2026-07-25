@@ -68,6 +68,13 @@ prints can be passed to the next one. Do not switch to prefix matching — UUIDv
 front-loads its millisecond timestamp, so prefixes collide for everything
 created in the same window.
 
+CLI commands refresh from the API before running when sync is enabled and the
+last pull is over two minutes old (`refreshForCLI` in `main.go`). A new command
+pulls by default; `commandsThatSkipPull` is a denylist rather than an allowlist
+so that forgetting to register one cannot silently serve stale data. A pull
+failure warns and continues — local-first means an unreachable API degrades to
+local data, never an error.
+
 ## Planning docs
 
 Planning documents live in `.planning/` (gitignored). `.planning/status.md`

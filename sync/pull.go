@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,6 +13,39 @@ import (
 	"github.com/datapointchris/todoui/db/generated"
 	"github.com/datapointchris/todoui/model"
 )
+
+// LastPullAt reports when the local database last reconciled with the server,
+// or the zero time if it never has.
+func (e *Engine) LastPullAt() (time.Time, error) {
+	state, err := e.q.GetSyncState(e.ctx, "item")
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return time.Time{}, nil
+		}
+		return time.Time{}, fmt.Errorf("reading sync state: %w", err)
+	}
+	stamp, err := time.Parse(time.RFC3339Nano, state.LastPullAt)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("parsing last pull time %q: %w", state.LastPullAt, err)
+	}
+	return stamp, nil
+}
+
+// PullIfStale reconciles only when the last pull is older than maxAge, and
+// reports whether it pulled. A full pull costs 2+2N requests — one per item for
+// its detail and again for its tasks — so running it ahead of every CLI
+// invocation would put dozens of round trips in front of a command that prints
+// four lines.
+func (e *Engine) PullIfStale(ctx context.Context, maxAge time.Duration) (bool, error) {
+	last, err := e.LastPullAt()
+	if err != nil {
+		return false, err
+	}
+	if time.Since(last) < maxAge {
+		return false, nil
+	}
+	return true, e.Pull(ctx)
+}
 
 // Pull fetches all data from the remote API and reconciles it with the local database.
 // It attempts to push pending ops first (so the server has our changes), then does a

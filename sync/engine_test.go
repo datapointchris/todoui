@@ -1,6 +1,7 @@
 package sync_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -483,4 +484,96 @@ func TestSyncBackend_UndoOfTaskCompletionPushesTheReversal(t *testing.T) {
 		}
 	}
 	t.Errorf("expected %q after undoing the completion, got %v", want, calls)
+}
+
+// The CLI is a short-lived process, so it has to reconcile before it reads.
+// Pull was reachable only from App.Init, which meant every CLI read served
+// whatever the last TUI session had pulled — days stale on a machine driven by
+// agents rather than opened.
+func TestPullIfStaleRefreshesWhenNeverPulled(t *testing.T) {
+	recorder := &callRecorder{}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/projects/", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode([]model.Project{
+			{ID: "proj-1", Name: "Pulled", CreatedAt: time.Now()},
+		})
+	})
+	mux.HandleFunc("/project-items/", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode([]model.ProjectItem{})
+	})
+	_, engine := setupSync(t, logging(recorder, mux))
+
+	pulled, err := engine.PullIfStale(context.Background(), time.Minute)
+	if err != nil {
+		t.Fatalf("PullIfStale: %v", err)
+	}
+	if !pulled {
+		t.Fatal("a database that has never pulled must pull")
+	}
+
+	last, err := engine.LastPullAt()
+	if err != nil {
+		t.Fatalf("LastPullAt: %v", err)
+	}
+	if time.Since(last) > time.Minute {
+		t.Errorf("expected the pull to be stamped, got %v", last)
+	}
+}
+
+// A full pull is 2+2N requests, so a burst of CLI commands must not each pay
+// for one.
+func TestPullIfStaleSkipsWhenFresh(t *testing.T) {
+	recorder := &callRecorder{}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/projects/", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode([]model.Project{})
+	})
+	mux.HandleFunc("/project-items/", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode([]model.ProjectItem{})
+	})
+	_, engine := setupSync(t, logging(recorder, mux))
+
+	if _, err := engine.PullIfStale(context.Background(), time.Minute); err != nil {
+		t.Fatalf("first PullIfStale: %v", err)
+	}
+	afterFirst := recorder.count()
+
+	pulled, err := engine.PullIfStale(context.Background(), time.Minute)
+	if err != nil {
+		t.Fatalf("second PullIfStale: %v", err)
+	}
+	if pulled {
+		t.Error("a pull inside the freshness window must be skipped")
+	}
+	if recorder.count() != afterFirst {
+		t.Errorf("skipped pull still made requests: %d → %d", afterFirst, recorder.count())
+	}
+}
+
+// todoui is local-first: an unreachable API degrades to local data. The caller
+// warns rather than failing, so the error only has to surface.
+func TestPullIfStaleReportsAnUnreachableAPI(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	_, engine := setupSync(t, handler)
+
+	pulled, err := engine.PullIfStale(context.Background(), time.Minute)
+	if !pulled {
+		t.Error("a stale database should attempt the pull")
+	}
+	if err == nil {
+		t.Error("expected the failure to surface so the caller can warn")
+	}
+}
+
+// logging wraps a handler so a test can count requests without reimplementing
+// the routing.
+func logging(recorder *callRecorder, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		recorder.mu.Lock()
+		recorder.calls = append(recorder.calls, r.Method+" "+r.URL.Path)
+		recorder.mu.Unlock()
+		next.ServeHTTP(w, r)
+	})
 }
