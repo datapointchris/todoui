@@ -61,6 +61,15 @@ repos:
   # Local hooks
   - repo: local
     hooks:
+      # Catches a schema or query edit committed without regenerating.
+      - id: sqlc-diff
+        name: sqlc generated code is current
+        entry: bash -c 'cd db && sqlc diff'
+        language: system
+        files: ^db/.*\.(sql|yaml)$
+        pass_filenames: false
+        stages: [pre-commit]
+
       # Strip Claude Code branding from commit messages
       - id: prepare-commit-msg
         name: Strip AI branding from commits
