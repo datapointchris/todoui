@@ -167,9 +167,23 @@ func (b *LocalBackend) DeleteProject(id string) error {
 }
 
 func (b *LocalBackend) ReorderProject(projectID string, newPosition int) error {
-	return b.q.UpdateProjectPosition(b.ctx(), generated.UpdateProjectPositionParams{
-		ID:       projectID,
-		Position: int64(newPosition),
+	ctx := b.ctx()
+	current, err := b.q.GetProject(ctx, projectID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return model.ErrNotFound
+		}
+		return fmt.Errorf("getting project for reorder: %w", err)
+	}
+
+	return b.inTx(func(qtx *generated.Queries) error {
+		if err := qtx.UpdateProjectPosition(ctx, generated.UpdateProjectPositionParams{
+			ID:       projectID,
+			Position: int64(newPosition),
+		}); err != nil {
+			return fmt.Errorf("reordering project: %w", err)
+		}
+		return b.logUndo(qtx, "update", "project_position", projectID, current)
 	})
 }
 
@@ -358,34 +372,78 @@ func (b *LocalBackend) DeleteItem(id string) error {
 }
 
 func (b *LocalBackend) ReorderItem(itemID, projectID string, newPosition int) error {
-	return b.q.UpdateItemPosition(b.ctx(), generated.UpdateItemPositionParams{
+	ctx := b.ctx()
+	current, err := b.q.GetMembership(ctx, generated.GetMembershipParams{
 		ItemID:    itemID,
 		ProjectID: projectID,
-		Position:  int64(newPosition),
+	})
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return model.ErrNotFound
+		}
+		return fmt.Errorf("getting membership for reorder: %w", err)
+	}
+
+	return b.inTx(func(qtx *generated.Queries) error {
+		if err := qtx.UpdateItemPosition(ctx, generated.UpdateItemPositionParams{
+			ItemID:    itemID,
+			ProjectID: projectID,
+			Position:  int64(newPosition),
+		}); err != nil {
+			return fmt.Errorf("reordering item: %w", err)
+		}
+		return b.logUndo(qtx, "update", "item_position", itemID, current)
 	})
 }
 
 // --- Multi-project membership ---
 
 func (b *LocalBackend) AddToProject(itemID, projectID string) error {
-	return b.q.AddItemToProject(b.ctx(), generated.AddItemToProjectParams{
-		ItemID:      itemID,
-		ProjectID:   projectID,
-		ProjectID_2: projectID,
+	ctx := b.ctx()
+	return b.inTx(func(qtx *generated.Queries) error {
+		if err := qtx.AddItemToProject(ctx, generated.AddItemToProjectParams{
+			ItemID:      itemID,
+			ProjectID:   projectID,
+			ProjectID_2: projectID,
+		}); err != nil {
+			return fmt.Errorf("adding item to project: %w", err)
+		}
+		return b.logUndo(qtx, "create", "membership", itemID, generated.ProjectItemMembership{
+			ItemID:    itemID,
+			ProjectID: projectID,
+		})
 	})
 }
 
 func (b *LocalBackend) RemoveFromProject(itemID, projectID string) error {
-	projects, err := b.q.GetItemProjects(b.ctx(), itemID)
+	ctx := b.ctx()
+	projects, err := b.q.GetItemProjects(ctx, itemID)
 	if err != nil {
 		return fmt.Errorf("checking project count: %w", err)
 	}
 	if len(projects) <= 1 {
 		return model.ErrLastProject
 	}
-	return b.q.RemoveItemFromProject(b.ctx(), generated.RemoveItemFromProjectParams{
+
+	current, err := b.q.GetMembership(ctx, generated.GetMembershipParams{
 		ItemID:    itemID,
 		ProjectID: projectID,
+	})
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return model.ErrNotFound
+		}
+		return fmt.Errorf("getting membership for remove: %w", err)
+	}
+
+	return b.inTx(func(qtx *generated.Queries) error {
+		if err := qtx.RemoveItemFromProject(ctx, generated.RemoveItemFromProjectParams{
+			ItemID:    itemID,
+			ProjectID: projectID,
+		}); err != nil {
+			return fmt.Errorf("removing item from project: %w", err)
+		}
+		return b.logUndo(qtx, "delete", "membership", itemID, current)
 	})
 }
 
@@ -416,16 +474,23 @@ func (b *LocalBackend) AddDependency(itemID, dependsOn string) error {
 		return model.ErrCyclicDependency
 	}
 
-	return b.q.AddDependency(ctx, generated.AddDependencyParams{
-		ItemID:      itemID,
-		DependsOnID: dependsOn,
+	edge := generated.ProjectItemDependency{ItemID: itemID, DependsOnID: dependsOn}
+	return b.inTx(func(qtx *generated.Queries) error {
+		if err := qtx.AddDependency(ctx, generated.AddDependencyParams(edge)); err != nil {
+			return fmt.Errorf("adding dependency: %w", err)
+		}
+		return b.logUndo(qtx, "create", "dependency", itemID, edge)
 	})
 }
 
 func (b *LocalBackend) RemoveDependency(itemID, dependsOn string) error {
-	return b.q.RemoveDependency(b.ctx(), generated.RemoveDependencyParams{
-		ItemID:      itemID,
-		DependsOnID: dependsOn,
+	ctx := b.ctx()
+	edge := generated.ProjectItemDependency{ItemID: itemID, DependsOnID: dependsOn}
+	return b.inTx(func(qtx *generated.Queries) error {
+		if err := qtx.RemoveDependency(ctx, generated.RemoveDependencyParams(edge)); err != nil {
+			return fmt.Errorf("removing dependency: %w", err)
+		}
+		return b.logUndo(qtx, "delete", "dependency", itemID, edge)
 	})
 }
 
@@ -452,17 +517,30 @@ func (b *LocalBackend) ListTasks(itemID string) ([]model.ProjectItemTask, error)
 }
 
 func (b *LocalBackend) CreateTask(itemID string, input model.CreateProjectItemTask) (*model.ProjectItemTask, error) {
+	ctx := b.ctx()
 	id := newID()
-	t, err := b.q.CreateTask(b.ctx(), generated.CreateTaskParams{
-		ID:       id,
-		ItemID:   itemID,
-		Title:    input.Title,
-		ItemID_2: itemID,
+
+	var created generated.ProjectItemTask
+	err := b.inTx(func(qtx *generated.Queries) error {
+		t, err := qtx.CreateTask(ctx, generated.CreateTaskParams{
+			ID:       id,
+			ItemID:   itemID,
+			Title:    input.Title,
+			ItemID_2: itemID,
+		})
+		if err != nil {
+			return fmt.Errorf("creating task: %w", err)
+		}
+		created = t
+		// The row, not nil: undoing a task create still has to know which item
+		// owned it so the reversal can be pushed.
+		return b.logUndo(qtx, "create", "task", id, t)
 	})
 	if err != nil {
-		return nil, fmt.Errorf("creating task: %w", err)
+		return nil, err
 	}
-	result := toModelProjectItemTask(t)
+
+	result := toModelProjectItemTask(created)
 	return &result, nil
 }
 
@@ -493,16 +571,39 @@ func (b *LocalBackend) UpdateTask(itemID, taskID string, input model.UpdateProje
 		params.Position = int64(*input.Position)
 	}
 
-	t, err := b.q.UpdateTask(ctx, params)
+	var updated generated.ProjectItemTask
+	err = b.inTx(func(qtx *generated.Queries) error {
+		t, err := qtx.UpdateTask(ctx, params)
+		if err != nil {
+			return fmt.Errorf("updating task: %w", err)
+		}
+		updated = t
+		return b.logUndo(qtx, "update", "task", taskID, current)
+	})
 	if err != nil {
-		return nil, fmt.Errorf("updating task: %w", err)
+		return nil, err
 	}
-	result := toModelProjectItemTask(t)
+
+	result := toModelProjectItemTask(updated)
 	return &result, nil
 }
 
 func (b *LocalBackend) DeleteTask(itemID, taskID string) error {
-	return b.q.DeleteTask(b.ctx(), taskID)
+	ctx := b.ctx()
+	current, err := b.q.GetTask(ctx, taskID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return model.ErrNotFound
+		}
+		return fmt.Errorf("getting task for delete: %w", err)
+	}
+
+	return b.inTx(func(qtx *generated.Queries) error {
+		if err := qtx.DeleteTask(ctx, taskID); err != nil {
+			return fmt.Errorf("deleting task: %w", err)
+		}
+		return b.logUndo(qtx, "delete", "task", taskID, current)
+	})
 }
 
 func (b *LocalBackend) CompleteTask(itemID, taskID string) error {
@@ -516,17 +617,17 @@ func (b *LocalBackend) CompleteTask(itemID, taskID string) error {
 		return fmt.Errorf("getting task for complete: %w", err)
 	}
 
-	completed := int64(1)
-	_, err = b.q.UpdateTask(ctx, generated.UpdateTaskParams{
-		Title:     current.Title,
-		Completed: completed,
-		Position:  current.Position,
-		ID:        taskID,
+	return b.inTx(func(qtx *generated.Queries) error {
+		if _, err := qtx.UpdateTask(ctx, generated.UpdateTaskParams{
+			Title:     current.Title,
+			Completed: 1,
+			Position:  current.Position,
+			ID:        taskID,
+		}); err != nil {
+			return fmt.Errorf("completing task: %w", err)
+		}
+		return b.logUndo(qtx, "update", "task", taskID, current)
 	})
-	if err != nil {
-		return fmt.Errorf("completing task: %w", err)
-	}
-	return nil
 }
 
 // --- Search ---
@@ -592,29 +693,54 @@ func (b *LocalBackend) Undo() (*model.UndoResult, error) {
 		EntityID:    entry.EntityID,
 	}
 
-	if entry.EntityType == "project" {
-		if err := undoProject(ctx, qtx, entry, result); err != nil {
-			return nil, err
-		}
-		if err := qtx.DeleteUndoLog(ctx, entry.ID); err != nil {
-			return nil, fmt.Errorf("deleting undo log: %w", err)
-		}
-		if err := tx.Commit(); err != nil {
-			return nil, fmt.Errorf("committing undo: %w", err)
-		}
-		return result, nil
+	// Every mutation that writes an undo entry needs a case here. A type that
+	// falls through would leave the entry consumed and the change standing,
+	// which reads to the user as undo silently doing nothing.
+	var undoErr error
+	switch entry.EntityType {
+	case "project":
+		undoErr = undoProject(ctx, qtx, entry, result)
+	case "item":
+		undoErr = undoItem(ctx, qtx, entry, result)
+	case "task":
+		undoErr = undoTask(ctx, qtx, entry, result)
+	case "membership":
+		undoErr = undoMembership(ctx, qtx, entry, result)
+	case "dependency":
+		undoErr = undoDependency(ctx, qtx, entry, result)
+	case "item_position":
+		undoErr = undoItemPosition(ctx, qtx, entry, result)
+	case "project_position":
+		undoErr = undoProjectPosition(ctx, qtx, entry, result)
+	default:
+		return nil, fmt.Errorf("undoing unknown entity type %q", entry.EntityType)
+	}
+	if undoErr != nil {
+		return nil, undoErr
 	}
 
+	if err := qtx.DeleteUndoLog(ctx, entry.ID); err != nil {
+		return nil, fmt.Errorf("deleting undo log: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("committing undo: %w", err)
+	}
+
+	return result, nil
+}
+
+func undoItem(ctx context.Context, qtx *generated.Queries, entry generated.UndoLog, result *model.UndoResult) error {
 	switch entry.Action {
 	case "create":
 		if err := qtx.DeleteItem(ctx, entry.EntityID); err != nil {
-			return nil, fmt.Errorf("undoing create: %w", err)
+			return fmt.Errorf("undoing create: %w", err)
 		}
 	case "update":
 		if entry.PreviousState.Valid {
 			var prev generated.ProjectItem
 			if err := json.Unmarshal([]byte(entry.PreviousState.String), &prev); err != nil {
-				return nil, fmt.Errorf("unmarshaling previous state: %w", err)
+				return fmt.Errorf("unmarshaling previous state: %w", err)
 			}
 			restored, err := qtx.UpdateItem(ctx, generated.UpdateItemParams{
 				Title:     prev.Title,
@@ -625,7 +751,7 @@ func (b *LocalBackend) Undo() (*model.UndoResult, error) {
 				ID:        entry.EntityID,
 			})
 			if err != nil {
-				return nil, fmt.Errorf("restoring previous state: %w", err)
+				return fmt.Errorf("restoring previous state: %w", err)
 			}
 			item := toModelProjectItem(restored)
 			result.Restored = &item
@@ -634,10 +760,10 @@ func (b *LocalBackend) Undo() (*model.UndoResult, error) {
 		if entry.PreviousState.Valid {
 			snapshot, err := decodeItemSnapshot(entry.PreviousState.String)
 			if err != nil {
-				return nil, err
+				return err
 			}
 			if err := restoreItemSnapshot(ctx, qtx, snapshot); err != nil {
-				return nil, err
+				return err
 			}
 			item := toModelProjectItem(snapshot.Item)
 			result.Restored = &item
@@ -655,16 +781,141 @@ func (b *LocalBackend) Undo() (*model.UndoResult, error) {
 			}
 		}
 	}
+	return nil
+}
 
-	if err := qtx.DeleteUndoLog(ctx, entry.ID); err != nil {
-		return nil, fmt.Errorf("deleting undo log: %w", err)
+func undoTask(ctx context.Context, qtx *generated.Queries, entry generated.UndoLog, result *model.UndoResult) error {
+	if !entry.PreviousState.Valid {
+		return fmt.Errorf("task undo entry %d has no previous state", entry.ID)
+	}
+	var prev generated.ProjectItemTask
+	if err := json.Unmarshal([]byte(entry.PreviousState.String), &prev); err != nil {
+		return fmt.Errorf("unmarshaling previous task state: %w", err)
 	}
 
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("committing undo: %w", err)
+	detail := &model.UndoDetail{ItemID: prev.ItemID}
+	result.Detail = detail
+
+	if entry.Action == "create" {
+		if err := qtx.DeleteTask(ctx, entry.EntityID); err != nil {
+			return fmt.Errorf("undoing task create: %w", err)
+		}
+		detail.Removed = true
+		return nil
 	}
 
-	return result, nil
+	// Update and delete both reverse to the recorded row. Upsert covers both:
+	// the row is still there after an update, and gone after a delete.
+	if err := qtx.UpsertTask(ctx, generated.UpsertTaskParams(prev)); err != nil {
+		return fmt.Errorf("restoring task: %w", err)
+	}
+	task := toModelProjectItemTask(prev)
+	detail.Task = &task
+	return nil
+}
+
+func undoMembership(ctx context.Context, qtx *generated.Queries, entry generated.UndoLog, result *model.UndoResult) error {
+	if !entry.PreviousState.Valid {
+		return fmt.Errorf("membership undo entry %d has no previous state", entry.ID)
+	}
+	var prev generated.ProjectItemMembership
+	if err := json.Unmarshal([]byte(entry.PreviousState.String), &prev); err != nil {
+		return fmt.Errorf("unmarshaling previous membership state: %w", err)
+	}
+
+	result.Detail = &model.UndoDetail{
+		ItemID:    prev.ItemID,
+		ProjectID: prev.ProjectID,
+		Removed:   entry.Action == "create",
+	}
+
+	if entry.Action == "create" {
+		if err := qtx.RemoveItemFromProject(ctx, generated.RemoveItemFromProjectParams{
+			ItemID:    prev.ItemID,
+			ProjectID: prev.ProjectID,
+		}); err != nil {
+			return fmt.Errorf("undoing membership create: %w", err)
+		}
+		return nil
+	}
+
+	if err := qtx.RestoreMembership(ctx, generated.RestoreMembershipParams(prev)); err != nil {
+		return fmt.Errorf("restoring membership: %w", err)
+	}
+	return nil
+}
+
+func undoDependency(ctx context.Context, qtx *generated.Queries, entry generated.UndoLog, result *model.UndoResult) error {
+	if !entry.PreviousState.Valid {
+		return fmt.Errorf("dependency undo entry %d has no previous state", entry.ID)
+	}
+	var prev generated.ProjectItemDependency
+	if err := json.Unmarshal([]byte(entry.PreviousState.String), &prev); err != nil {
+		return fmt.Errorf("unmarshaling previous dependency state: %w", err)
+	}
+
+	result.Detail = &model.UndoDetail{
+		ItemID:      prev.ItemID,
+		DependsOnID: prev.DependsOnID,
+		Removed:     entry.Action == "create",
+	}
+
+	if entry.Action == "create" {
+		if err := qtx.RemoveDependency(ctx, generated.RemoveDependencyParams(prev)); err != nil {
+			return fmt.Errorf("undoing dependency create: %w", err)
+		}
+		return nil
+	}
+
+	if err := qtx.UpsertDependency(ctx, generated.UpsertDependencyParams(prev)); err != nil {
+		return fmt.Errorf("restoring dependency: %w", err)
+	}
+	return nil
+}
+
+func undoItemPosition(ctx context.Context, qtx *generated.Queries, entry generated.UndoLog, result *model.UndoResult) error {
+	if !entry.PreviousState.Valid {
+		return fmt.Errorf("item reorder undo entry %d has no previous state", entry.ID)
+	}
+	var prev generated.ProjectItemMembership
+	if err := json.Unmarshal([]byte(entry.PreviousState.String), &prev); err != nil {
+		return fmt.Errorf("unmarshaling previous item position: %w", err)
+	}
+
+	if err := qtx.UpdateItemPosition(ctx, generated.UpdateItemPositionParams{
+		ItemID:    prev.ItemID,
+		ProjectID: prev.ProjectID,
+		Position:  prev.Position,
+	}); err != nil {
+		return fmt.Errorf("restoring item position: %w", err)
+	}
+
+	result.Detail = &model.UndoDetail{
+		ItemID:    prev.ItemID,
+		ProjectID: prev.ProjectID,
+		Position:  int(prev.Position),
+	}
+	return nil
+}
+
+func undoProjectPosition(ctx context.Context, qtx *generated.Queries, entry generated.UndoLog, result *model.UndoResult) error {
+	if !entry.PreviousState.Valid {
+		return fmt.Errorf("project reorder undo entry %d has no previous state", entry.ID)
+	}
+	var prev generated.Project
+	if err := json.Unmarshal([]byte(entry.PreviousState.String), &prev); err != nil {
+		return fmt.Errorf("unmarshaling previous project position: %w", err)
+	}
+
+	if err := qtx.UpdateProjectPosition(ctx, generated.UpdateProjectPositionParams{
+		ID:       prev.ID,
+		Position: prev.Position,
+	}); err != nil {
+		return fmt.Errorf("restoring project position: %w", err)
+	}
+
+	result.Detail = &model.UndoDetail{Position: int(prev.Position)}
+	return nil
 }
 
 // undoProject reverses a logged project mutation.
@@ -854,6 +1105,22 @@ func restoreProjectSnapshot(ctx context.Context, qtx *generated.Queries, snapsho
 		}
 	}
 	return nil
+}
+
+// inTx runs fn inside a transaction so a mutation and its undo-log entry
+// commit together. Split apart, a failure between them leaves either an undo
+// entry for a change that never happened or a change nothing can reverse.
+func (b *LocalBackend) inTx(fn func(qtx *generated.Queries) error) error {
+	tx, err := b.db.Begin()
+	if err != nil {
+		return fmt.Errorf("beginning transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := fn(b.q.WithTx(tx)); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (b *LocalBackend) logUndo(qtx *generated.Queries, action, entityType string, entityID string, previousState any) error {

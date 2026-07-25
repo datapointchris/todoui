@@ -32,6 +32,9 @@ type UndoResult struct {
 	RestoredItemIDs      []string // items a restored project held
 	RestoredTasks        []ProjectItemTask
 	RestoredDependencies []ItemDependency
+
+	// Detail is set for entity types other than item and project.
+	Detail *UndoDetail
 }
 
 // ItemDependency is one edge of the blocking graph: ItemID is blocked until
@@ -39,4 +42,23 @@ type UndoResult struct {
 type ItemDependency struct {
 	ItemID      string `json:"item_id"`
 	DependsOnID string `json:"depends_on_id"`
+}
+
+// UndoDetail describes a reversal of anything other than an item or project
+// row — a task, a membership, a dependency, or a reorder. Only the fields
+// relevant to the result's EntityType are set. The sync layer needs it to
+// push the same reversal rather than guessing from the entity ID alone.
+type UndoDetail struct {
+	// Removed reports whether the undo took the row away rather than putting
+	// it back. It is what separates reversing an add from reversing a remove,
+	// which are otherwise indistinguishable at the sync layer.
+	Removed bool
+
+	ItemID      string // owning item: task, membership, dependency, item reorder
+	ProjectID   string // membership and item reorder
+	DependsOnID string // dependency
+	Position    int    // reorder
+
+	// Task is the row as it stands after the undo, nil when the undo removed it.
+	Task *ProjectItemTask
 }

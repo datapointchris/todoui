@@ -94,6 +94,9 @@ UPDATE project_item_memberships SET position = ? WHERE item_id = ? AND project_i
 INSERT OR IGNORE INTO project_item_memberships (item_id, project_id, position)
 VALUES (?, ?, ?);
 
+-- name: GetMembership :one
+SELECT * FROM project_item_memberships WHERE item_id = ? AND project_id = ?;
+
 -- name: GetItemMemberships :many
 SELECT * FROM project_item_memberships WHERE item_id = ?;
 

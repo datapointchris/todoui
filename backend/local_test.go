@@ -882,3 +882,264 @@ func TestUndoAcceptsPreSnapshotDeleteEntries(t *testing.T) {
 		t.Fatalf("expected the item restored from a pre-snapshot entry, got %+v", result.Restored)
 	}
 }
+
+// Each of these mutations used to write nothing to the undo log, so pressing
+// undo afterwards reached past it and reversed an older, unrelated change.
+
+func TestUndoCoversTaskCreate(t *testing.T) {
+	b := newTestBackend(t)
+	p := mustCreateProject(t, b, "work")
+	item := mustCreateItem(t, b, model.CreateProjectItem{Title: "item", ProjectIDs: []string{p.ID}})
+
+	task, err := b.CreateTask(item.ID, model.CreateProjectItemTask{Title: "step"})
+	if err != nil {
+		t.Fatalf("creating task: %v", err)
+	}
+
+	result, err := b.Undo()
+	if err != nil {
+		t.Fatalf("undoing: %v", err)
+	}
+	if result.EntityType != "task" || result.EntityID != task.ID {
+		t.Fatalf("expected undo of task %s, got %s %s", task.ID, result.EntityType, result.EntityID)
+	}
+
+	tasks, err := b.ListTasks(item.ID)
+	if err != nil {
+		t.Fatalf("listing tasks: %v", err)
+	}
+	if len(tasks) != 0 {
+		t.Errorf("expected the task create reversed, got %d tasks", len(tasks))
+	}
+	if _, err := b.GetItem(item.ID); err != nil {
+		t.Errorf("undo reached past the task create and touched the item: %v", err)
+	}
+}
+
+func TestUndoCoversTaskCompletion(t *testing.T) {
+	b := newTestBackend(t)
+	p := mustCreateProject(t, b, "work")
+	item := mustCreateItem(t, b, model.CreateProjectItem{Title: "item", ProjectIDs: []string{p.ID}})
+	task, err := b.CreateTask(item.ID, model.CreateProjectItemTask{Title: "step"})
+	if err != nil {
+		t.Fatalf("creating task: %v", err)
+	}
+
+	if err := b.CompleteTask(item.ID, task.ID); err != nil {
+		t.Fatalf("completing task: %v", err)
+	}
+	if _, err := b.Undo(); err != nil {
+		t.Fatalf("undoing: %v", err)
+	}
+
+	tasks, err := b.ListTasks(item.ID)
+	if err != nil {
+		t.Fatalf("listing tasks: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("expected the task still present, got %d", len(tasks))
+	}
+	if tasks[0].Completed {
+		t.Errorf("expected the completion reversed")
+	}
+}
+
+func TestUndoCoversTaskDelete(t *testing.T) {
+	b := newTestBackend(t)
+	p := mustCreateProject(t, b, "work")
+	item := mustCreateItem(t, b, model.CreateProjectItem{Title: "item", ProjectIDs: []string{p.ID}})
+	task, err := b.CreateTask(item.ID, model.CreateProjectItemTask{Title: "step"})
+	if err != nil {
+		t.Fatalf("creating task: %v", err)
+	}
+
+	if err := b.DeleteTask(item.ID, task.ID); err != nil {
+		t.Fatalf("deleting task: %v", err)
+	}
+	if _, err := b.Undo(); err != nil {
+		t.Fatalf("undoing: %v", err)
+	}
+
+	tasks, err := b.ListTasks(item.ID)
+	if err != nil {
+		t.Fatalf("listing tasks: %v", err)
+	}
+	if len(tasks) != 1 || tasks[0].Title != "step" {
+		t.Errorf("expected the deleted task restored, got %+v", tasks)
+	}
+}
+
+func TestUndoCoversMembershipAdd(t *testing.T) {
+	b := newTestBackend(t)
+	work := mustCreateProject(t, b, "work")
+	homelab := mustCreateProject(t, b, "homelab")
+	item := mustCreateItem(t, b, model.CreateProjectItem{Title: "item", ProjectIDs: []string{work.ID}})
+
+	if err := b.AddToProject(item.ID, homelab.ID); err != nil {
+		t.Fatalf("adding to project: %v", err)
+	}
+	if _, err := b.Undo(); err != nil {
+		t.Fatalf("undoing: %v", err)
+	}
+
+	projects, err := b.GetItemProjects(item.ID)
+	if err != nil {
+		t.Fatalf("getting item projects: %v", err)
+	}
+	if len(projects) != 1 || projects[0].ID != work.ID {
+		t.Errorf("expected only the original membership, got %+v", projects)
+	}
+}
+
+func TestUndoCoversMembershipRemove(t *testing.T) {
+	b := newTestBackend(t)
+	work := mustCreateProject(t, b, "work")
+	homelab := mustCreateProject(t, b, "homelab")
+	item := mustCreateItem(t, b, model.CreateProjectItem{
+		Title:      "item",
+		ProjectIDs: []string{work.ID, homelab.ID},
+	})
+
+	if err := b.RemoveFromProject(item.ID, homelab.ID); err != nil {
+		t.Fatalf("removing from project: %v", err)
+	}
+	if _, err := b.Undo(); err != nil {
+		t.Fatalf("undoing: %v", err)
+	}
+
+	projects, err := b.GetItemProjects(item.ID)
+	if err != nil {
+		t.Fatalf("getting item projects: %v", err)
+	}
+	if len(projects) != 2 {
+		t.Errorf("expected the membership back, got %d", len(projects))
+	}
+}
+
+func TestUndoCoversDependencyAdd(t *testing.T) {
+	b := newTestBackend(t)
+	p := mustCreateProject(t, b, "work")
+	blocker := mustCreateItem(t, b, model.CreateProjectItem{Title: "blocker", ProjectIDs: []string{p.ID}})
+	item := mustCreateItem(t, b, model.CreateProjectItem{Title: "blocked", ProjectIDs: []string{p.ID}})
+
+	if err := b.AddDependency(item.ID, blocker.ID); err != nil {
+		t.Fatalf("adding dependency: %v", err)
+	}
+	if _, err := b.Undo(); err != nil {
+		t.Fatalf("undoing: %v", err)
+	}
+
+	blockers, err := b.GetBlockers(item.ID)
+	if err != nil {
+		t.Fatalf("getting blockers: %v", err)
+	}
+	if len(blockers) != 0 {
+		t.Errorf("expected the dependency reversed, got %+v", blockers)
+	}
+}
+
+func TestUndoCoversDependencyRemove(t *testing.T) {
+	b := newTestBackend(t)
+	p := mustCreateProject(t, b, "work")
+	blocker := mustCreateItem(t, b, model.CreateProjectItem{Title: "blocker", ProjectIDs: []string{p.ID}})
+	item := mustCreateItem(t, b, model.CreateProjectItem{Title: "blocked", ProjectIDs: []string{p.ID}})
+	if err := b.AddDependency(item.ID, blocker.ID); err != nil {
+		t.Fatalf("adding dependency: %v", err)
+	}
+
+	if err := b.RemoveDependency(item.ID, blocker.ID); err != nil {
+		t.Fatalf("removing dependency: %v", err)
+	}
+	if _, err := b.Undo(); err != nil {
+		t.Fatalf("undoing: %v", err)
+	}
+
+	blockers, err := b.GetBlockers(item.ID)
+	if err != nil {
+		t.Fatalf("getting blockers: %v", err)
+	}
+	if len(blockers) != 1 {
+		t.Errorf("expected the dependency back, got %+v", blockers)
+	}
+}
+
+func TestUndoCoversItemReorder(t *testing.T) {
+	b := newTestBackend(t)
+	p := mustCreateProject(t, b, "work")
+	first := mustCreateItem(t, b, model.CreateProjectItem{Title: "first", ProjectIDs: []string{p.ID}})
+	mustCreateItem(t, b, model.CreateProjectItem{Title: "second", ProjectIDs: []string{p.ID}})
+
+	before, err := b.ListItemsByProject(p.ID)
+	if err != nil {
+		t.Fatalf("listing items: %v", err)
+	}
+
+	if err := b.ReorderItem(first.ID, p.ID, 99); err != nil {
+		t.Fatalf("reordering item: %v", err)
+	}
+	if _, err := b.Undo(); err != nil {
+		t.Fatalf("undoing: %v", err)
+	}
+
+	after, err := b.ListItemsByProject(p.ID)
+	if err != nil {
+		t.Fatalf("listing items: %v", err)
+	}
+	if len(after) != len(before) || after[0].ID != before[0].ID {
+		t.Errorf("expected the original order back, got %+v", after)
+	}
+}
+
+func TestUndoCoversProjectReorder(t *testing.T) {
+	b := newTestBackend(t)
+	first := mustCreateProject(t, b, "first")
+	mustCreateProject(t, b, "second")
+
+	before, err := b.GetProject(first.ID)
+	if err != nil {
+		t.Fatalf("getting project: %v", err)
+	}
+
+	if err := b.ReorderProject(first.ID, 99); err != nil {
+		t.Fatalf("reordering project: %v", err)
+	}
+	if _, err := b.Undo(); err != nil {
+		t.Fatalf("undoing: %v", err)
+	}
+
+	after, err := b.GetProject(first.ID)
+	if err != nil {
+		t.Fatalf("getting project: %v", err)
+	}
+	if after.Position != before.Position {
+		t.Errorf("expected position %d back, got %d", before.Position, after.Position)
+	}
+}
+
+// The whole point of covering these mutations: an undo must reverse the last
+// thing that happened, never skip it and reach an older entry.
+func TestUndoDoesNotSkipPastUnloggedMutations(t *testing.T) {
+	b := newTestBackend(t)
+	p := mustCreateProject(t, b, "work")
+	item := mustCreateItem(t, b, model.CreateProjectItem{Title: "original", ProjectIDs: []string{p.ID}})
+
+	renamed := "renamed"
+	if _, err := b.UpdateItem(item.ID, model.UpdateProjectItem{Title: &renamed}); err != nil {
+		t.Fatalf("renaming item: %v", err)
+	}
+	if _, err := b.CreateTask(item.ID, model.CreateProjectItemTask{Title: "step"}); err != nil {
+		t.Fatalf("creating task: %v", err)
+	}
+
+	if _, err := b.Undo(); err != nil {
+		t.Fatalf("undoing: %v", err)
+	}
+
+	current, err := b.GetItem(item.ID)
+	if err != nil {
+		t.Fatalf("getting item: %v", err)
+	}
+	if current.Title != "renamed" {
+		t.Errorf("undo skipped the task create and reversed the rename: title is %q", current.Title)
+	}
+}

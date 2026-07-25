@@ -256,10 +256,28 @@ func (s *SyncBackend) Undo() (*model.UndoResult, error) {
 		return nil, err
 	}
 
+	// Memberships, dependencies, and item reorders all record the item as their
+	// entity ID, so dropping by entity ID would take unrelated queued edits to
+	// that item with them. Queue the inverse operation instead — a push that
+	// finds nothing to reverse gets a 404 or 409, which the push loop already
+	// treats as settled.
+	switch result.EntityType {
+	case "membership", "dependency", "item_position", "project_position":
+		s.queueUndoInverse(result)
+		s.engine.Notify()
+		return result, nil
+	}
+
 	// Anything still queued describes the state the undo just reversed.
 	dropped, dropErr := s.engine.DropOpsForEntity(result.EntityID)
 	if dropErr != nil {
 		return result, fmt.Errorf("reconciling sync queue: %w", dropErr)
+	}
+
+	if result.EntityType == "task" {
+		s.queueTaskUndo(result, dropped)
+		s.engine.Notify()
+		return result, nil
 	}
 
 	// Undoing a delete when the delete had already been pushed means the row
@@ -333,6 +351,78 @@ func (s *SyncBackend) Undo() (*model.UndoResult, error) {
 
 	s.engine.Notify()
 	return result, nil
+}
+
+// queueUndoInverse pushes the reversal of a membership, dependency, or reorder
+// undo. Detail carries which way the reversal went; Removed means the undo took
+// the row away rather than putting it back.
+func (s *SyncBackend) queueUndoInverse(result *model.UndoResult) {
+	detail := result.Detail
+	if detail == nil {
+		return
+	}
+
+	switch result.EntityType {
+	case "membership":
+		if detail.Removed {
+			_ = s.engine.QueueOp(OpRemoveFromProject, detail.ItemID, projectIDPayload{ProjectID: detail.ProjectID})
+			return
+		}
+		_ = s.engine.QueueOp(OpAddToProject, detail.ItemID, projectIDPayload{ProjectID: detail.ProjectID})
+
+	case "dependency":
+		if detail.Removed {
+			_ = s.engine.QueueOp(OpRemoveDependency, detail.ItemID, depPayload{DependsOnID: detail.DependsOnID})
+			return
+		}
+		_ = s.engine.QueueOp(OpAddDependency, detail.ItemID, depPayload{DependsOnID: detail.DependsOnID})
+
+	case "item_position":
+		_ = s.engine.QueueOp(OpReorderItem, detail.ItemID, reorderPayload{
+			ProjectID: detail.ProjectID,
+			Position:  detail.Position,
+		})
+
+	case "project_position":
+		_ = s.engine.QueueOp(OpReorderProject, result.EntityID, projectReorderPayload{Position: detail.Position})
+	}
+}
+
+// queueTaskUndo pushes the reversal of a task undo. dropped counts operations
+// still queued for the task, so a non-zero count means the change being undone
+// never reached the server and needs no reversal there.
+func (s *SyncBackend) queueTaskUndo(result *model.UndoResult, dropped int64) {
+	detail := result.Detail
+	if detail == nil {
+		return
+	}
+
+	switch {
+	case detail.Removed:
+		if dropped == 0 {
+			_ = s.engine.QueueOp(OpDeleteTask, result.EntityID, taskRefPayload{ItemID: detail.ItemID})
+		}
+
+	case result.Action == "delete":
+		if dropped > 0 || detail.Task == nil {
+			return
+		}
+		task := detail.Task
+		_ = s.engine.QueueOp(OpCreateTask, task.ID, taskPayload{ItemID: task.ItemID, Title: task.Title})
+		if task.Completed {
+			_ = s.engine.QueueOp(OpCompleteTask, task.ID, taskRefPayload{ItemID: task.ItemID})
+		}
+
+	case detail.Task != nil:
+		task := detail.Task
+		position := task.Position
+		_ = s.engine.QueueOp(OpUpdateTask, task.ID, taskUpdatePayload{
+			ItemID:    task.ItemID,
+			Title:     &task.Title,
+			Completed: &task.Completed,
+			Position:  &position,
+		})
+	}
 }
 
 // queueRestoredChildren pushes the tasks and dependencies that came back with

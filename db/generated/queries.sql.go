@@ -466,6 +466,22 @@ func (q *Queries) GetLatestUndoLog(ctx context.Context) (UndoLog, error) {
 	return i, err
 }
 
+const getMembership = `-- name: GetMembership :one
+SELECT item_id, project_id, position FROM project_item_memberships WHERE item_id = ? AND project_id = ?
+`
+
+type GetMembershipParams struct {
+	ItemID    string
+	ProjectID string
+}
+
+func (q *Queries) GetMembership(ctx context.Context, arg GetMembershipParams) (ProjectItemMembership, error) {
+	row := q.db.QueryRowContext(ctx, getMembership, arg.ItemID, arg.ProjectID)
+	var i ProjectItemMembership
+	err := row.Scan(&i.ItemID, &i.ProjectID, &i.Position)
+	return i, err
+}
+
 const getOldestPendingSync = `-- name: GetOldestPendingSync :one
 SELECT id, operation, entity_type, entity_id, payload, created_at, attempts, last_error FROM pending_sync ORDER BY id ASC LIMIT 1
 `

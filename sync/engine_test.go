@@ -408,3 +408,79 @@ func TestSyncBackend_UndoOfPushedDeleteRecreatesRemotely(t *testing.T) {
 		t.Errorf("expected the restored sub-task recreated on the server, got %v", calls)
 	}
 }
+
+// Membership, dependency, and reorder undos all record the item as their
+// entity ID. Reconciling them by dropping queued ops for that ID would take
+// unrelated edits with it, and falling through to the item branch would push
+// a delete for an item that is still there.
+func TestSyncBackend_UndoOfMembershipDoesNotDeleteTheItem(t *testing.T) {
+	recorder := &callRecorder{}
+	sb, _ := setupSync(t, recorder.handler())
+
+	work, _ := sb.CreateProject(model.CreateProject{Name: "work"})
+	homelab, _ := sb.CreateProject(model.CreateProject{Name: "homelab"})
+	item, _ := sb.CreateItem(model.CreateProjectItem{
+		Title:      "shared",
+		ProjectIDs: []string{work.ID},
+	})
+	if err := sb.AddToProject(item.ID, homelab.ID); err != nil {
+		t.Fatalf("AddToProject: %v", err)
+	}
+
+	time.Sleep(400 * time.Millisecond)
+	beforeUndo := recorder.count()
+
+	if _, err := sb.Undo(); err != nil {
+		t.Fatalf("Undo: %v", err)
+	}
+	time.Sleep(400 * time.Millisecond)
+
+	calls := recorder.snapshot()[beforeUndo:]
+	wantRemove := "DELETE /project-items/" + item.ID + "/projects/" + homelab.ID
+	itemDelete := "DELETE /project-items/" + item.ID + "/"
+
+	var sawRemove bool
+	for _, call := range calls {
+		if call == itemDelete {
+			t.Fatalf("undoing a membership add deleted the item on the server: %v", calls)
+		}
+		if call == wantRemove {
+			sawRemove = true
+		}
+	}
+	if !sawRemove {
+		t.Errorf("expected %q after undoing the membership add, got %v", wantRemove, calls)
+	}
+}
+
+func TestSyncBackend_UndoOfTaskCompletionPushesTheReversal(t *testing.T) {
+	recorder := &callRecorder{}
+	sb, _ := setupSync(t, recorder.handler())
+
+	p, _ := sb.CreateProject(model.CreateProject{Name: "work"})
+	item, _ := sb.CreateItem(model.CreateProjectItem{Title: "item", ProjectIDs: []string{p.ID}})
+	task, err := sb.CreateTask(item.ID, model.CreateProjectItemTask{Title: "step"})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if err := sb.CompleteTask(item.ID, task.ID); err != nil {
+		t.Fatalf("CompleteTask: %v", err)
+	}
+
+	time.Sleep(400 * time.Millisecond)
+	beforeUndo := recorder.count()
+
+	if _, err := sb.Undo(); err != nil {
+		t.Fatalf("Undo: %v", err)
+	}
+	time.Sleep(400 * time.Millisecond)
+
+	calls := recorder.snapshot()[beforeUndo:]
+	want := "PATCH /project-items/" + item.ID + "/tasks/" + task.ID + "/"
+	for _, call := range calls {
+		if call == want {
+			return
+		}
+	}
+	t.Errorf("expected %q after undoing the completion, got %v", want, calls)
+}
