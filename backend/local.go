@@ -63,7 +63,15 @@ func (b *LocalBackend) GetProject(id string) (*model.ProjectWithItemCount, error
 }
 
 func (b *LocalBackend) CreateProject(input model.CreateProject) (*model.Project, error) {
-	p, err := b.q.CreateProject(b.ctx(), generated.CreateProjectParams{
+	ctx := b.ctx()
+	tx, err := b.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("beginning create project transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	qtx := b.q.WithTx(tx)
+
+	p, err := qtx.CreateProject(ctx, generated.CreateProjectParams{
 		ID:          newID(),
 		Name:        input.Name,
 		Description: toNullString(input.Description),
@@ -73,6 +81,12 @@ func (b *LocalBackend) CreateProject(input model.CreateProject) (*model.Project,
 			return nil, model.ErrDuplicateName
 		}
 		return nil, fmt.Errorf("creating project: %w", err)
+	}
+	if err := b.logUndo(qtx, "create", "project", p.ID, nil); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("committing create project: %w", err)
 	}
 	result := toModelProject(p)
 	return &result, nil
@@ -105,16 +119,54 @@ func (b *LocalBackend) UpdateProject(id string, input model.UpdateProject) (*mod
 		params.Position = int64(*input.Position)
 	}
 
-	p, err := b.q.UpdateProject(ctx, params)
+	tx, err := b.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("beginning update project transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	qtx := b.q.WithTx(tx)
+
+	p, err := qtx.UpdateProject(ctx, params)
 	if err != nil {
 		return nil, fmt.Errorf("updating project: %w", err)
+	}
+	if err := b.logUndo(qtx, "update", "project", id, current); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("committing update project: %w", err)
 	}
 	result := toModelProject(p)
 	return &result, nil
 }
 
 func (b *LocalBackend) DeleteProject(id string) error {
-	return b.q.DeleteProject(b.ctx(), id)
+	ctx := b.ctx()
+	current, err := b.q.GetProject(ctx, id)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return model.ErrNotFound
+		}
+		return fmt.Errorf("getting project for delete: %w", err)
+	}
+
+	tx, err := b.db.Begin()
+	if err != nil {
+		return fmt.Errorf("beginning delete project transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	qtx := b.q.WithTx(tx)
+
+	if err := qtx.DeleteProject(ctx, id); err != nil {
+		return fmt.Errorf("deleting project: %w", err)
+	}
+	if err := b.logUndo(qtx, "delete", "project", id, current); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing delete project: %w", err)
+	}
+	return nil
 }
 
 func (b *LocalBackend) ReorderProject(projectID string, newPosition int) error {
@@ -546,6 +598,19 @@ func (b *LocalBackend) Undo() (*model.UndoResult, error) {
 		EntityID:    entry.EntityID,
 	}
 
+	if entry.EntityType == "project" {
+		if err := undoProject(ctx, qtx, entry, result); err != nil {
+			return nil, err
+		}
+		if err := qtx.DeleteUndoLog(ctx, entry.ID); err != nil {
+			return nil, fmt.Errorf("deleting undo log: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return nil, fmt.Errorf("committing undo: %w", err)
+		}
+		return result, nil
+	}
+
 	switch entry.Action {
 	case "create":
 		if err := qtx.DeleteItem(ctx, entry.EntityID); err != nil {
@@ -600,6 +665,54 @@ func (b *LocalBackend) Undo() (*model.UndoResult, error) {
 	}
 
 	return result, nil
+}
+
+// undoProject reverses a logged project mutation. Restoring a deleted project
+// brings back the row but not its item memberships — those cascade on delete and
+// the undo log records only the project itself.
+func undoProject(ctx context.Context, qtx *generated.Queries, entry generated.UndoLog, result *model.UndoResult) error {
+	switch entry.Action {
+	case "create":
+		if err := qtx.DeleteProject(ctx, entry.EntityID); err != nil {
+			return fmt.Errorf("undoing project create: %w", err)
+		}
+	case "update":
+		if entry.PreviousState.Valid {
+			var prev generated.Project
+			if err := json.Unmarshal([]byte(entry.PreviousState.String), &prev); err != nil {
+				return fmt.Errorf("unmarshaling previous project state: %w", err)
+			}
+			restored, err := qtx.UpdateProject(ctx, generated.UpdateProjectParams{
+				Name:        prev.Name,
+				Description: prev.Description,
+				Position:    prev.Position,
+				ID:          entry.EntityID,
+			})
+			if err != nil {
+				return fmt.Errorf("restoring previous project state: %w", err)
+			}
+			project := toModelProject(restored)
+			result.RestoredProject = &project
+		}
+	case "delete":
+		if entry.PreviousState.Valid {
+			var prev generated.Project
+			if err := json.Unmarshal([]byte(entry.PreviousState.String), &prev); err != nil {
+				return fmt.Errorf("unmarshaling deleted project state: %w", err)
+			}
+			restored, err := qtx.CreateProject(ctx, generated.CreateProjectParams{
+				ID:          entry.EntityID,
+				Name:        prev.Name,
+				Description: prev.Description,
+			})
+			if err != nil {
+				return fmt.Errorf("recreating deleted project: %w", err)
+			}
+			project := toModelProject(restored)
+			result.RestoredProject = &project
+		}
+	}
+	return nil
 }
 
 // UUIDv7 front-loads the millisecond timestamp, so a prefix is identical for

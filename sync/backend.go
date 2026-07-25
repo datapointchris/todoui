@@ -262,6 +262,23 @@ func (s *SyncBackend) Undo() (*model.UndoResult, error) {
 		return result, fmt.Errorf("reconciling sync queue: %w", dropErr)
 	}
 
+	if result.EntityType == "project" {
+		switch {
+		case result.RestoredProject != nil:
+			restored := result.RestoredProject
+			position := restored.Position
+			_ = s.engine.QueueOp(OpUpdateProject, result.EntityID, model.UpdateProject{
+				Name:        &restored.Name,
+				Description: restored.Description,
+				Position:    &position,
+			})
+		case dropped == 0:
+			_ = s.engine.QueueOp(OpDeleteProject, result.EntityID, nil)
+		}
+		s.engine.Notify()
+		return result, nil
+	}
+
 	switch {
 	case result.Restored != nil:
 		// The row is back; push its restored state. Idempotent whether or not

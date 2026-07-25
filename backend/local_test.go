@@ -381,6 +381,50 @@ func TestUndoCreateItem(t *testing.T) {
 	}
 }
 
+func TestUndoCoversProjectCreates(t *testing.T) {
+	b := newTestBackend(t)
+
+	older := mustCreateProject(t, b, "older")
+	unrelated := mustCreateItem(t, b, model.CreateProjectItem{Title: "unrelated", ProjectIDs: []string{older.ID}})
+	newer := mustCreateProject(t, b, "newer")
+
+	// Project creates used to go unlogged, so undo skipped past this one and
+	// silently reversed the item create before it.
+	result, err := b.Undo()
+	if err != nil {
+		t.Fatalf("undoing: %v", err)
+	}
+	if result.EntityType != "project" || result.EntityID != newer.ID {
+		t.Errorf("expected undo of project %s, got %s %s", newer.ID, result.EntityType, result.EntityID)
+	}
+	if _, err := b.GetItem(unrelated.ID); err != nil {
+		t.Errorf("undo reached past the project create and destroyed an unrelated item: %v", err)
+	}
+	if _, err := b.GetProject(newer.ID); err != model.ErrNotFound {
+		t.Errorf("expected the project create to be reversed, got %v", err)
+	}
+}
+
+func TestUndoRestoresDeletedProject(t *testing.T) {
+	b := newTestBackend(t)
+
+	p := mustCreateProject(t, b, "doomed")
+	if err := b.DeleteProject(p.ID); err != nil {
+		t.Fatalf("deleting project: %v", err)
+	}
+
+	result, err := b.Undo()
+	if err != nil {
+		t.Fatalf("undoing: %v", err)
+	}
+	if result.RestoredProject == nil || result.RestoredProject.Name != "doomed" {
+		t.Fatalf("expected the deleted project restored, got %+v", result.RestoredProject)
+	}
+	if _, err := b.GetProject(p.ID); err != nil {
+		t.Errorf("expected project back after undo: %v", err)
+	}
+}
+
 func TestUndoWhenEmpty(t *testing.T) {
 	b := newTestBackend(t)
 

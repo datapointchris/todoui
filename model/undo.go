@@ -20,5 +20,7 @@ type UndoResult struct {
 	EntityID    string
 
 	// Restored is the local row after the undo, or nil when the undo removed it.
-	Restored *ProjectItem
+	// Exactly one of Restored / RestoredProject can be set, matching EntityType.
+	Restored        *ProjectItem
+	RestoredProject *Project
 }
