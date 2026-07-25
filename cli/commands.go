@@ -167,9 +167,11 @@ func (c *commands) projectsCmd() *cobra.Command {
 
 // --- helpers ---
 
+// UUIDv7 front-loads the 48-bit millisecond timestamp, so any prefix is identical
+// for everything created in the same ~65s window. The entropy is in the tail.
 func shortID(id string) string {
 	if len(id) >= 8 {
-		return id[:8]
+		return id[len(id)-8:]
 	}
 	return id
 }
