@@ -26,6 +26,7 @@ type Engine struct {
 	pushCh chan struct{}
 	ctx    context.Context
 	cancel context.CancelFunc
+	done   chan struct{}
 }
 
 // New creates a sync engine. Call Start() to launch the background push loop.
@@ -47,6 +48,7 @@ func New(db *sql.DB, apiURL, apiKey string) *Engine {
 		pushCh: make(chan struct{}, 1),
 		ctx:    ctx,
 		cancel: cancel,
+		done:   make(chan struct{}),
 	}
 }
 
@@ -67,12 +69,22 @@ func (t *authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 // Start launches the background push loop goroutine.
 func (e *Engine) Start() {
-	go e.pushLoop()
+	go func() {
+		defer close(e.done)
+		e.pushLoop()
+	}()
 }
 
-// Stop shuts down the background goroutine gracefully.
+// Stop cancels the background loop and waits for it to finish. Callers close the
+// database right after this returns, so returning early leaves the loop mid-query
+// against a closed handle — which is where "sql: database is closed" came from on
+// every CLI invocation. The timeout keeps an in-flight HTTP push from hanging exit.
 func (e *Engine) Stop() {
 	e.cancel()
+	select {
+	case <-e.done:
+	case <-time.After(2 * time.Second):
+	}
 }
 
 // QueueOp inserts a pending sync operation into the database.
