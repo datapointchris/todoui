@@ -4,8 +4,10 @@ on:
   push:
     branches: [main]
 
+# Scoped per job rather than here: validate only reads, and it is the job that
+# runs the most third-party code.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   validate:
@@ -14,6 +16,8 @@ jobs:
   semver:
     needs: validate
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     outputs:
       version: ${{ steps.semrel.outputs.version }}
     steps:
@@ -32,6 +36,8 @@ jobs:
     needs: semver
     if: needs.semver.outputs.version != ''
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v7
         with:

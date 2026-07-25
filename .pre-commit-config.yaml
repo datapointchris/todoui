@@ -67,7 +67,16 @@ repos:
       - id: golangci-lint-repo-mod
         stages: [pre-commit]
 
-# > custom:after:go - sqlc generated code freshness
+# > custom:after:go - sqlc generated code freshness and workflow linting
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.7.7
+    hooks:
+      # check-yaml proves the workflows parse, not that they are valid Actions.
+      # A misspelled `needs:` or `permissions:` parses fine and silently does
+      # nothing — in a repo where both workflows gate the release.
+      - id: actionlint
+        stages: [pre-commit]
+
   - repo: local
     hooks:
       # Catches a schema or query edit committed without regenerating.
