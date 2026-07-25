@@ -23,4 +23,20 @@ type UndoResult struct {
 	// Exactly one of Restored / RestoredProject can be set, matching EntityType.
 	Restored        *ProjectItem
 	RestoredProject *Project
+
+	// Rows that cascaded off a delete and came back with it. Sync has to push
+	// these, not just the row: a pull replaces memberships and dependencies
+	// wholesale from server state and drops tasks the server does not know
+	// about, so anything restored only locally is erased on the next pull.
+	RestoredProjectIDs   []string // projects an item was restored into
+	RestoredItemIDs      []string // items a restored project held
+	RestoredTasks        []ProjectItemTask
+	RestoredDependencies []ItemDependency
+}
+
+// ItemDependency is one edge of the blocking graph: ItemID is blocked until
+// DependsOnID is complete.
+type ItemDependency struct {
+	ItemID      string `json:"item_id"`
+	DependsOnID string `json:"depends_on_id"`
 }

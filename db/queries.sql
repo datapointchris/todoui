@@ -88,6 +88,18 @@ ORDER BY p.name;
 -- name: UpdateItemPosition :exec
 UPDATE project_item_memberships SET position = ? WHERE item_id = ? AND project_id = ?;
 
+-- Undo of a delete puts back rows whose counterpart may itself have been
+-- deleted since. OR IGNORE drops those instead of failing the whole undo.
+-- name: RestoreMembership :exec
+INSERT OR IGNORE INTO project_item_memberships (item_id, project_id, position)
+VALUES (?, ?, ?);
+
+-- name: GetItemMemberships :many
+SELECT * FROM project_item_memberships WHERE item_id = ?;
+
+-- name: GetProjectMemberships :many
+SELECT * FROM project_item_memberships WHERE project_id = ?;
+
 -- name: AddDependency :exec
 INSERT INTO project_item_dependencies (item_id, depends_on_id) VALUES (?, ?);
 
@@ -105,6 +117,11 @@ SELECT depends_on_id FROM project_item_dependencies WHERE item_id = ?;
 
 -- name: GetAllDependencies :many
 SELECT * FROM project_item_dependencies;
+
+-- Both directions: deleting an item drops the rows where it is the dependent
+-- and the rows where it is the blocker.
+-- name: GetDependenciesInvolvingItem :many
+SELECT * FROM project_item_dependencies WHERE item_id = ? OR depends_on_id = ?;
 
 -- name: SearchItems :many
 SELECT * FROM project_items

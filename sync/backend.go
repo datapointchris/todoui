@@ -262,8 +262,24 @@ func (s *SyncBackend) Undo() (*model.UndoResult, error) {
 		return result, fmt.Errorf("reconciling sync queue: %w", dropErr)
 	}
 
+	// Undoing a delete when the delete had already been pushed means the row
+	// is gone from the server, so it has to be recreated rather than updated —
+	// and recreated with everything that cascaded off it, since a pull rebuilds
+	// memberships and dependencies from server state alone.
+	deleteWasPushed := result.Action == "delete" && dropped == 0
+
 	if result.EntityType == "project" {
 		switch {
+		case result.RestoredProject != nil && deleteWasPushed:
+			restored := result.RestoredProject
+			_ = s.engine.QueueOp(OpCreateProject, result.EntityID, createProjectPayload{
+				ID:          restored.ID,
+				Name:        restored.Name,
+				Description: restored.Description,
+			})
+			for _, itemID := range result.RestoredItemIDs {
+				_ = s.engine.QueueOp(OpAddToProject, itemID, projectIDPayload{ProjectID: result.EntityID})
+			}
 		case result.RestoredProject != nil:
 			restored := result.RestoredProject
 			position := restored.Position
@@ -280,6 +296,16 @@ func (s *SyncBackend) Undo() (*model.UndoResult, error) {
 	}
 
 	switch {
+	case result.Restored != nil && deleteWasPushed:
+		restored := result.Restored
+		_ = s.engine.QueueOp(OpCreateItem, result.EntityID, createItemPayload{
+			ID:         restored.ID,
+			Title:      restored.Title,
+			Notes:      restored.Notes,
+			Repo:       restored.Repo,
+			ProjectIDs: result.RestoredProjectIDs,
+		})
+		s.queueRestoredChildren(result)
 	case result.Restored != nil:
 		// The row is back; push its restored state. Idempotent whether or not
 		// the reversed change had already been pushed.
@@ -307,6 +333,25 @@ func (s *SyncBackend) Undo() (*model.UndoResult, error) {
 
 	s.engine.Notify()
 	return result, nil
+}
+
+// queueRestoredChildren pushes the tasks and dependencies that came back with
+// a restored item. The item's own create carries its memberships.
+func (s *SyncBackend) queueRestoredChildren(result *model.UndoResult) {
+	for _, task := range result.RestoredTasks {
+		_ = s.engine.QueueOp(OpCreateTask, task.ID, taskPayload{
+			ItemID: task.ItemID,
+			Title:  task.Title,
+		})
+		if task.Completed {
+			_ = s.engine.QueueOp(OpCompleteTask, task.ID, taskRefPayload{ItemID: task.ItemID})
+		}
+	}
+	for _, dependency := range result.RestoredDependencies {
+		_ = s.engine.QueueOp(OpAddDependency, dependency.ItemID, depPayload{
+			DependsOnID: dependency.DependsOnID,
+		})
+	}
 }
 
 // --- Payload types for JSON serialization into pending_sync ---

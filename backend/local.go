@@ -142,12 +142,9 @@ func (b *LocalBackend) UpdateProject(id string, input model.UpdateProject) (*mod
 
 func (b *LocalBackend) DeleteProject(id string) error {
 	ctx := b.ctx()
-	current, err := b.q.GetProject(ctx, id)
+	snapshot, err := captureProject(ctx, b.q, id)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return model.ErrNotFound
-		}
-		return fmt.Errorf("getting project for delete: %w", err)
+		return err
 	}
 
 	tx, err := b.db.Begin()
@@ -160,7 +157,7 @@ func (b *LocalBackend) DeleteProject(id string) error {
 	if err := qtx.DeleteProject(ctx, id); err != nil {
 		return fmt.Errorf("deleting project: %w", err)
 	}
-	if err := b.logUndo(qtx, "delete", "project", id, current); err != nil {
+	if err := b.logUndo(qtx, "delete", "project", id, snapshot); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -336,12 +333,9 @@ func (b *LocalBackend) UpdateItem(id string, input model.UpdateProjectItem) (*mo
 
 func (b *LocalBackend) DeleteItem(id string) error {
 	ctx := b.ctx()
-	current, err := b.q.GetItem(ctx, id)
+	snapshot, err := captureItem(ctx, b.q, id)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return model.ErrNotFound
-		}
-		return fmt.Errorf("getting item for delete: %w", err)
+		return err
 	}
 
 	tx, err := b.db.Begin()
@@ -352,7 +346,7 @@ func (b *LocalBackend) DeleteItem(id string) error {
 
 	qtx := b.q.WithTx(tx)
 
-	if err := b.logUndo(qtx, "delete", "item", id, current); err != nil {
+	if err := b.logUndo(qtx, "delete", "item", id, snapshot); err != nil {
 		return err
 	}
 
@@ -638,21 +632,27 @@ func (b *LocalBackend) Undo() (*model.UndoResult, error) {
 		}
 	case "delete":
 		if entry.PreviousState.Valid {
-			var prev generated.ProjectItem
-			if err := json.Unmarshal([]byte(entry.PreviousState.String), &prev); err != nil {
-				return nil, fmt.Errorf("unmarshaling deleted state: %w", err)
-			}
-			restored, err := qtx.CreateItem(ctx, generated.CreateItemParams{
-				ID:    entry.EntityID,
-				Title: prev.Title,
-				Notes: prev.Notes,
-				Repo:  prev.Repo,
-			})
+			snapshot, err := decodeItemSnapshot(entry.PreviousState.String)
 			if err != nil {
-				return nil, fmt.Errorf("recreating deleted item: %w", err)
+				return nil, err
 			}
-			item := toModelProjectItem(restored)
+			if err := restoreItemSnapshot(ctx, qtx, snapshot); err != nil {
+				return nil, err
+			}
+			item := toModelProjectItem(snapshot.Item)
 			result.Restored = &item
+			for _, membership := range snapshot.Memberships {
+				result.RestoredProjectIDs = append(result.RestoredProjectIDs, membership.ProjectID)
+			}
+			for _, dependency := range snapshot.Dependencies {
+				result.RestoredDependencies = append(result.RestoredDependencies, model.ItemDependency{
+					ItemID:      dependency.ItemID,
+					DependsOnID: dependency.DependsOnID,
+				})
+			}
+			for _, task := range snapshot.Tasks {
+				result.RestoredTasks = append(result.RestoredTasks, toModelProjectItemTask(task))
+			}
 		}
 	}
 
@@ -667,9 +667,7 @@ func (b *LocalBackend) Undo() (*model.UndoResult, error) {
 	return result, nil
 }
 
-// undoProject reverses a logged project mutation. Restoring a deleted project
-// brings back the row but not its item memberships — those cascade on delete and
-// the undo log records only the project itself.
+// undoProject reverses a logged project mutation.
 func undoProject(ctx context.Context, qtx *generated.Queries, entry generated.UndoLog, result *model.UndoResult) error {
 	switch entry.Action {
 	case "create":
@@ -696,20 +694,18 @@ func undoProject(ctx context.Context, qtx *generated.Queries, entry generated.Un
 		}
 	case "delete":
 		if entry.PreviousState.Valid {
-			var prev generated.Project
-			if err := json.Unmarshal([]byte(entry.PreviousState.String), &prev); err != nil {
-				return fmt.Errorf("unmarshaling deleted project state: %w", err)
-			}
-			restored, err := qtx.CreateProject(ctx, generated.CreateProjectParams{
-				ID:          entry.EntityID,
-				Name:        prev.Name,
-				Description: prev.Description,
-			})
+			snapshot, err := decodeProjectSnapshot(entry.PreviousState.String)
 			if err != nil {
-				return fmt.Errorf("recreating deleted project: %w", err)
+				return err
 			}
-			project := toModelProject(restored)
+			if err := restoreProjectSnapshot(ctx, qtx, snapshot); err != nil {
+				return err
+			}
+			project := toModelProject(snapshot.Project)
 			result.RestoredProject = &project
+			for _, membership := range snapshot.Memberships {
+				result.RestoredItemIDs = append(result.RestoredItemIDs, membership.ItemID)
+			}
 		}
 	}
 	return nil
@@ -730,6 +726,134 @@ func (b *LocalBackend) CanUndo() (bool, error) {
 		return false, fmt.Errorf("counting undo logs: %w", err)
 	}
 	return count > 0, nil
+}
+
+// itemSnapshot is everything a delete destroys. The row alone is not enough
+// to undo one: memberships, dependencies, and tasks all cascade. An item
+// restored without its memberships belongs to no project, which the TUI
+// cannot show at all — it builds every view by walking projects — while the
+// CLI's flat listing still returns it.
+type itemSnapshot struct {
+	Item         generated.ProjectItem             `json:"item"`
+	Memberships  []generated.ProjectItemMembership `json:"memberships"`
+	Dependencies []generated.ProjectItemDependency `json:"dependencies"`
+	Tasks        []generated.ProjectItemTask       `json:"tasks"`
+}
+
+// projectSnapshot is the project equivalent. Memberships cascade off a
+// project delete; the items on the other end of them do not.
+type projectSnapshot struct {
+	Project     generated.Project                 `json:"project"`
+	Memberships []generated.ProjectItemMembership `json:"memberships"`
+}
+
+func captureItem(ctx context.Context, q *generated.Queries, id string) (*itemSnapshot, error) {
+	item, err := q.GetItem(ctx, id)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, model.ErrNotFound
+		}
+		return nil, fmt.Errorf("getting item for delete: %w", err)
+	}
+	memberships, err := q.GetItemMemberships(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("capturing item memberships: %w", err)
+	}
+	dependencies, err := q.GetDependenciesInvolvingItem(ctx, generated.GetDependenciesInvolvingItemParams{
+		ItemID:      id,
+		DependsOnID: id,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("capturing item dependencies: %w", err)
+	}
+	tasks, err := q.ListTasksByItem(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("capturing item tasks: %w", err)
+	}
+	return &itemSnapshot{
+		Item:         item,
+		Memberships:  memberships,
+		Dependencies: dependencies,
+		Tasks:        tasks,
+	}, nil
+}
+
+func captureProject(ctx context.Context, q *generated.Queries, id string) (*projectSnapshot, error) {
+	project, err := q.GetProject(ctx, id)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, model.ErrNotFound
+		}
+		return nil, fmt.Errorf("getting project for delete: %w", err)
+	}
+	memberships, err := q.GetProjectMemberships(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("capturing project memberships: %w", err)
+	}
+	return &projectSnapshot{Project: project, Memberships: memberships}, nil
+}
+
+// decodeItemSnapshot accepts either shape of previous_state: the snapshot
+// written now, or the bare item row written before snapshots existed. Undo
+// logs are not pruned, so pre-existing databases still hold the old shape.
+func decodeItemSnapshot(raw string) (*itemSnapshot, error) {
+	var snapshot itemSnapshot
+	if err := json.Unmarshal([]byte(raw), &snapshot); err == nil && snapshot.Item.ID != "" {
+		return &snapshot, nil
+	}
+	var item generated.ProjectItem
+	if err := json.Unmarshal([]byte(raw), &item); err != nil {
+		return nil, fmt.Errorf("unmarshaling deleted item state: %w", err)
+	}
+	return &itemSnapshot{Item: item}, nil
+}
+
+func decodeProjectSnapshot(raw string) (*projectSnapshot, error) {
+	var snapshot projectSnapshot
+	if err := json.Unmarshal([]byte(raw), &snapshot); err == nil && snapshot.Project.ID != "" {
+		return &snapshot, nil
+	}
+	var project generated.Project
+	if err := json.Unmarshal([]byte(raw), &project); err != nil {
+		return nil, fmt.Errorf("unmarshaling deleted project state: %w", err)
+	}
+	return &projectSnapshot{Project: project}, nil
+}
+
+// restoreItemSnapshot puts the row back with its original timestamps, then
+// reattaches whatever cascaded off it.
+func restoreItemSnapshot(ctx context.Context, qtx *generated.Queries, snapshot *itemSnapshot) error {
+	if err := qtx.UpsertItem(ctx, generated.UpsertItemParams(snapshot.Item)); err != nil {
+		return fmt.Errorf("recreating deleted item: %w", err)
+	}
+	for _, membership := range snapshot.Memberships {
+		if err := qtx.RestoreMembership(ctx, generated.RestoreMembershipParams(membership)); err != nil {
+			return fmt.Errorf("restoring item membership: %w", err)
+		}
+	}
+	for _, dependency := range snapshot.Dependencies {
+		if err := qtx.UpsertDependency(ctx, generated.UpsertDependencyParams(dependency)); err != nil {
+			return fmt.Errorf("restoring item dependency: %w", err)
+		}
+	}
+	for _, task := range snapshot.Tasks {
+		if err := qtx.UpsertTask(ctx, generated.UpsertTaskParams(task)); err != nil {
+			return fmt.Errorf("restoring item task: %w", err)
+		}
+	}
+	return nil
+}
+
+func restoreProjectSnapshot(ctx context.Context, qtx *generated.Queries, snapshot *projectSnapshot) error {
+	if err := qtx.UpsertProject(ctx, generated.UpsertProjectParams(snapshot.Project)); err != nil {
+		return fmt.Errorf("recreating deleted project: %w", err)
+	}
+	for _, membership := range snapshot.Memberships {
+		if err := qtx.RestoreMembership(ctx, generated.RestoreMembershipParams(membership)); err != nil {
+			return fmt.Errorf("restoring project membership: %w", err)
+		}
+	}
+	return nil
 }
 
 func (b *LocalBackend) logUndo(qtx *generated.Queries, action, entityType string, entityID string, previousState any) error {

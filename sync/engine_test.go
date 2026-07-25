@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	goSync "sync"
 	"testing"
 	"time"
 
@@ -138,14 +139,39 @@ func TestSyncBackend_PushDropsOn409(t *testing.T) {
 	}
 }
 
-func TestSyncBackend_ItemLifecycle(t *testing.T) {
-	var received []string
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		received = append(received, r.Method+" "+r.URL.Path)
+// callRecorder captures what a test's mock server received. The push loop
+// runs on its own goroutine, so every read and write of the log needs the
+// lock — asserting on an unguarded slice is a data race.
+type callRecorder struct {
+	mu    goSync.Mutex
+	calls []string
+}
+
+func (r *callRecorder) handler() http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		r.mu.Lock()
+		r.calls = append(r.calls, req.Method+" "+req.URL.Path)
+		r.mu.Unlock()
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("{}"))
-	})
-	sb, _ := setupSync(t, handler)
+	}
+}
+
+func (r *callRecorder) snapshot() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.calls...)
+}
+
+func (r *callRecorder) count() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.calls)
+}
+
+func TestSyncBackend_ItemLifecycle(t *testing.T) {
+	recorder := &callRecorder{}
+	sb, _ := setupSync(t, recorder.handler())
 
 	p, _ := sb.CreateProject(model.CreateProject{Name: "Items"})
 	item, err := sb.CreateItem(model.CreateProjectItem{
@@ -170,19 +196,14 @@ func TestSyncBackend_ItemLifecycle(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 
 	// Verify the HTTP calls were made in order
-	if len(received) < 4 {
-		t.Fatalf("expected at least 4 HTTP calls, got %d: %v", len(received), received)
+	if recorder.count() < 4 {
+		t.Fatalf("expected at least 4 HTTP calls, got %d: %v", recorder.count(), recorder.snapshot())
 	}
 }
 
 func TestSyncBackend_TaskOperations(t *testing.T) {
-	var received []string
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		received = append(received, r.Method+" "+r.URL.Path)
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("{}"))
-	})
-	sb, _ := setupSync(t, handler)
+	recorder := &callRecorder{}
+	sb, _ := setupSync(t, recorder.handler())
 
 	p, _ := sb.CreateProject(model.CreateProject{Name: "Tasks"})
 	item, _ := sb.CreateItem(model.CreateProjectItem{
@@ -205,19 +226,14 @@ func TestSyncBackend_TaskOperations(t *testing.T) {
 
 	time.Sleep(500 * time.Millisecond)
 
-	if len(received) < 5 {
-		t.Fatalf("expected at least 5 HTTP calls, got %d: %v", len(received), received)
+	if recorder.count() < 5 {
+		t.Fatalf("expected at least 5 HTTP calls, got %d: %v", recorder.count(), recorder.snapshot())
 	}
 }
 
 func TestSyncBackend_UndoAfterPushDeletesRemotely(t *testing.T) {
-	var received []string
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		received = append(received, r.Method+" "+r.URL.Path)
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("{}"))
-	})
-	sb, _ := setupSync(t, handler)
+	recorder := &callRecorder{}
+	sb, _ := setupSync(t, recorder.handler())
 
 	p, _ := sb.CreateProject(model.CreateProject{Name: "Undo"})
 	item, _ := sb.CreateItem(model.CreateProjectItem{
@@ -234,12 +250,13 @@ func TestSyncBackend_UndoAfterPushDeletesRemotely(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 
 	want := "DELETE /project-items/" + item.ID + "/"
-	for _, call := range received {
+	calls := recorder.snapshot()
+	for _, call := range calls {
 		if call == want {
 			return
 		}
 	}
-	t.Errorf("expected %q after undoing an already-pushed create, got %v", want, received)
+	t.Errorf("expected %q after undoing an already-pushed create, got %v", want, calls)
 }
 
 func TestSyncBackend_UndoBeforePushDropsQueuedCreate(t *testing.T) {
@@ -340,5 +357,54 @@ func TestPull_Reconciles(t *testing.T) {
 	}
 	if len(tasks) != 1 || tasks[0].Title != "Pulled Task" {
 		t.Errorf("expected 1 task 'Pulled Task', got %v", tasks)
+	}
+}
+
+// Undoing an already-pushed delete has to recreate the row on the server, not
+// update one the server no longer has — and recreate its memberships, tasks,
+// and dependencies with it, because a pull rebuilds those from server state
+// and would otherwise erase the restore.
+func TestSyncBackend_UndoOfPushedDeleteRecreatesRemotely(t *testing.T) {
+	recorder := &callRecorder{}
+	sb, _ := setupSync(t, recorder.handler())
+
+	p, _ := sb.CreateProject(model.CreateProject{Name: "Undo"})
+	item, _ := sb.CreateItem(model.CreateProjectItem{
+		Title:      "Doomed",
+		ProjectIDs: []string{p.ID},
+	})
+	if _, err := sb.CreateTask(item.ID, model.CreateProjectItemTask{Title: "step"}); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if err := sb.DeleteItem(item.ID); err != nil {
+		t.Fatalf("DeleteItem: %v", err)
+	}
+
+	// Let the delete reach the server before undoing it, then look only at
+	// what the undo itself pushed — the original create hit the same paths.
+	time.Sleep(400 * time.Millisecond)
+	beforeUndo := recorder.count()
+
+	if _, err := sb.Undo(); err != nil {
+		t.Fatalf("Undo: %v", err)
+	}
+	time.Sleep(400 * time.Millisecond)
+
+	calls := recorder.snapshot()[beforeUndo:]
+
+	var sawItemCreate, sawTaskCreate bool
+	for _, call := range calls {
+		switch call {
+		case "POST /project-items/":
+			sawItemCreate = true
+		case "POST /project-items/" + item.ID + "/tasks/":
+			sawTaskCreate = true
+		}
+	}
+	if !sawItemCreate {
+		t.Errorf("expected the restored item recreated on the server, got %v", calls)
+	}
+	if !sawTaskCreate {
+		t.Errorf("expected the restored sub-task recreated on the server, got %v", calls)
 	}
 }

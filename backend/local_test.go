@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/datapointchris/todoui/db"
@@ -693,5 +694,191 @@ func TestItemRepoIsNilForNonRepoWork(t *testing.T) {
 	}
 	if item.Repo != nil {
 		t.Errorf("non-repo work must have a nil repo, got %v", item.Repo)
+	}
+}
+
+func TestUndoRestoresDeletedItemMemberships(t *testing.T) {
+	b := newTestBackend(t)
+
+	work := mustCreateProject(t, b, "work")
+	homelab := mustCreateProject(t, b, "homelab")
+	item := mustCreateItem(t, b, model.CreateProjectItem{
+		Title:      "doomed",
+		ProjectIDs: []string{work.ID, homelab.ID},
+	})
+
+	if err := b.DeleteItem(item.ID); err != nil {
+		t.Fatalf("deleting item: %v", err)
+	}
+	if _, err := b.Undo(); err != nil {
+		t.Fatalf("undoing: %v", err)
+	}
+
+	// Memberships cascade on delete. Restoring only the row leaves an item
+	// that belongs to no project, which the TUI cannot display at all.
+	projects, err := b.GetItemProjects(item.ID)
+	if err != nil {
+		t.Fatalf("getting item projects: %v", err)
+	}
+	if len(projects) != 2 {
+		t.Fatalf("expected 2 memberships restored, got %d", len(projects))
+	}
+}
+
+func TestUndoRestoresDeletedItemTasksAndDependencies(t *testing.T) {
+	b := newTestBackend(t)
+
+	p := mustCreateProject(t, b, "work")
+	blocker := mustCreateItem(t, b, model.CreateProjectItem{Title: "blocker", ProjectIDs: []string{p.ID}})
+	item := mustCreateItem(t, b, model.CreateProjectItem{Title: "doomed", ProjectIDs: []string{p.ID}})
+
+	if _, err := b.CreateTask(item.ID, model.CreateProjectItemTask{Title: "step one"}); err != nil {
+		t.Fatalf("creating task: %v", err)
+	}
+	if err := b.AddDependency(item.ID, blocker.ID); err != nil {
+		t.Fatalf("adding dependency: %v", err)
+	}
+
+	if err := b.DeleteItem(item.ID); err != nil {
+		t.Fatalf("deleting item: %v", err)
+	}
+	if _, err := b.Undo(); err != nil {
+		t.Fatalf("undoing: %v", err)
+	}
+
+	tasks, err := b.ListTasks(item.ID)
+	if err != nil {
+		t.Fatalf("listing tasks: %v", err)
+	}
+	if len(tasks) != 1 || tasks[0].Title != "step one" {
+		t.Errorf("expected the sub-task restored, got %+v", tasks)
+	}
+
+	blockers, err := b.GetBlockers(item.ID)
+	if err != nil {
+		t.Fatalf("getting blockers: %v", err)
+	}
+	if len(blockers) != 1 || blockers[0].ID != blocker.ID {
+		t.Errorf("expected the dependency restored, got %+v", blockers)
+	}
+}
+
+// A dependency where the deleted item is the blocker cascades too, so an item
+// that other work waits on must come back still blocking it.
+func TestUndoRestoresDependenciesPointingAtTheDeletedItem(t *testing.T) {
+	b := newTestBackend(t)
+
+	p := mustCreateProject(t, b, "work")
+	blocker := mustCreateItem(t, b, model.CreateProjectItem{Title: "doomed blocker", ProjectIDs: []string{p.ID}})
+	dependent := mustCreateItem(t, b, model.CreateProjectItem{Title: "waiting", ProjectIDs: []string{p.ID}})
+
+	if err := b.AddDependency(dependent.ID, blocker.ID); err != nil {
+		t.Fatalf("adding dependency: %v", err)
+	}
+	if err := b.DeleteItem(blocker.ID); err != nil {
+		t.Fatalf("deleting blocker: %v", err)
+	}
+	if _, err := b.Undo(); err != nil {
+		t.Fatalf("undoing: %v", err)
+	}
+
+	blockers, err := b.GetBlockers(dependent.ID)
+	if err != nil {
+		t.Fatalf("getting blockers: %v", err)
+	}
+	if len(blockers) != 1 || blockers[0].ID != blocker.ID {
+		t.Errorf("expected the blocking relationship restored, got %+v", blockers)
+	}
+}
+
+func TestUndoRestoresDeletedProjectMemberships(t *testing.T) {
+	b := newTestBackend(t)
+
+	keep := mustCreateProject(t, b, "keep")
+	doomed := mustCreateProject(t, b, "doomed")
+	item := mustCreateItem(t, b, model.CreateProjectItem{
+		Title:      "shared",
+		ProjectIDs: []string{keep.ID, doomed.ID},
+	})
+
+	if err := b.DeleteProject(doomed.ID); err != nil {
+		t.Fatalf("deleting project: %v", err)
+	}
+	if _, err := b.Undo(); err != nil {
+		t.Fatalf("undoing: %v", err)
+	}
+
+	projects, err := b.GetItemProjects(item.ID)
+	if err != nil {
+		t.Fatalf("getting item projects: %v", err)
+	}
+	if len(projects) != 2 {
+		t.Errorf("expected the item back in both projects, got %d", len(projects))
+	}
+}
+
+// Undo preserves identity, not just content: created_at drives item ordering
+// and a restore that stamps "now" silently reorders the list.
+func TestUndoPreservesDeletedItemTimestamps(t *testing.T) {
+	b := newTestBackend(t)
+
+	p := mustCreateProject(t, b, "work")
+	item := mustCreateItem(t, b, model.CreateProjectItem{Title: "doomed", ProjectIDs: []string{p.ID}})
+
+	before, err := b.GetItem(item.ID)
+	if err != nil {
+		t.Fatalf("getting item: %v", err)
+	}
+
+	if err := b.DeleteItem(item.ID); err != nil {
+		t.Fatalf("deleting item: %v", err)
+	}
+	if _, err := b.Undo(); err != nil {
+		t.Fatalf("undoing: %v", err)
+	}
+
+	after, err := b.GetItem(item.ID)
+	if err != nil {
+		t.Fatalf("getting restored item: %v", err)
+	}
+	if after.CreatedAt != before.CreatedAt {
+		t.Errorf("created_at changed on restore: %q → %q", before.CreatedAt, after.CreatedAt)
+	}
+}
+
+// Undo logs are not pruned, so entries written before snapshots existed still
+// have to restore the row rather than failing or restoring an empty one.
+func TestUndoAcceptsPreSnapshotDeleteEntries(t *testing.T) {
+	b := newTestBackend(t)
+
+	p := mustCreateProject(t, b, "work")
+	item := mustCreateItem(t, b, model.CreateProjectItem{Title: "legacy", ProjectIDs: []string{p.ID}})
+
+	row, err := b.q.GetItem(b.ctx(), item.ID)
+	if err != nil {
+		t.Fatalf("getting raw item: %v", err)
+	}
+	legacy, err := json.Marshal(row)
+	if err != nil {
+		t.Fatalf("marshaling legacy state: %v", err)
+	}
+
+	if err := b.DeleteItem(item.ID); err != nil {
+		t.Fatalf("deleting item: %v", err)
+	}
+	// Rewrite the newest entry in the shape the old code wrote.
+	if _, err := b.db.Exec(
+		`UPDATE undo_log SET previous_state = ? WHERE id = (SELECT MAX(id) FROM undo_log)`,
+		string(legacy),
+	); err != nil {
+		t.Fatalf("rewriting undo log: %v", err)
+	}
+
+	result, err := b.Undo()
+	if err != nil {
+		t.Fatalf("undoing: %v", err)
+	}
+	if result.Restored == nil || result.Restored.Title != "legacy" {
+		t.Fatalf("expected the item restored from a pre-snapshot entry, got %+v", result.Restored)
 	}
 }

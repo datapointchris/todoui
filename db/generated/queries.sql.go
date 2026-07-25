@@ -303,6 +303,40 @@ func (q *Queries) GetBlockers(ctx context.Context, itemID string) ([]ProjectItem
 	return items, nil
 }
 
+const getDependenciesInvolvingItem = `-- name: GetDependenciesInvolvingItem :many
+SELECT item_id, depends_on_id FROM project_item_dependencies WHERE item_id = ? OR depends_on_id = ?
+`
+
+type GetDependenciesInvolvingItemParams struct {
+	ItemID      string
+	DependsOnID string
+}
+
+// Both directions: deleting an item drops the rows where it is the dependent
+// and the rows where it is the blocker.
+func (q *Queries) GetDependenciesInvolvingItem(ctx context.Context, arg GetDependenciesInvolvingItemParams) ([]ProjectItemDependency, error) {
+	rows, err := q.db.QueryContext(ctx, getDependenciesInvolvingItem, arg.ItemID, arg.DependsOnID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ProjectItemDependency
+	for rows.Next() {
+		var i ProjectItemDependency
+		if err := rows.Scan(&i.ItemID, &i.DependsOnID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getDependencyIDs = `-- name: GetDependencyIDs :many
 SELECT depends_on_id FROM project_item_dependencies WHERE item_id = ?
 `
@@ -348,6 +382,33 @@ func (q *Queries) GetItem(ctx context.Context, id string) (ProjectItem, error) {
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const getItemMemberships = `-- name: GetItemMemberships :many
+SELECT item_id, project_id, position FROM project_item_memberships WHERE item_id = ?
+`
+
+func (q *Queries) GetItemMemberships(ctx context.Context, itemID string) ([]ProjectItemMembership, error) {
+	rows, err := q.db.QueryContext(ctx, getItemMemberships, itemID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ProjectItemMembership
+	for rows.Next() {
+		var i ProjectItemMembership
+		if err := rows.Scan(&i.ItemID, &i.ProjectID, &i.Position); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const getItemProjects = `-- name: GetItemProjects :many
@@ -440,6 +501,33 @@ func (q *Queries) GetProject(ctx context.Context, id string) (Project, error) {
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const getProjectMemberships = `-- name: GetProjectMemberships :many
+SELECT item_id, project_id, position FROM project_item_memberships WHERE project_id = ?
+`
+
+func (q *Queries) GetProjectMemberships(ctx context.Context, projectID string) ([]ProjectItemMembership, error) {
+	rows, err := q.db.QueryContext(ctx, getProjectMemberships, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ProjectItemMembership
+	for rows.Next() {
+		var i ProjectItemMembership
+		if err := rows.Scan(&i.ItemID, &i.ProjectID, &i.Position); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const getProjectWithItemCount = `-- name: GetProjectWithItemCount :one
@@ -1017,6 +1105,24 @@ type RemoveItemFromProjectParams struct {
 
 func (q *Queries) RemoveItemFromProject(ctx context.Context, arg RemoveItemFromProjectParams) error {
 	_, err := q.db.ExecContext(ctx, removeItemFromProject, arg.ItemID, arg.ProjectID)
+	return err
+}
+
+const restoreMembership = `-- name: RestoreMembership :exec
+INSERT OR IGNORE INTO project_item_memberships (item_id, project_id, position)
+VALUES (?, ?, ?)
+`
+
+type RestoreMembershipParams struct {
+	ItemID    string
+	ProjectID string
+	Position  int64
+}
+
+// Undo of a delete puts back rows whose counterpart may itself have been
+// deleted since. OR IGNORE drops those instead of failing the whole undo.
+func (q *Queries) RestoreMembership(ctx context.Context, arg RestoreMembershipParams) error {
+	_, err := q.db.ExecContext(ctx, restoreMembership, arg.ItemID, arg.ProjectID, arg.Position)
 	return err
 }
 
