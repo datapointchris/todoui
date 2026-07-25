@@ -12,6 +12,9 @@ CREATE TABLE project_items (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL,
     notes TEXT,
+    -- Registry name from ~/dev/repos.json. Null for the many items that are not
+    -- repo work at all — home projects, things to sell, errands.
+    repo TEXT,
     completed INTEGER NOT NULL DEFAULT 0,
     archived INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),

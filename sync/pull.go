@@ -99,6 +99,7 @@ func (e *Engine) Pull(ctx context.Context) error {
 			ID:        item.ID,
 			Title:     item.Title,
 			Notes:     nullStr(item.Notes),
+			Repo:      nullStr(item.Repo),
 			Completed: boolToInt(item.Completed),
 			Archived:  boolToInt(item.Archived),
 			CreatedAt: item.CreatedAt.Format(time.RFC3339Nano),

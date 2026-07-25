@@ -194,6 +194,7 @@ func (b *LocalBackend) CreateItem(input model.CreateProjectItem) (*model.Project
 		ID:    newID(),
 		Title: input.Title,
 		Notes: toNullString(input.Notes),
+		Repo:  repoToNullString(input.Repo),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("creating item: %w", err)
@@ -243,6 +244,7 @@ func (b *LocalBackend) UpdateItem(id string, input model.UpdateProjectItem) (*mo
 	params := generated.UpdateItemParams{
 		Title:     current.Title,
 		Notes:     current.Notes,
+		Repo:      current.Repo,
 		Completed: current.Completed,
 		Archived:  current.Archived,
 		ID:        id,
@@ -252,6 +254,9 @@ func (b *LocalBackend) UpdateItem(id string, input model.UpdateProjectItem) (*mo
 	}
 	if input.Notes != nil {
 		params.Notes = toNullString(input.Notes)
+	}
+	if input.Repo != nil {
+		params.Repo = repoToNullString(input.Repo)
 	}
 	if input.Completed != nil {
 		params.Completed = boolToInt64(input.Completed)

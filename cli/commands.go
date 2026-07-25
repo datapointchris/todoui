@@ -33,12 +33,15 @@ func RegisterAll(parent *cobra.Command, b *backend.Backend) {
 }
 
 func (c *commands) addCmd() *cobra.Command {
-	var projects []string
+	var (
+		projects []string
+		repo     string
+	)
 	cmd := &cobra.Command{
 		Use:   "add <title>",
 		Short: "Add a new item",
 		Args:  cobra.ExactArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(projects) == 0 {
 				return fmt.Errorf("-p/--project is required")
 			}
@@ -46,10 +49,14 @@ func (c *commands) addCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			item, err := c.backend().CreateItem(model.CreateProjectItem{
+			input := model.CreateProjectItem{
 				Title:      args[0],
 				ProjectIDs: projectIDs,
-			})
+			}
+			if cmd.Flags().Changed("repo") {
+				input.Repo = &repo
+			}
+			item, err := c.backend().CreateItem(input)
 			if err != nil {
 				return err
 			}
@@ -61,6 +68,7 @@ func (c *commands) addCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringArrayVarP(&projects, "project", "p", nil, "project name (repeatable)")
+	cmd.Flags().StringVarP(&repo, "repo", "r", "", "repo this item is work on, by ~/dev/repos.json name")
 	return cmd
 }
 

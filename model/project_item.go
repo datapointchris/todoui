@@ -7,6 +7,7 @@ type ProjectItem struct {
 	ID        string    `json:"id"`
 	Title     string    `json:"title"`
 	Notes     *string   `json:"notes,omitempty"`
+	Repo      *string   `json:"repo,omitempty"`
 	Completed bool      `json:"completed"`
 	Archived  bool      `json:"archived"`
 	CreatedAt time.Time `json:"created_at"`
@@ -34,6 +35,7 @@ type ProjectItemInProject struct {
 type CreateProjectItem struct {
 	Title      string   `json:"title"`
 	Notes      *string  `json:"notes,omitempty"`
+	Repo       *string  `json:"repo,omitempty"`
 	ProjectIDs []string `json:"project_ids"`
 }
 
@@ -42,6 +44,7 @@ type CreateProjectItem struct {
 type UpdateProjectItem struct {
 	Title     *string `json:"title,omitempty"`
 	Notes     *string `json:"notes,omitempty"`
+	Repo      *string `json:"repo,omitempty"`
 	Completed *bool   `json:"completed,omitempty"`
 	Archived  *bool   `json:"archived,omitempty"`
 }

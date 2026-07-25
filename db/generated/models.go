@@ -31,6 +31,7 @@ type ProjectItem struct {
 	ID        string
 	Title     string
 	Notes     sql.NullString
+	Repo      sql.NullString
 	Completed int64
 	Archived  int64
 	CreatedAt string

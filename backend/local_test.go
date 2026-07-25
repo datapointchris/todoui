@@ -584,3 +584,64 @@ func TestListArchived(t *testing.T) {
 		t.Errorf("expected 'archived', got %q", items[0].Title)
 	}
 }
+
+func TestItemRepoRoundTripAndClear(t *testing.T) {
+	b := newTestBackend(t)
+	p := mustCreateProject(t, b, "tools")
+
+	repo := "forge"
+	item, err := b.CreateItem(model.CreateProjectItem{
+		Title:      "fix the brief collision",
+		Repo:       &repo,
+		ProjectIDs: []string{p.ID},
+	})
+	if err != nil {
+		t.Fatalf("creating item: %v", err)
+	}
+	if item.Repo == nil || *item.Repo != "forge" {
+		t.Fatalf("expected repo 'forge', got %v", item.Repo)
+	}
+
+	fetched, err := b.GetItem(item.ID)
+	if err != nil {
+		t.Fatalf("getting item: %v", err)
+	}
+	if fetched.Repo == nil || *fetched.Repo != "forge" {
+		t.Errorf("repo did not survive a read: %v", fetched.Repo)
+	}
+
+	// Updating an unrelated field must not clear the link.
+	title := "renamed"
+	if _, err := b.UpdateItem(item.ID, model.UpdateProjectItem{Title: &title}); err != nil {
+		t.Fatalf("updating title: %v", err)
+	}
+	fetched, _ = b.GetItem(item.ID)
+	if fetched.Repo == nil || *fetched.Repo != "forge" {
+		t.Errorf("repo lost on unrelated update: %v", fetched.Repo)
+	}
+
+	empty := ""
+	if _, err := b.UpdateItem(item.ID, model.UpdateProjectItem{Repo: &empty}); err != nil {
+		t.Fatalf("clearing repo: %v", err)
+	}
+	fetched, _ = b.GetItem(item.ID)
+	if fetched.Repo != nil {
+		t.Errorf("empty string should unlink, got %v", fetched.Repo)
+	}
+}
+
+func TestItemRepoIsNilForNonRepoWork(t *testing.T) {
+	b := newTestBackend(t)
+	p := mustCreateProject(t, b, "home")
+
+	item, err := b.CreateItem(model.CreateProjectItem{
+		Title:      "build the microwave cart",
+		ProjectIDs: []string{p.ID},
+	})
+	if err != nil {
+		t.Fatalf("creating item: %v", err)
+	}
+	if item.Repo != nil {
+		t.Errorf("non-repo work must have a nil repo, got %v", item.Repo)
+	}
+}

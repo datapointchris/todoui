@@ -87,6 +87,9 @@ func toModelProjectItem(pi generated.ProjectItem) model.ProjectItem {
 	if pi.Notes.Valid {
 		item.Notes = &pi.Notes.String
 	}
+	if pi.Repo.Valid {
+		item.Repo = &pi.Repo.String
+	}
 	return item
 }
 
@@ -110,6 +113,9 @@ func toModelProjectItemInProject(row generated.ListItemsByProjectRow) model.Proj
 	if row.Notes.Valid {
 		item.Notes = &row.Notes.String
 	}
+	if row.Repo.Valid {
+		item.Repo = &row.Repo.String
+	}
 	return model.ProjectItemInProject{
 		ProjectItem:  item,
 		Position:     int(row.MembershipPosition),
@@ -128,6 +134,9 @@ func toModelProjectItemInProjectFromArchived(row generated.ListArchivedItemsRow)
 	}
 	if row.Notes.Valid {
 		item.Notes = &row.Notes.String
+	}
+	if row.Repo.Valid {
+		item.Repo = &row.Repo.String
 	}
 	return model.ProjectItemInProject{
 		ProjectItem: item,
@@ -148,6 +157,17 @@ func toModelProjectItemTask(t generated.ProjectItemTask) model.ProjectItemTask {
 
 func toNullString(s *string) sql.NullString {
 	if s == nil {
+		return sql.NullString{}
+	}
+	return sql.NullString{String: *s, Valid: true}
+}
+
+// repoToNullString stores an empty repo as NULL rather than "". A repo link is
+// either a registry name or absent — "" is neither, and it would render as an
+// empty "Repo:" line and never match a repo filter. This mirrors `icb items
+// edit --repo ""`, which unlinks; flags cannot send a JSON null.
+func repoToNullString(s *string) sql.NullString {
+	if s == nil || *s == "" {
 		return sql.NullString{}
 	}
 	return sql.NullString{String: *s, Valid: true}

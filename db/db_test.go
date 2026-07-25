@@ -135,3 +135,51 @@ func TestOpen_IncrementalMigration(t *testing.T) {
 
 	_ = database.Close()
 }
+
+func TestMigrate_AddsRepoColumnToExistingDatabase(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("opening raw db: %v", err)
+	}
+	database.SetMaxOpenConns(1)
+
+	// A pre-repo database with a row already in it — the migration must add the
+	// column without disturbing existing items.
+	_, err = database.Exec(`
+		CREATE TABLE project_items (
+			id TEXT PRIMARY KEY,
+			title TEXT NOT NULL,
+			notes TEXT,
+			completed INTEGER NOT NULL DEFAULT 0,
+			archived INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+			updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+		);
+		INSERT INTO project_items (id, title) VALUES ('i1', 'pre-existing item');
+	`)
+	if err != nil {
+		t.Fatalf("creating pre-repo table: %v", err)
+	}
+
+	if err := migrate(database); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	var repo sql.NullString
+	var title string
+	row := database.QueryRow("SELECT title, repo FROM project_items WHERE id = 'i1'")
+	if err := row.Scan(&title, &repo); err != nil {
+		t.Fatalf("selecting migrated row: %v", err)
+	}
+	if title != "pre-existing item" {
+		t.Errorf("existing row was disturbed: title = %q", title)
+	}
+	if repo.Valid {
+		t.Errorf("repo should be null for a pre-existing item, got %q", repo.String)
+	}
+
+	// Idempotent: a second run must not fail on the already-present column.
+	if err := migrate(database); err != nil {
+		t.Fatalf("second migrate: %v", err)
+	}
+}

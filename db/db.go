@@ -61,6 +61,26 @@ func migrate(db *sql.DB) error {
 	if err := migrateSyncTables(db); err != nil {
 		return err
 	}
+	if err := migrateItemRepo(db); err != nil {
+		return err
+	}
+	return nil
+}
+
+// migrateItemRepo adds project_items.repo to databases created before the
+// column existed. Detected by column presence rather than a version counter,
+// matching how migrateSyncTables probes for its tables.
+func migrateItemRepo(db *sql.DB) error {
+	var name string
+	err := db.QueryRow("SELECT name FROM pragma_table_info('project_items') WHERE name = 'repo'").Scan(&name)
+	if err == sql.ErrNoRows {
+		if _, err := db.Exec("ALTER TABLE project_items ADD COLUMN repo TEXT"); err != nil {
+			return fmt.Errorf("adding project_items.repo: %w", err)
+		}
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("checking project_items.repo: %w", err)
+	}
 	return nil
 }
 

@@ -2525,6 +2525,9 @@ func (m *App) renderDetailOverlay() string {
 	lines = append(lines, fmt.Sprintf("%s%s    %s", itemPrefix, d.Title, dimStyle.Render(status)))
 	lines = append(lines, "")
 	lines = append(lines, dimStyle.Render(fmt.Sprintf("  Projects: %s", strings.Join(projectNames, ", "))))
+	if d.Repo != nil && *d.Repo != "" {
+		lines = append(lines, dimStyle.Render(fmt.Sprintf("  Repo: %s", *d.Repo)))
+	}
 	lines = append(lines, dimStyle.Render(fmt.Sprintf("  Created: %s", d.CreatedAt.Format("Jan 2, 2006"))))
 
 	if d.Notes != nil && *d.Notes != "" {
@@ -2629,7 +2632,8 @@ func (m *App) renderProjectDetailOverlay() string {
 	var lines []string
 	lines = append(lines, header)
 	lines = append(lines, "")
-	lines = append(lines, fmt.Sprintf("  %s    %s",
+	lines = append(lines, fmt.Sprintf(
+		"  %s    %s",
 		p.Name,
 		dimStyle.Render(fmt.Sprintf("%d items", p.ItemCount)),
 	))

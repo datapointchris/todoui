@@ -125,6 +125,7 @@ func (s *SyncBackend) CreateItem(input model.CreateProjectItem) (*model.ProjectI
 		ID:         result.ID,
 		Title:      input.Title,
 		Notes:      input.Notes,
+		Repo:       input.Repo,
 		ProjectIDs: input.ProjectIDs,
 	})
 	s.engine.Notify()
@@ -261,6 +262,7 @@ type createItemPayload struct {
 	ID         string   `json:"id"`
 	Title      string   `json:"title"`
 	Notes      *string  `json:"notes,omitempty"`
+	Repo       *string  `json:"repo,omitempty"`
 	ProjectIDs []string `json:"project_ids"`
 }
 

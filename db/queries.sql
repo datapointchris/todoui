@@ -53,14 +53,15 @@ ORDER BY m.position, pi.created_at;
 SELECT * FROM project_items WHERE id = ?;
 
 -- name: CreateItem :one
-INSERT INTO project_items (id, title, notes)
-VALUES (?, ?, ?)
+INSERT INTO project_items (id, title, notes, repo)
+VALUES (?, ?, ?, ?)
 RETURNING *;
 
 -- name: UpdateItem :one
 UPDATE project_items
 SET title = ?,
     notes = ?,
+    repo = ?,
     completed = ?,
     archived = ?,
     updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
@@ -198,11 +199,12 @@ ON CONFLICT(id) DO UPDATE SET
     position = excluded.position;
 
 -- name: UpsertItem :exec
-INSERT INTO project_items (id, title, notes, completed, archived, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?)
+INSERT INTO project_items (id, title, notes, repo, completed, archived, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
     title = excluded.title,
     notes = excluded.notes,
+    repo = excluded.repo,
     completed = excluded.completed,
     archived = excluded.archived,
     updated_at = excluded.updated_at;
