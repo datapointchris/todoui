@@ -17,11 +17,11 @@ jobs:
     outputs:
       version: ${{ steps.semrel.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - uses: go-semantic-release/action@v1
+      - uses: go-semantic-release/action@453e003c94ddb9c64e7ea4153794ef69e477259e # v1
         id: semrel
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -33,16 +33,16 @@ jobs:
     if: needs.semver.outputs.version != ''
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           ref: v${{ needs.semver.outputs.version }}
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
 
-      - uses: goreleaser/goreleaser-action@v6
+      - uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
         with:
           distribution: goreleaser
           version: v2.17.0
