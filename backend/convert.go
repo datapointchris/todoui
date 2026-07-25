@@ -164,8 +164,8 @@ func toNullString(s *string) sql.NullString {
 
 // repoToNullString stores an empty repo as NULL rather than "". A repo link is
 // either a registry name or absent — "" is neither, and it would render as an
-// empty "Repo:" line and never match a repo filter. This mirrors `icb items
-// edit --repo ""`, which unlinks; flags cannot send a JSON null.
+// empty "Repo:" line and never match a repo filter. This mirrors `icb projects
+// items edit --repo ""`, which unlinks; flags cannot send a JSON null.
 func repoToNullString(s *string) sql.NullString {
 	if s == nil || *s == "" {
 		return sql.NullString{}
