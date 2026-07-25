@@ -50,13 +50,23 @@ It does not replace step 2.
 
 ## Sub-tasks, projects, dependencies
 
-Sub-tasks can only be created from the TUI (press `t` on an item). Dependencies
-are likewise TUI-only (`b`/`B`). Neither has a CLI verb.
+The CLI covers sub-tasks, dependencies, reordering, and archival both ways —
+see the README for the verb list. `todoui add "title" -p foo` still errors if
+project `foo` doesn't exist, so create it first with `todoui projects create
+foo` or in the TUI project pane with `a`.
 
-Projects do have CLI verbs — `todoui projects list` and `todoui projects create`.
-`todoui add "title" -p foo` still errors if project `foo` doesn't exist, so
-create it first with `todoui projects create foo` or in the TUI project pane
-with `a`.
+**The CLI exists for Claude Code and automation, not for Chris** — he drives
+todoui through the TUI. That is why the verb set mirrors `icb projects items`
+name for name: an agent uses one grammar whether it reaches the data through
+the ichrisbirch API or through a local SQLite file. The work machine is never
+allowed to reach the API, so on that machine this CLI is the *only* way an
+agent can touch todoui, and any verb missing here is a capability that simply
+does not exist there.
+
+Ids resolve by suffix (`resolveItemID` in `cli/resolve.go`). Anything a command
+prints can be passed to the next one. Do not switch to prefix matching — UUIDv7
+front-loads its millisecond timestamp, so prefixes collide for everything
+created in the same window.
 
 ## Planning docs
 

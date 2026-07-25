@@ -197,6 +197,14 @@ func (b *LocalBackend) ListAllItems() ([]model.ProjectItem, error) {
 	return toModelProjectItems(items), nil
 }
 
+func (b *LocalBackend) ListAllItemsIncludingArchived() ([]model.ProjectItem, error) {
+	items, err := b.q.ListAllItemsRaw(b.ctx())
+	if err != nil {
+		return nil, fmt.Errorf("listing all items: %w", err)
+	}
+	return toModelProjectItems(items), nil
+}
+
 func (b *LocalBackend) ListItemsByProject(projectID string) ([]model.ProjectItemInProject, error) {
 	rows, err := b.q.ListItemsByProject(b.ctx(), projectID)
 	if err != nil {

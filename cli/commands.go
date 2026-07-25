@@ -24,12 +24,24 @@ func RegisterAll(parent *cobra.Command, b *backend.Backend) {
 	c := &commands{b: b}
 	parent.AddCommand(c.addCmd())
 	parent.AddCommand(c.doneCmd())
+	parent.AddCommand(c.reopenCmd())
 	parent.AddCommand(c.listCmd())
 	parent.AddCommand(c.viewCmd())
 	parent.AddCommand(c.editCmd())
 	parent.AddCommand(c.searchCmd())
 	parent.AddCommand(c.deleteCmd())
 	parent.AddCommand(c.archiveCmd())
+	parent.AddCommand(c.unarchiveCmd())
+	parent.AddCommand(c.reorderCmd())
+	parent.AddCommand(c.tasksCmd())
+	parent.AddCommand(c.addTaskCmd())
+	parent.AddCommand(c.completeTaskCmd())
+	parent.AddCommand(c.editTaskCmd())
+	parent.AddCommand(c.removeTaskCmd())
+	parent.AddCommand(c.addDependencyCmd())
+	parent.AddCommand(c.removeDependencyCmd())
+	parent.AddCommand(c.blockersCmd())
+	parent.AddCommand(c.blockedCmd())
 	parent.AddCommand(c.undoCmd())
 	parent.AddCommand(c.projectsCmd())
 	parent.AddCommand(updateCmd())
@@ -82,56 +94,129 @@ func (c *commands) addCmd() *cobra.Command {
 }
 
 func (c *commands) doneCmd() *cobra.Command {
+	return c.completionCmd("done", "Mark an item as done", true, "Done")
+}
+
+func (c *commands) reopenCmd() *cobra.Command {
+	return c.completionCmd("reopen", "Reopen a completed item", false, "Reopened")
+}
+
+func (c *commands) completionCmd(use, short string, completed bool, verb string) *cobra.Command {
 	return &cobra.Command{
-		Use:   "done <id>",
-		Short: "Mark an item as done",
+		Use:   use + " <id>",
+		Short: short,
 		Args:  cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
-			id := args[0]
-			done := true
-			item, err := c.backend().UpdateItem(id, model.UpdateProjectItem{Completed: &done})
+			b := c.backend()
+			id, err := resolveItemID(b, args[0])
 			if err != nil {
 				return err
 			}
-			fmt.Printf("Done: %s %s\n", shortID(item.ID), item.Title)
+			item, err := b.UpdateItem(id, model.UpdateProjectItem{Completed: &completed})
+			if err != nil {
+				return err
+			}
+			fmt.Printf("%s: %s %s\n", verb, shortID(item.ID), item.Title)
 			return nil
 		},
 	}
 }
 
 func (c *commands) listCmd() *cobra.Command {
-	var project string
+	var (
+		project  string
+		archived bool
+		asJSON   bool
+	)
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List active items",
 		Args:  cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			if project != "" {
-				return listByProject(c.backend(), project)
+			b := c.backend()
+			if archived {
+				if project == "" {
+					return fmt.Errorf("--archived needs -p/--project")
+				}
+				return listArchived(b, project, asJSON)
 			}
-			return listAll(c.backend())
+			if project != "" {
+				return listByProject(b, project, asJSON)
+			}
+			return listAll(b, asJSON)
 		},
 	}
 	cmd.Flags().StringVarP(&project, "project", "p", "", "filter by project name")
+	cmd.Flags().BoolVar(&archived, "archived", false, "list a project's archived items instead")
+	addJSONFlag(cmd, &asJSON)
 	return cmd
 }
 
 func (c *commands) archiveCmd() *cobra.Command {
+	return c.archivalCmd("archive", "Archive an item", true, "Archived")
+}
+
+func (c *commands) unarchiveCmd() *cobra.Command {
+	return c.archivalCmd("unarchive", "Restore an archived item", false, "Unarchived")
+}
+
+func (c *commands) archivalCmd(use, short string, archived bool, verb string) *cobra.Command {
 	return &cobra.Command{
-		Use:   "archive <id>",
-		Short: "Archive an item",
+		Use:   use + " <id>",
+		Short: short,
 		Args:  cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
-			id := args[0]
-			archived := true
-			item, err := c.backend().UpdateItem(id, model.UpdateProjectItem{Archived: &archived})
+			b := c.backend()
+			id, err := resolveItemID(b, args[0])
 			if err != nil {
 				return err
 			}
-			fmt.Printf("Archived: %s %s\n", shortID(item.ID), item.Title)
+			item, err := b.UpdateItem(id, model.UpdateProjectItem{Archived: &archived})
+			if err != nil {
+				return err
+			}
+			fmt.Printf("%s: %s %s\n", verb, shortID(item.ID), item.Title)
 			return nil
 		},
 	}
+}
+
+func (c *commands) reorderCmd() *cobra.Command {
+	var (
+		project  string
+		position int
+	)
+	cmd := &cobra.Command{
+		Use:   "reorder <id> --project <name> --position <n>",
+		Short: "Move an item to a new position within a project",
+		Long:  "Position is per-project — an item in several projects has an independent position in each.",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if project == "" {
+				return fmt.Errorf("--project is required")
+			}
+			if !cmd.Flags().Changed("position") {
+				return fmt.Errorf("--position is required")
+			}
+			b := c.backend()
+			itemID, err := resolveItemID(b, args[0])
+			if err != nil {
+				return err
+			}
+			projectID, err := findProjectByName(b, project)
+			if err != nil {
+				return err
+			}
+			if err := b.ReorderItem(itemID, projectID, position); err != nil {
+				return err
+			}
+			fmt.Printf("Moved %s to position %d in %s\n", shortID(itemID), position, project)
+			return nil
+		},
+	}
+	cmd.Flags().StringVarP(&project, "project", "p", "", "project the item is being reordered within")
+	cmd.Flags().IntVar(&position, "position", 0, "new position")
+	return cmd
 }
 
 func (c *commands) undoCmd() *cobra.Command {
@@ -151,13 +236,14 @@ func (c *commands) undoCmd() *cobra.Command {
 }
 
 func (c *commands) viewCmd() *cobra.Command {
-	return &cobra.Command{
+	var asJSON bool
+	cmd := &cobra.Command{
 		Use:   "view <id>",
 		Short: "Show an item with its projects, tasks, and blockers",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			b := c.backend()
-			item, err := b.GetItem(args[0])
+			item, err := resolveItem(b, args[0])
 			if err != nil {
 				return err
 			}
@@ -169,10 +255,19 @@ func (c *commands) viewCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if asJSON {
+				return printJSON(itemDetailJSON{
+					ProjectItemDetail: item,
+					Tasks:             tasks,
+					Blockers:          blockers,
+				})
+			}
 			printItemDetail(item, tasks, blockers)
 			return nil
 		},
 	}
+	addJSONFlag(cmd, &asJSON)
+	return cmd
 }
 
 func (c *commands) editCmd() *cobra.Command {
@@ -201,7 +296,12 @@ func (c *commands) editCmd() *cobra.Command {
 			if input == (model.UpdateProjectItem{}) {
 				return fmt.Errorf("nothing to change — pass --title, --notes, and/or --repo")
 			}
-			item, err := c.backend().UpdateItem(args[0], input)
+			b := c.backend()
+			id, err := resolveItemID(b, args[0])
+			if err != nil {
+				return err
+			}
+			item, err := b.UpdateItem(id, input)
 			if err != nil {
 				return err
 			}
@@ -216,7 +316,8 @@ func (c *commands) editCmd() *cobra.Command {
 }
 
 func (c *commands) searchCmd() *cobra.Command {
-	return &cobra.Command{
+	var asJSON bool
+	cmd := &cobra.Command{
 		Use:   "search <query>",
 		Short: "Search items by title or notes",
 		Args:  cobra.ExactArgs(1),
@@ -225,12 +326,17 @@ func (c *commands) searchCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if asJSON {
+				return printJSON(items)
+			}
 			for _, item := range items {
 				printItem(item)
 			}
 			return nil
 		},
 	}
+	addJSONFlag(cmd, &asJSON)
+	return cmd
 }
 
 func (c *commands) deleteCmd() *cobra.Command {
@@ -243,7 +349,7 @@ func (c *commands) deleteCmd() *cobra.Command {
 			if !confirmed {
 				return fmt.Errorf("refusing to delete without --yes")
 			}
-			item, err := c.backend().GetItem(args[0])
+			item, err := resolveItem(c.backend(), args[0])
 			if err != nil {
 				return err
 			}
@@ -266,8 +372,11 @@ func (c *commands) projectsCmd() *cobra.Command {
 		Short: "View or manage an item's project memberships",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
-			id := args[0]
 			b := c.backend()
+			id, err := resolveItemID(b, args[0])
+			if err != nil {
+				return err
+			}
 			if addProject != "" {
 				return addItemToProject(b, id, addProject)
 			}
@@ -363,10 +472,17 @@ func findProjectByName(b backend.Backend, name string) (string, error) {
 	return ids[0], nil
 }
 
-func listAll(b backend.Backend) error {
+func listAll(b backend.Backend, asJSON bool) error {
 	projects, err := b.ListProjects()
 	if err != nil {
 		return err
+	}
+	if asJSON {
+		items, err := b.ListAllItems()
+		if err != nil {
+			return err
+		}
+		return printJSON(items)
 	}
 	for _, p := range projects {
 		items, err := b.ListItemsByProject(p.ID)
@@ -385,7 +501,7 @@ func listAll(b backend.Backend) error {
 	return nil
 }
 
-func listByProject(b backend.Backend, name string) error {
+func listByProject(b backend.Backend, name string, asJSON bool) error {
 	projectID, err := findProjectByName(b, name)
 	if err != nil {
 		return err
@@ -393,6 +509,27 @@ func listByProject(b backend.Backend, name string) error {
 	items, err := b.ListItemsByProject(projectID)
 	if err != nil {
 		return err
+	}
+	if asJSON {
+		return printJSON(items)
+	}
+	for _, item := range items {
+		printItem(item.ProjectItem)
+	}
+	return nil
+}
+
+func listArchived(b backend.Backend, name string, asJSON bool) error {
+	projectID, err := findProjectByName(b, name)
+	if err != nil {
+		return err
+	}
+	items, err := b.ListArchived(projectID)
+	if err != nil {
+		return err
+	}
+	if asJSON {
+		return printJSON(items)
 	}
 	for _, item := range items {
 		printItem(item.ProjectItem)
@@ -435,51 +572,4 @@ func removeItemFromProject(b backend.Backend, itemID string, projectName string)
 	}
 	fmt.Printf("Removed %s from %s\n", shortID(itemID), projectName)
 	return nil
-}
-
-func printItem(item model.ProjectItem) {
-	marker := "○"
-	if item.Completed {
-		marker = "✓"
-	}
-	fmt.Printf("  %s %-8s %s\n", marker, shortID(item.ID), item.Title)
-}
-
-func printItemDetail(item *model.ProjectItemDetail, tasks []model.ProjectItemTask, blockers []model.ProjectItem) {
-	fmt.Printf("%s %s\n", shortID(item.ID), item.Title)
-	if item.Repo != nil && *item.Repo != "" {
-		fmt.Printf("  repo:     %s\n", *item.Repo)
-	}
-	if item.Completed {
-		fmt.Println("  status:   done")
-	}
-	if item.Archived {
-		fmt.Println("  archived: yes")
-	}
-	if len(item.Projects) > 0 {
-		names := make([]string, 0, len(item.Projects))
-		for _, p := range item.Projects {
-			names = append(names, p.Name)
-		}
-		fmt.Printf("  projects: %s\n", strings.Join(names, ", "))
-	}
-	if item.Notes != nil && *item.Notes != "" {
-		fmt.Printf("\n%s\n", *item.Notes)
-	}
-	if len(tasks) > 0 {
-		fmt.Println("\nTasks:")
-		for _, t := range tasks {
-			marker := "○"
-			if t.Completed {
-				marker = "✓"
-			}
-			fmt.Printf("  %s %s\n", marker, t.Title)
-		}
-	}
-	if len(blockers) > 0 {
-		fmt.Println("\nBlocked by:")
-		for _, b := range blockers {
-			fmt.Printf("  %s %s\n", shortID(b.ID), b.Title)
-		}
-	}
 }

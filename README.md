@@ -45,17 +45,34 @@ todoui add "Bump the CI matrix" -p work -r todoui -n "Node 20 is EOL"
 # Read
 todoui list
 todoui list -p work
+todoui list -p work --archived
 todoui view <id>
 todoui search "auth"
+todoui blocked                        # items waiting on something
 
 # Change
 todoui edit <id> --title "New title"
 todoui edit <id> --notes "Updated notes"
 todoui edit <id> --repo ""            # unlink from its repo
 todoui done <id>
+todoui reopen <id>
 todoui archive <id>
+todoui unarchive <id>
+todoui reorder <id> -p work --position 0
 todoui delete <id> --yes
 todoui undo
+
+# Sub-tasks
+todoui tasks <id>
+todoui add-task <id> "wire up the endpoint"
+todoui complete-task <id> <task-id>
+todoui edit-task <id> <task-id> --title "..." --completed
+todoui remove-task <id> <task-id>
+
+# Dependencies
+todoui add-dependency <id> <depends-on-id>
+todoui remove-dependency <id> <depends-on-id>
+todoui blockers <id>
 
 # Projects
 todoui projects list
@@ -65,7 +82,14 @@ todoui projects <id> --add homelab    # add item to project
 todoui projects <id> --remove work    # remove from project
 ```
 
-Sub-tasks and dependencies are TUI-only — there are no CLI verbs for them.
+**Ids**: every command prints the last 8 characters of an id, and every command
+accepts them — paste what one command printed into the next. A full UUID works
+too. Matching is on the suffix, not a prefix, because UUIDv7 front-loads its
+timestamp and every item created in the same minute shares a prefix. An
+ambiguous id is reported rather than guessed at.
+
+**`--json`** is available on `list`, `view`, `search`, `tasks`, `blockers`, and
+`blocked`, and emits full ids.
 
 ## TUI Keybindings
 

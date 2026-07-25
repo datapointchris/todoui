@@ -15,6 +15,9 @@ type Backend interface {
 
 	// Items
 	ListAllItems() ([]model.ProjectItem, error)
+	// ListAllItemsIncludingArchived is what resolves a short id: an archived
+	// item still has to be addressable, or nothing can unarchive it.
+	ListAllItemsIncludingArchived() ([]model.ProjectItem, error)
 	ListItemsByProject(projectID string) ([]model.ProjectItemInProject, error)
 	GetItem(id string) (*model.ProjectItemDetail, error)
 	CreateItem(input model.CreateProjectItem) (*model.ProjectItemDetail, error)

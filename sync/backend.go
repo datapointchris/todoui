@@ -36,6 +36,10 @@ func (s *SyncBackend) ListAllItems() ([]model.ProjectItem, error) {
 	return s.local.ListAllItems()
 }
 
+func (s *SyncBackend) ListAllItemsIncludingArchived() ([]model.ProjectItem, error) {
+	return s.local.ListAllItemsIncludingArchived()
+}
+
 func (s *SyncBackend) ListItemsByProject(projectID string) ([]model.ProjectItemInProject, error) {
 	return s.local.ListItemsByProject(projectID)
 }
