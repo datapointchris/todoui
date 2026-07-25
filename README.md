@@ -11,6 +11,7 @@ Personal project organization tool. Local-first SQLite with optional background 
 - **Dependencies** — items can block other items, with cycle detection
 - **Sub-tasks** — checklist tasks on each item
 - **Notes** — multiline notes on items
+- **Repo links** — items can name the repo they are work on, by `~/dev/repos.json` name
 - **Project descriptions** — long-form notes/decisions per project, viewable and editable in project detail
 - **Undo** — revert the last mutation
 - **Search** — find items across all projects
@@ -36,18 +37,35 @@ go build -o todoui .
 # Launch the TUI (default)
 todoui
 
-# CLI commands
+# Create
 todoui add "Fix the auth bug" -p work
 todoui add "Setup monitoring" -p work -p homelab
+todoui add "Bump the CI matrix" -p work -r todoui -n "Node 20 is EOL"
+
+# Read
 todoui list
 todoui list -p work
+todoui view <id>
+todoui search "auth"
+
+# Change
+todoui edit <id> --title "New title"
+todoui edit <id> --notes "Updated notes"
+todoui edit <id> --repo ""            # unlink from its repo
 todoui done <id>
 todoui archive <id>
+todoui delete <id> --yes
 todoui undo
+
+# Projects
+todoui projects list
+todoui projects create "homelab"
 todoui projects <id>                  # view item's projects
 todoui projects <id> --add homelab    # add item to project
 todoui projects <id> --remove work    # remove from project
 ```
+
+Sub-tasks and dependencies are TUI-only — there are no CLI verbs for them.
 
 ## TUI Keybindings
 

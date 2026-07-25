@@ -39,12 +39,24 @@ interactively (no human in the loop), say so explicitly and hand the manual
 test steps to the user — do not substitute a synthetic smoke test for a real
 one.
 
+`tui/app_test.go` drives the model directly: build an app over an in-memory
+DB with `newTestApp`, feed it `tea.KeyMsg` values, and assert on state or on
+`View()` output. `send` follows the whole command chain so a create and its
+refresh have both landed before the assertion, and abandons `tea.Tick`
+commands (flash timers) rather than sleeping out their duration. This is the
+right place for a rendering regression — a layout bug that only appears at a
+particular window size is reproducible here and invisible in a manual pass.
+It does not replace step 2.
+
 ## Sub-tasks, projects, dependencies
 
-Sub-tasks can only be created from the TUI (press `t` on an item). There is
-no CLI command to create them. Projects likewise have no CLI create command —
-`todoui add "title" -p foo` errors if project `foo` doesn't exist; create it
-in the TUI project pane with `a` first.
+Sub-tasks can only be created from the TUI (press `t` on an item). Dependencies
+are likewise TUI-only (`b`/`B`). Neither has a CLI verb.
+
+Projects do have CLI verbs — `todoui projects list` and `todoui projects create`.
+`todoui add "title" -p foo` still errors if project `foo` doesn't exist, so
+create it first with `todoui projects create foo` or in the TUI project pane
+with `a`.
 
 ## Planning docs
 

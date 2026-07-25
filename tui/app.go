@@ -33,8 +33,13 @@ type App struct {
 	// as one scrollable list; m.rows is the navigable view of that list
 	// and m.rowCursor indexes into it. Task rows carry their owning
 	// item's index, so item-scoped actions still have a clear target.
-	rows           []paneRow
-	itemAddingTask bool
+	rows []paneRow
+
+	// Target of modeAddTask, captured on keypress. The cursor cannot move
+	// while the overlay is up, but resolving the item once keeps the
+	// create independent of any refresh that reorders m.items underneath.
+	addTaskItemID    string
+	addTaskItemTitle string
 
 	activePane    pane
 	projectCursor int
@@ -262,6 +267,17 @@ func shortID(id string) string {
 		return id[len(id)-8:]
 	}
 	return id
+}
+
+func truncate(s string, maxWidth int) string {
+	runes := []rune(s)
+	if len(runes) <= maxWidth {
+		return s
+	}
+	if maxWidth <= 1 {
+		return "…"
+	}
+	return string(runes[:maxWidth-1]) + "…"
 }
 
 func wrapLine(s string, maxWidth int) []string {
@@ -1140,7 +1156,7 @@ func (m *App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch m.appMode {
 	case modeNormal:
 		return m.handleNormalKey(msg)
-	case modeAddItem, modeAddItemMulti, modeAddProject, modeEditTitle:
+	case modeAddItem, modeAddItemMulti, modeAddProject, modeAddTask, modeEditTitle:
 		return m.handleInputKey(msg)
 	case modeProjectPicker:
 		return m.handlePickerKey(msg)
@@ -1167,33 +1183,6 @@ func (m *App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *App) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// Adding a task in item pane — target item is the owning item of the
-	// row the user pressed `t` on (works whether on item or task row).
-	if m.itemAddingTask {
-		switch msg.String() {
-		case "enter":
-			title := m.titleInput.Value()
-			m.itemAddingTask = false
-			m.titleInput.Blur()
-			if title == "" {
-				return m, nil
-			}
-			item := m.currentItem()
-			if item == nil {
-				return m, nil
-			}
-			return m, createTaskCmd(m.backend, item.ID, title)
-		case "esc":
-			m.itemAddingTask = false
-			m.titleInput.Blur()
-			return m, nil
-		default:
-			var cmd tea.Cmd
-			m.titleInput, cmd = m.titleInput.Update(msg)
-			return m, cmd
-		}
-	}
-
 	row := m.currentRow() // nil when item pane is empty
 
 	switch msg.String() {
@@ -1484,9 +1473,18 @@ func (m *App) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "t":
 		if m.activePane == itemPane && row != nil {
-			m.itemAddingTask = true
+			// Works from an item row or one of its task rows — both
+			// resolve to the owning item.
+			item := m.currentItem()
+			if item == nil {
+				return m, nil
+			}
+			m.addTaskItemID = item.ID
+			m.addTaskItemTitle = item.Title
 			m.titleInput.SetValue("")
 			m.titleInput.Placeholder = "New task..."
+			m.returnMode = modeNormal
+			m.appMode = modeAddTask
 			return m, m.titleInput.Focus()
 		}
 		return m, nil
@@ -1630,6 +1628,14 @@ func (m *App) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.appMode = modeNormal
 			m.titleInput.Blur()
 			return m, createProjectCmd(m.backend, model.CreateProject{Name: value})
+
+		case modeAddTask:
+			m.appMode = modeNormal
+			m.titleInput.Blur()
+			if m.addTaskItemID == "" {
+				return m, nil
+			}
+			return m, createTaskCmd(m.backend, m.addTaskItemID, value)
 
 		case modeEditTitle:
 			m.appMode = m.returnMode
@@ -2400,7 +2406,7 @@ func (m *App) View() string {
 	}
 
 	switch m.appMode {
-	case modeAddItem, modeAddItemMulti, modeAddProject, modeEditTitle, modeEditProjectName:
+	case modeAddItem, modeAddItemMulti, modeAddProject, modeAddTask, modeEditTitle, modeEditProjectName:
 		overlay := m.renderInputOverlay()
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, overlay)
 	case modeProjectPicker:
@@ -2470,6 +2476,8 @@ func (m *App) renderInputOverlay() string {
 		prompt = "New item (multi-project)"
 	case modeAddProject:
 		prompt = "New project"
+	case modeAddTask:
+		prompt = fmt.Sprintf("New task for %q", truncate(m.addTaskItemTitle, 40))
 	case modeEditTitle:
 		prompt = "Edit title"
 	case modeEditProjectName:
@@ -3110,7 +3118,6 @@ func (m *App) renderItemPane(width, height int) string {
 		end = len(m.rows)
 	}
 
-	curRow := m.currentRow()
 	linesUsed := 0
 	for i := m.rowScroll; i < end; i++ {
 		if linesUsed >= viewHeight {
@@ -3170,11 +3177,6 @@ func (m *App) renderItemPane(width, height int) string {
 		}
 		if linesUsed >= viewHeight {
 			break
-		}
-
-		if m.itemAddingTask && curRow != nil && curRow.itemIdx == row.itemIdx && linesUsed < viewHeight {
-			lines = append(lines, "     "+m.titleInput.View())
-			linesUsed++
 		}
 
 		if blockers, ok := m.itemBlockers[item.ID]; ok && len(blockers) > 0 {
@@ -3315,8 +3317,6 @@ func (m *App) statusBarHints() string {
 			hints += " [0]reset filter"
 		}
 		return hints
-	case m.itemAddingTask:
-		return "[Enter]create task  [Esc]cancel"
 	}
 	// Hints depend on whether the cursor is on an item or a task row.
 	if row := m.currentRow(); row != nil && row.kind == rowTask {
