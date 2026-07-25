@@ -1,6 +1,8 @@
 package sync
 
 import (
+	"fmt"
+
 	"github.com/datapointchris/todoui/backend"
 	"github.com/datapointchris/todoui/model"
 )
@@ -245,9 +247,49 @@ func (s *SyncBackend) CompleteTask(itemID, taskID string) error {
 	return nil
 }
 
-// Undo is local-only — no sync queue.
-func (s *SyncBackend) Undo() (string, error) {
-	return s.local.Undo()
+// Undo reverses the local change and then reconciles the sync queue with it.
+// Treating undo as local-only leaves the queued operations for that entity in
+// place, so the next push recreates on the server exactly what was just undone.
+func (s *SyncBackend) Undo() (*model.UndoResult, error) {
+	result, err := s.local.Undo()
+	if err != nil {
+		return nil, err
+	}
+
+	// Anything still queued describes the state the undo just reversed.
+	dropped, dropErr := s.engine.DropOpsForEntity(result.EntityID)
+	if dropErr != nil {
+		return result, fmt.Errorf("reconciling sync queue: %w", dropErr)
+	}
+
+	switch {
+	case result.Restored != nil:
+		// The row is back; push its restored state. Idempotent whether or not
+		// the reversed change had already been pushed.
+		restored := result.Restored
+		unlinked := ""
+		repo := restored.Repo
+		if repo == nil {
+			// A nil Repo is omitted from the payload and would leave a link the
+			// undo removed. Empty string is how this API unlinks one.
+			repo = &unlinked
+		}
+		_ = s.engine.QueueOp(OpUpdateItem, result.EntityID, model.UpdateProjectItem{
+			Title:     &restored.Title,
+			Notes:     restored.Notes,
+			Repo:      repo,
+			Completed: &restored.Completed,
+			Archived:  &restored.Archived,
+		})
+	case dropped == 0:
+		// The row is gone locally and its create had already been pushed, so
+		// the server still has it. With a queued create there is nothing on the
+		// server to delete.
+		_ = s.engine.QueueOp(OpDeleteItem, result.EntityID, nil)
+	}
+
+	s.engine.Notify()
+	return result, nil
 }
 
 // --- Payload types for JSON serialization into pending_sync ---

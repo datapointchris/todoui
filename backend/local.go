@@ -521,72 +521,85 @@ func (b *LocalBackend) ListArchived(projectID string) ([]model.ProjectItemInProj
 
 // --- Undo ---
 
-func (b *LocalBackend) Undo() (string, error) {
+func (b *LocalBackend) Undo() (*model.UndoResult, error) {
 	ctx := b.ctx()
 	entry, err := b.q.GetLatestUndoLog(ctx)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return "", model.ErrNothingToUndo
+			return nil, model.ErrNothingToUndo
 		}
-		return "", fmt.Errorf("getting undo log: %w", err)
+		return nil, fmt.Errorf("getting undo log: %w", err)
 	}
 
 	tx, err := b.db.Begin()
 	if err != nil {
-		return "", fmt.Errorf("beginning undo transaction: %w", err)
+		return nil, fmt.Errorf("beginning undo transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
 	qtx := b.q.WithTx(tx)
 
-	description := fmt.Sprintf("undid %s on %s %s", entry.Action, entry.EntityType, shortEntityID(entry.EntityID))
+	result := &model.UndoResult{
+		Description: fmt.Sprintf("undid %s on %s %s", entry.Action, entry.EntityType, shortEntityID(entry.EntityID)),
+		Action:      entry.Action,
+		EntityType:  entry.EntityType,
+		EntityID:    entry.EntityID,
+	}
 
 	switch entry.Action {
 	case "create":
 		if err := qtx.DeleteItem(ctx, entry.EntityID); err != nil {
-			return "", fmt.Errorf("undoing create: %w", err)
+			return nil, fmt.Errorf("undoing create: %w", err)
 		}
 	case "update":
 		if entry.PreviousState.Valid {
 			var prev generated.ProjectItem
 			if err := json.Unmarshal([]byte(entry.PreviousState.String), &prev); err != nil {
-				return "", fmt.Errorf("unmarshaling previous state: %w", err)
+				return nil, fmt.Errorf("unmarshaling previous state: %w", err)
 			}
-			if _, err := qtx.UpdateItem(ctx, generated.UpdateItemParams{
+			restored, err := qtx.UpdateItem(ctx, generated.UpdateItemParams{
 				Title:     prev.Title,
 				Notes:     prev.Notes,
+				Repo:      prev.Repo,
 				Completed: prev.Completed,
 				Archived:  prev.Archived,
 				ID:        entry.EntityID,
-			}); err != nil {
-				return "", fmt.Errorf("restoring previous state: %w", err)
+			})
+			if err != nil {
+				return nil, fmt.Errorf("restoring previous state: %w", err)
 			}
+			item := toModelProjectItem(restored)
+			result.Restored = &item
 		}
 	case "delete":
 		if entry.PreviousState.Valid {
 			var prev generated.ProjectItem
 			if err := json.Unmarshal([]byte(entry.PreviousState.String), &prev); err != nil {
-				return "", fmt.Errorf("unmarshaling deleted state: %w", err)
+				return nil, fmt.Errorf("unmarshaling deleted state: %w", err)
 			}
-			if _, err := qtx.CreateItem(ctx, generated.CreateItemParams{
+			restored, err := qtx.CreateItem(ctx, generated.CreateItemParams{
 				ID:    entry.EntityID,
 				Title: prev.Title,
 				Notes: prev.Notes,
-			}); err != nil {
-				return "", fmt.Errorf("recreating deleted item: %w", err)
+				Repo:  prev.Repo,
+			})
+			if err != nil {
+				return nil, fmt.Errorf("recreating deleted item: %w", err)
 			}
+			item := toModelProjectItem(restored)
+			result.Restored = &item
 		}
 	}
 
 	if err := qtx.DeleteUndoLog(ctx, entry.ID); err != nil {
-		return "", fmt.Errorf("deleting undo log: %w", err)
+		return nil, fmt.Errorf("deleting undo log: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
-		return "", fmt.Errorf("committing undo: %w", err)
+		return nil, fmt.Errorf("committing undo: %w", err)
 	}
 
-	return description, nil
+	return result, nil
 }
 
 // UUIDv7 front-loads the millisecond timestamp, so a prefix is identical for

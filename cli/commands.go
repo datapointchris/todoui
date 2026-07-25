@@ -136,11 +136,11 @@ func (c *commands) undoCmd() *cobra.Command {
 		Short: "Undo the last action",
 		Args:  cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			desc, err := c.backend().Undo()
+			result, err := c.backend().Undo()
 			if err != nil {
 				return err
 			}
-			fmt.Printf("Undone: %s\n", desc)
+			fmt.Printf("Undone: %s\n", result.Description)
 			return nil
 		},
 	}

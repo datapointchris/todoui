@@ -198,6 +198,18 @@ func (q *Queries) DeletePendingSync(ctx context.Context, id int64) error {
 	return err
 }
 
+const deletePendingSyncByEntity = `-- name: DeletePendingSyncByEntity :execrows
+DELETE FROM pending_sync WHERE entity_id = ?
+`
+
+func (q *Queries) DeletePendingSyncByEntity(ctx context.Context, entityID string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deletePendingSyncByEntity, entityID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const deleteProject = `-- name: DeleteProject :exec
 DELETE FROM projects WHERE id = ?
 `

@@ -47,6 +47,6 @@ type Backend interface {
 	ListArchived(projectID string) ([]model.ProjectItemInProject, error)
 
 	// Undo
-	Undo() (string, error)
+	Undo() (*model.UndoResult, error)
 	CanUndo() (bool, error)
 }

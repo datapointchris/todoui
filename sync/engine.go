@@ -89,6 +89,15 @@ func (e *Engine) QueueOp(op OpType, entityID string, payload any) error {
 	})
 }
 
+// DropOpsForEntity removes every queued operation for one entity and reports how
+// many were dropped. Used when a local change is reversed: the queued operations
+// describe a state that no longer exists, and pushing them would recreate it on
+// the server. A non-zero count also means nothing for that entity reached the
+// server yet, since operations are deleted once pushed.
+func (e *Engine) DropOpsForEntity(entityID string) (int64, error) {
+	return e.q.DeletePendingSyncByEntity(e.ctx, entityID)
+}
+
 // Notify signals the push loop to wake up and process pending operations.
 // Non-blocking: if the push loop is already signaled, this is a no-op.
 func (e *Engine) Notify() {

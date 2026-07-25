@@ -210,7 +210,7 @@ func TestSyncBackend_TaskOperations(t *testing.T) {
 	}
 }
 
-func TestSyncBackend_UndoDoesNotSync(t *testing.T) {
+func TestSyncBackend_UndoAfterPushDeletesRemotely(t *testing.T) {
 	var received []string
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		received = append(received, r.Method+" "+r.URL.Path)
@@ -220,26 +220,54 @@ func TestSyncBackend_UndoDoesNotSync(t *testing.T) {
 	sb, _ := setupSync(t, handler)
 
 	p, _ := sb.CreateProject(model.CreateProject{Name: "Undo"})
-	_, _ = sb.CreateItem(model.CreateProjectItem{
+	item, _ := sb.CreateItem(model.CreateProjectItem{
 		Title:      "Undoable",
 		ProjectIDs: []string{p.ID},
 	})
 
-	// Wait for create pushes
+	// Let the create reach the server, so the server holds a row the undo removes.
 	time.Sleep(300 * time.Millisecond)
-	countBefore := len(received)
 
-	// Undo should not generate a sync operation
-	_, err := sb.Undo()
-	if err != nil {
+	if _, err := sb.Undo(); err != nil {
+		t.Fatalf("Undo: %v", err)
+	}
+	time.Sleep(300 * time.Millisecond)
+
+	want := "DELETE /project-items/" + item.ID + "/"
+	for _, call := range received {
+		if call == want {
+			return
+		}
+	}
+	t.Errorf("expected %q after undoing an already-pushed create, got %v", want, received)
+}
+
+func TestSyncBackend_UndoBeforePushDropsQueuedCreate(t *testing.T) {
+	// Every push fails, so operations stay queued and nothing reaches the server.
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	sb, engine := setupSync(t, handler)
+
+	p, _ := sb.CreateProject(model.CreateProject{Name: "Undo"})
+	item, _ := sb.CreateItem(model.CreateProjectItem{
+		Title:      "Undoable",
+		ProjectIDs: []string{p.ID},
+	})
+
+	if _, err := sb.Undo(); err != nil {
 		t.Fatalf("Undo: %v", err)
 	}
 
-	time.Sleep(300 * time.Millisecond)
-	countAfter := len(received)
-
-	if countAfter != countBefore {
-		t.Errorf("expected no new HTTP calls after undo, got %d new calls", countAfter-countBefore)
+	// The queued create described a row that no longer exists. Nothing should be
+	// left for this item — not the create, and not a delete for a row the server
+	// never received.
+	remaining, err := engine.DropOpsForEntity(item.ID)
+	if err != nil {
+		t.Fatalf("checking queue: %v", err)
+	}
+	if remaining != 0 {
+		t.Errorf("expected no queued operations for the undone item, found %d", remaining)
 	}
 }
 

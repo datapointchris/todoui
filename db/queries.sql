@@ -167,6 +167,9 @@ SELECT * FROM pending_sync ORDER BY id ASC LIMIT 1;
 -- name: DeletePendingSync :exec
 DELETE FROM pending_sync WHERE id = ?;
 
+-- name: DeletePendingSyncByEntity :execrows
+DELETE FROM pending_sync WHERE entity_id = ?;
+
 -- name: UpdatePendingSyncError :exec
 UPDATE pending_sync SET attempts = attempts + 1, last_error = ? WHERE id = ?;
 

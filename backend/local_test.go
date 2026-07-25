@@ -361,12 +361,18 @@ func TestUndoCreateItem(t *testing.T) {
 		t.Fatal("expected canUndo to be true")
 	}
 
-	desc, err := b.Undo()
+	result, err := b.Undo()
 	if err != nil {
 		t.Fatalf("undoing: %v", err)
 	}
-	if desc == "" {
+	if result.Description == "" {
 		t.Error("expected non-empty undo description")
+	}
+	if result.EntityID != item.ID {
+		t.Errorf("expected undo result for %s, got %s", item.ID, result.EntityID)
+	}
+	if result.Restored != nil {
+		t.Error("undoing a create removes the row, so nothing should be restored")
 	}
 
 	_, err = b.GetItem(item.ID)

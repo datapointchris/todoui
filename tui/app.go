@@ -598,11 +598,11 @@ type projectDetailMsg struct {
 
 func undoCmd(b backend.Backend) tea.Cmd {
 	return func() tea.Msg {
-		desc, err := b.Undo()
+		result, err := b.Undo()
 		if err != nil {
 			return errMsg{err}
 		}
-		return undoResultMsg(desc)
+		return undoResultMsg(result.Description)
 	}
 }
 
