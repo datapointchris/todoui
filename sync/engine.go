@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -167,7 +168,11 @@ func (e *Engine) drainPendingOps() {
 			return
 		}
 		if err != nil {
-			log.Printf("sync: reading pending op: %v", err)
+			// Shutdown cancels the context mid-query. That is the normal exit
+			// path, not a fault worth printing on every invocation.
+			if !errors.Is(err, context.Canceled) {
+				log.Printf("sync: reading pending op: %v", err)
+			}
 			return
 		}
 
