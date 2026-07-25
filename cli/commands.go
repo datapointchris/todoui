@@ -36,6 +36,7 @@ func (c *commands) addCmd() *cobra.Command {
 	var (
 		projects []string
 		repo     string
+		notes    string
 	)
 	cmd := &cobra.Command{
 		Use:   "add <title>",
@@ -56,6 +57,9 @@ func (c *commands) addCmd() *cobra.Command {
 			if cmd.Flags().Changed("repo") {
 				input.Repo = &repo
 			}
+			if cmd.Flags().Changed("notes") {
+				input.Notes = &notes
+			}
 			item, err := c.backend().CreateItem(input)
 			if err != nil {
 				return err
@@ -69,6 +73,7 @@ func (c *commands) addCmd() *cobra.Command {
 	}
 	cmd.Flags().StringArrayVarP(&projects, "project", "p", nil, "project name (repeatable)")
 	cmd.Flags().StringVarP(&repo, "repo", "r", "", "repo this item is work on, by ~/dev/repos.json name")
+	cmd.Flags().StringVarP(&notes, "notes", "n", "", "markdown notes for the item")
 	return cmd
 }
 
