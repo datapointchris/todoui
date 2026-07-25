@@ -167,6 +167,48 @@ func (c *commands) projectsCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&addProject, "add", "", "add item to this project")
 	cmd.Flags().StringVar(&removeProject, "remove", "", "remove item from this project")
+	cmd.AddCommand(c.projectsListCmd(), c.projectsCreateCmd())
+	return cmd
+}
+
+func (c *commands) projectsListCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "list",
+		Short: "List all projects",
+		Args:  cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			projects, err := c.backend().ListProjects()
+			if err != nil {
+				return err
+			}
+			for _, p := range projects {
+				fmt.Printf("%s  %-40s %d\n", shortID(p.ID), p.Name, p.ItemCount)
+			}
+			return nil
+		},
+	}
+}
+
+func (c *commands) projectsCreateCmd() *cobra.Command {
+	var description string
+	cmd := &cobra.Command{
+		Use:   "create <name>",
+		Short: "Create a new project",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			input := model.CreateProject{Name: args[0]}
+			if cmd.Flags().Changed("description") {
+				input.Description = &description
+			}
+			project, err := c.backend().CreateProject(input)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("Created project %s: %s\n", shortID(project.ID), project.Name)
+			return nil
+		},
+	}
+	cmd.Flags().StringVarP(&description, "description", "d", "", "long-form notes or decisions for the project")
 	return cmd
 }
 
