@@ -2,12 +2,14 @@ package main
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/datapointchris/goselfupdate/cobracmd"
 	"github.com/spf13/cobra"
 
 	"github.com/datapointchris/todoui/backend"
@@ -20,7 +22,9 @@ import (
 
 func main() {
 	if err := rootCmd().Execute(); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		if !errors.Is(err, cobracmd.ErrReported) {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		}
 		os.Exit(1)
 	}
 }
