@@ -95,10 +95,17 @@ data, never an error.
 
 `Pull` records a pending-sync high-water mark before it fetches, then clears
 only the ops at or below it and spares entities queued above it from the
-"deleted upstream" sweeps. A pull is seconds of round trips and the user keeps
-working through it; without that mark, an item typed mid-pull is deleted by the
-same pull and its queued create is dropped with it. Do not restore
-`DeleteAllPendingSync` here.
+"deleted upstream" sweeps. The user keeps working through a pull; without that
+mark, an item typed mid-pull is deleted by the same pull and its queued create
+is dropped with it. Do not restore `DeleteAllPendingSync` here.
+
+The item list embeds memberships, dependencies, and tasks, so a pull is two
+requests. When the server omits `dependency_ids`/`tasks` the pull falls back to
+the per-item endpoints — decode into slices and branch on nil, never on empty.
+Absent and empty are different answers, and reading absent as empty would delete
+every task and dependency locally on the first pull against an older API. That
+fallback is what makes deploy order between this repo and ichrisbirch irrelevant;
+do not drop it just because the API has shipped.
 
 ## Planning docs
 

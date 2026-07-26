@@ -717,3 +717,123 @@ func TestPush_RetriesWithoutAFurtherMutation(t *testing.T) {
 	}
 	t.Error("queue never healed on its own after the API recovered")
 }
+
+// pullFixture serves a two-item dataset. When embedded is true the list carries
+// dependency_ids and tasks the way the current API does; when false it omits
+// them the way a server predating the embed does, which is what forces the
+// per-item fallback.
+func pullFixture(embedded bool) http.HandlerFunc {
+	now := time.Now()
+	base := func(id, title string) map[string]any {
+		return map[string]any{
+			"id": id, "title": title, "notes": nil, "repo": nil,
+			"completed": false, "archived": false,
+			"created_at": now.Format(time.RFC3339Nano),
+			"updated_at": now.Format(time.RFC3339Nano),
+			"projects":   []map[string]any{{"id": "proj-1", "name": "Remote", "position": 0, "created_at": now.Format(time.RFC3339Nano)}},
+		}
+	}
+	task := map[string]any{
+		"id": "task-1", "item_id": "item-2", "title": "Embedded Task",
+		"completed": false, "position": 0, "created_at": now.Format(time.RFC3339Nano),
+	}
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/projects/":
+			_ = json.NewEncoder(w).Encode([]model.Project{{ID: "proj-1", Name: "Remote", Position: 0, CreatedAt: now}})
+		case "/project-items/":
+			blocker := base("item-1", "Blocker")
+			blocked := base("item-2", "Blocked")
+			if embedded {
+				blocker["dependency_ids"] = []string{}
+				blocker["tasks"] = []map[string]any{}
+				blocked["dependency_ids"] = []string{"item-1"}
+				blocked["tasks"] = []map[string]any{task}
+			}
+			_ = json.NewEncoder(w).Encode([]map[string]any{blocker, blocked})
+		case "/project-items/item-1/":
+			_ = json.NewEncoder(w).Encode(base("item-1", "Blocker"))
+		case "/project-items/item-2/":
+			detail := base("item-2", "Blocked")
+			detail["dependency_ids"] = []string{"item-1"}
+			_ = json.NewEncoder(w).Encode(detail)
+		case "/project-items/item-2/tasks/":
+			_ = json.NewEncoder(w).Encode([]map[string]any{task})
+		default:
+			_ = json.NewEncoder(w).Encode([]map[string]any{})
+		}
+	}
+}
+
+func pulledInto(t *testing.T, handler http.HandlerFunc) (*callRecorder, *backend.LocalBackend) {
+	t.Helper()
+	database, err := db.Open(":memory:")
+	if err != nil {
+		t.Fatalf("opening database: %v", err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+
+	recorder := &callRecorder{}
+	ts := httptest.NewServer(logging(recorder, handler))
+	t.Cleanup(ts.Close)
+
+	engine := sync.New(database, ts.URL, "")
+	t.Cleanup(engine.Stop)
+	if err := engine.Pull(t.Context()); err != nil {
+		t.Fatalf("Pull: %v", err)
+	}
+	return recorder, backend.NewLocalBackend(database)
+}
+
+// The whole point of embedding: a reconcile is two requests regardless of how
+// many items exist, instead of two more per item.
+func TestPull_UsesEmbeddedDetailAndStopsAtTwoRequests(t *testing.T) {
+	recorder, local := pulledInto(t, pullFixture(true))
+
+	if got := recorder.snapshot(); len(got) != 2 {
+		t.Errorf("expected 2 requests, got %d: %v", len(got), got)
+	}
+
+	tasks, err := local.ListTasks("item-2")
+	if err != nil {
+		t.Fatalf("ListTasks: %v", err)
+	}
+	if len(tasks) != 1 || tasks[0].Title != "Embedded Task" {
+		t.Errorf("embedded task did not reconcile: %v", tasks)
+	}
+	blockers, err := local.GetBlockers("item-2")
+	if err != nil {
+		t.Fatalf("GetBlockers: %v", err)
+	}
+	if len(blockers) != 1 || blockers[0].ID != "item-1" {
+		t.Errorf("embedded dependency did not reconcile: %v", blockers)
+	}
+}
+
+// Deploy order between todoui and ichrisbirch must not matter. Against a server
+// that omits the fields, treating absent as empty would delete every task and
+// dependency locally, so the pull has to fall back to the per-item endpoints.
+func TestPull_FallsBackWhenTheServerOmitsEmbeddedFields(t *testing.T) {
+	recorder, local := pulledInto(t, pullFixture(false))
+
+	if got := recorder.count(); got <= 2 {
+		t.Errorf("expected per-item fallback requests, got only %d", got)
+	}
+
+	tasks, err := local.ListTasks("item-2")
+	if err != nil {
+		t.Fatalf("ListTasks: %v", err)
+	}
+	if len(tasks) != 1 || tasks[0].Title != "Embedded Task" {
+		t.Errorf("fallback lost the item's tasks: %v", tasks)
+	}
+	blockers, err := local.GetBlockers("item-2")
+	if err != nil {
+		t.Fatalf("GetBlockers: %v", err)
+	}
+	if len(blockers) != 1 || blockers[0].ID != "item-1" {
+		t.Errorf("fallback lost the item's dependencies: %v", blockers)
+	}
+}

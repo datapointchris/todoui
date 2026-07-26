@@ -168,8 +168,10 @@ enabled = false
 # interval = "2m"  # longest todoui goes without reconciling; floored at 15s
 ```
 
-A full pull costs 2+2N requests, so `interval` trades API load against
-staleness. Lower it to sync more eagerly; raise it on a slow link.
+A pull is two requests — the item list embeds memberships, dependencies, and
+sub-tasks. Against an API predating that embed it falls back to 2+2N, fetching
+each item's detail and tasks separately, so `interval` still exists to keep a
+burst of commands from paying that repeatedly. Lower it to sync more eagerly.
 
 Environment variable overrides:
 

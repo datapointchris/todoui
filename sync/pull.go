@@ -32,10 +32,9 @@ func (e *Engine) LastPullAt() (time.Time, error) {
 }
 
 // PullIfStale reconciles only when the last pull is older than maxAge, and
-// reports whether it pulled. A full pull costs 2+2N requests — one per item for
-// its detail and again for its tasks — so running it ahead of every CLI
-// invocation would put dozens of round trips in front of a command that prints
-// four lines.
+// reports whether it pulled. Against a server that embeds item detail in the
+// list a pull is two requests; against one that does not it is 2+2N, so the
+// window still exists to keep a burst of CLI commands from paying that repeatedly.
 func (e *Engine) PullIfStale(ctx context.Context, maxAge time.Duration) (bool, error) {
 	last, err := e.LastPullAt()
 	if err != nil {
@@ -88,12 +87,11 @@ func (e *Engine) pull(ctx context.Context) error {
 		return fmt.Errorf("pulling projects: %w", err)
 	}
 
-	items, err := fetchJSON[[]model.ProjectItem](ctx, e.client, e.apiURL, "/project-items/")
+	items, err := fetchJSON[[]model.ProjectItemDetail](ctx, e.client, e.apiURL, "/project-items/")
 	if err != nil {
 		return fmt.Errorf("pulling items: %w", err)
 	}
 
-	// For each item, fetch detail (memberships + deps) and tasks
 	type itemExtra struct {
 		detail *model.ProjectItemDetail
 		tasks  []model.ProjectItemTask
@@ -101,6 +99,18 @@ func (e *Engine) pull(ctx context.Context) error {
 	extras := make(map[string]itemExtra, len(items))
 
 	for _, item := range items {
+		// The list embeds memberships, dependencies, and tasks, so the whole
+		// reconcile is two requests. It used to be two more per item: 122 serial
+		// round trips and 6.15s at 60 items, paid before a CLI command printed.
+		if item.DependencyIDs != nil && item.Tasks != nil {
+			extras[item.ID] = itemExtra{detail: &item, tasks: item.Tasks}
+			continue
+		}
+
+		// A server predating the embed omits both fields. Falling back rather
+		// than trusting the zero value matters: treating absent as empty would
+		// erase every task and dependency locally on the first pull against an
+		// older API, so deploy order between this and ichrisbirch cannot lose data.
 		detail, err := fetchJSON[*model.ProjectItemDetail](ctx, e.client, e.apiURL, fmt.Sprintf("/project-items/%s/", item.ID))
 		if err != nil {
 			return fmt.Errorf("pulling item %s detail: %w", item.ID, err)
