@@ -34,12 +34,27 @@ func main() {
 // would mean a new command silently serves stale data, which is the bug this
 // exists to fix.
 var commandsThatSkipPull = map[string]bool{
-	"ui":         true, // pulls on start, then on its own timer
-	"version":    true,
-	"update":     true,
-	"completion": true,
-	"help":       true,
-	"sync":       true, // forces a full pull regardless of freshness
+	"ui":                            true, // pulls on start, then on its own timer
+	"version":                       true,
+	"update":                        true,
+	"completion":                    true,
+	"help":                          true,
+	"sync":                          true, // forces a full pull regardless of freshness
+	cobra.ShellCompRequestCmd:       true, // cobra runs these on every TAB press
+	cobra.ShellCompNoDescRequestCmd: true,
+}
+
+// skipsPull matches the whole ancestry, not just the leaf. `completion` owns a
+// subcommand per shell, so `todoui completion zsh` executes `zsh` and a leaf-only
+// check missed it — every shell that sourced the completions paid a full pull,
+// and a stale one blocked startup for the API timeout.
+func skipsPull(cmd *cobra.Command) bool {
+	for c := cmd; c != nil; c = c.Parent() {
+		if commandsThatSkipPull[c.Name()] {
+			return true
+		}
+	}
+	return false
 }
 
 // refreshForCLI reconciles with the server before a CLI command reads local
@@ -51,7 +66,7 @@ var commandsThatSkipPull = map[string]bool{
 // Failure is deliberately not fatal. todoui is local-first: an unreachable API
 // must degrade to local data, not break the command.
 func refreshForCLI(cmd *cobra.Command, engine *sync.Engine, noSync bool, freshness time.Duration) {
-	if engine == nil || noSync || commandsThatSkipPull[cmd.Name()] {
+	if engine == nil || noSync || skipsPull(cmd) {
 		return
 	}
 	if _, err := engine.PullIfStale(cmd.Context(), freshness); err != nil {
