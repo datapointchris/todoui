@@ -95,11 +95,23 @@ ambiguous id is reported rather than guessed at.
 **`--json`** is available on `list`, `view`, `search`, `tasks`, `blockers`, and
 `blocked`, and emits full ids.
 
-**Freshness**: when sync is enabled, a CLI command refreshes from the API first
-if the last pull is more than two minutes old, so a burst of commands pulls
-once rather than every time. An unreachable API warns on stderr and falls back
-to local data — todoui is local-first and never blocks on the network. Force a
-reconcile with `todoui sync`; skip it with `--no-sync`.
+**Freshness**: when sync is enabled, todoui reconciles on its own and running
+`todoui sync` by hand is never required. `sync.interval` (default two minutes)
+sets the longest it will go without reconciling, and governs both halves:
+
+- A **CLI command** refreshes from the API first if the last pull is older than
+  the interval, so a burst of commands pulls once rather than every time.
+- The **TUI** pulls on launch and again every interval for as long as it is
+  open. A pull is deferred while a text input, overlay, or move is active and
+  runs on the next tick instead, so it never moves the ground under an edit.
+
+Queued pushes retry on their own too — a change made while the API was
+unreachable is sent once it comes back, without another edit to trigger it.
+
+An unreachable API warns on stderr (CLI) or shows `SYNC ERR` in the status bar
+(TUI) and falls back to local data — todoui is local-first and never blocks on
+the network. Force a reconcile with `todoui sync` or `R` in the TUI; skip the
+pre-command refresh with `--no-sync`.
 
 ## TUI Keybindings
 
@@ -137,6 +149,7 @@ reconcile with `todoui sync`; skip it with `--no-sync`.
 | `1` | Filter: blocked items |
 | `2` | Filter: archived items |
 | `0` | Clear filter |
+| `R` | Sync now (also runs automatically every `sync.interval`) |
 | `?` | Help |
 | `q` | Quit |
 
@@ -152,7 +165,11 @@ Config file: `~/.config/todoui/config.toml`
 enabled = false
 # api_url = "https://api.ichrisbirch.com"
 # api_key = "icb_..."  # personal API key from POST /api-keys/
+# interval = "2m"  # longest todoui goes without reconciling; floored at 15s
 ```
+
+A full pull costs 2+2N requests, so `interval` trades API load against
+staleness. Lower it to sync more eagerly; raise it on a slow link.
 
 Environment variable overrides:
 
@@ -162,6 +179,7 @@ Environment variable overrides:
 | `TODOUI_SYNC` | Enable sync (`true`/`false`) |
 | `TODOUI_SYNC_URL` | API URL for sync |
 | `TODOUI_SYNC_KEY` | Personal API key for sync auth |
+| `TODOUI_SYNC_INTERVAL` | Reconcile interval (e.g. `30s`, `5m`) |
 
 ## Architecture
 

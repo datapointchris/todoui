@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestLoad_Defaults(t *testing.T) {
 	// No config file, no env vars — should use defaults
@@ -61,5 +64,50 @@ func TestDefaultDBPath_XDGOverride(t *testing.T) {
 	want := "/custom/data/todoui/todoui.db"
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// The interval governs both the TUI's background pull and the age at which a
+// CLI read refreshes, so a missing default would mean no automatic sync at all.
+func TestLoad_SyncIntervalDefault(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("TODOUI_SYNC_INTERVAL", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Sync.Interval != 2*time.Minute {
+		t.Errorf("expected a 2m default interval, got %v", cfg.Sync.Interval)
+	}
+}
+
+func TestLoad_SyncIntervalFromEnv(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("TODOUI_SYNC_INTERVAL", "45s")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Sync.Interval != 45*time.Second {
+		t.Errorf("expected 45s from the environment, got %v", cfg.Sync.Interval)
+	}
+}
+
+// time.NewTicker panics on a non-positive duration, so a typo here would take
+// the TUI down on launch rather than degrading to a slower sync.
+func TestLoad_SyncIntervalIsFloored(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	for _, given := range []string{"0s", "-5m", "1s"} {
+		t.Setenv("TODOUI_SYNC_INTERVAL", given)
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load(%s): %v", given, err)
+		}
+		if cfg.Sync.Interval < minSyncInterval {
+			t.Errorf("interval %q left below the floor: %v", given, cfg.Sync.Interval)
+		}
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/spf13/viper"
 )
@@ -19,6 +20,10 @@ type SyncConfig struct {
 	Enabled bool   `mapstructure:"enabled"`
 	APIURL  string `mapstructure:"api_url"`
 	APIKey  string `mapstructure:"api_key"`
+
+	// Interval is the longest todoui will go without reconciling: the TUI's
+	// background pull period, and the age at which a CLI read refreshes first.
+	Interval time.Duration `mapstructure:"interval"`
 }
 
 // LocalConfig holds settings for the local embedded mode.
@@ -31,8 +36,11 @@ type LocalConfig struct {
 func Load() (*Config, error) {
 	v := viper.New()
 
-	// Defaults
+	// Defaults. A full pull costs 2+2N requests, so the interval trades API load
+	// against staleness; two minutes keeps an unattended TUI current without
+	// making a burst of agent CLI calls pull more than once.
 	v.SetDefault("local.db_path", defaultDBPath())
+	v.SetDefault("sync.interval", 2*time.Minute)
 
 	// Config file: $XDG_CONFIG_HOME/todoui/config.toml or ~/.config/todoui/config.toml
 	// Use XDG explicitly rather than Go's UserConfigDir, which returns
@@ -53,6 +61,7 @@ func Load() (*Config, error) {
 	_ = v.BindEnv("sync.enabled", "TODOUI_SYNC")
 	_ = v.BindEnv("sync.api_url", "TODOUI_SYNC_URL")
 	_ = v.BindEnv("sync.api_key", "TODOUI_SYNC_KEY")
+	_ = v.BindEnv("sync.interval", "TODOUI_SYNC_INTERVAL")
 
 	var cfg Config
 	if err := v.Unmarshal(&cfg); err != nil {
@@ -63,8 +72,18 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("sync.api_url is required when sync is enabled (set in config or TODOUI_SYNC_URL)")
 	}
 
+	// time.NewTicker panics on a non-positive duration, and a config typo must not
+	// take the TUI down. Disabling automatic sync is what sync.enabled is for.
+	if cfg.Sync.Interval < minSyncInterval {
+		cfg.Sync.Interval = minSyncInterval
+	}
+
 	return &cfg, nil
 }
+
+// minSyncInterval floors the reconcile period. A full pull is 2+2N requests, so
+// anything shorter is a self-inflicted denial of service on the API.
+const minSyncInterval = 15 * time.Second
 
 func defaultDBPath() string {
 	return filepath.Join(userDataDir(), "todoui", "todoui.db")

@@ -577,3 +577,143 @@ func logging(recorder *callRecorder, next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
+
+// A pull takes seconds — 2+2N requests — and the user keeps working through it.
+// Anything created in that window postdates the server response, so the
+// reconciliation must not read it as "deleted upstream" and erase it, nor drop
+// the queued operation that is the only record of it.
+func TestPull_KeepsWorkDoneWhileItWasRunning(t *testing.T) {
+	database, err := db.Open(":memory:")
+	if err != nil {
+		t.Fatalf("opening database: %v", err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+
+	local := backend.NewLocalBackend(database)
+
+	// The mid-pull create needs a project to attach to, and the server has to
+	// report that same project or the pull deletes it and cascades the item away.
+	project, err := local.CreateProject(model.CreateProject{Name: "Server"})
+	if err != nil {
+		t.Fatalf("seeding project: %v", err)
+	}
+
+	var sb *sync.SyncBackend
+	var once goSync.Once
+	raced := make(chan string, 1)
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Every write fails, so the op queued below is guaranteed to still be
+		// pending when the assertion runs.
+		if r.Method != http.MethodGet {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/projects/":
+			_ = json.NewEncoder(w).Encode([]model.Project{
+				{ID: project.ID, Name: "Server", Position: 0, CreatedAt: time.Now()},
+			})
+		case "/project-items/":
+			_ = json.NewEncoder(w).Encode([]model.ProjectItem{
+				{ID: "item-1", Title: "Server Item", CreatedAt: time.Now(), UpdatedAt: time.Now()},
+			})
+		case "/project-items/item-1/":
+			// Mid-pull: the user adds an item the server response cannot know about.
+			once.Do(func() {
+				created, err := sb.CreateItem(model.CreateProjectItem{
+					Title:      "Typed During Pull",
+					ProjectIDs: []string{project.ID},
+				})
+				if err != nil {
+					t.Errorf("creating item mid-pull: %v", err)
+					return
+				}
+				raced <- created.ID
+			})
+			_ = json.NewEncoder(w).Encode(model.ProjectItemDetail{
+				ProjectItem: model.ProjectItem{ID: "item-1", Title: "Server Item", CreatedAt: time.Now(), UpdatedAt: time.Now()},
+				Projects:    []model.Project{{ID: project.ID, Name: "Server"}},
+			})
+		default:
+			_ = json.NewEncoder(w).Encode([]model.ProjectItemTask{})
+		}
+	})
+
+	ts := httptest.NewServer(handler)
+	t.Cleanup(ts.Close)
+
+	engine := sync.New(database, ts.URL, "")
+	t.Cleanup(engine.Stop)
+	sb = sync.NewSyncBackend(local, engine)
+
+	if err := engine.Pull(t.Context()); err != nil {
+		t.Fatalf("Pull: %v", err)
+	}
+
+	racedID := <-raced
+	if _, err := local.GetItem(racedID); err != nil {
+		t.Fatalf("item created during the pull was erased by it: %v", err)
+	}
+	if got := engine.Status().PendingCount; got == 0 {
+		t.Error("the queued create was dropped, so nothing will ever push it")
+	}
+}
+
+// Notify only fires on a local mutation. Without a retry ticker a push that
+// failed while the API was down stayed queued until the user happened to edit
+// something else, which is indistinguishable from sync being broken.
+func TestPush_RetriesWithoutAFurtherMutation(t *testing.T) {
+	var mu goSync.Mutex
+	failing := true
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		down := failing
+		mu.Unlock()
+		if down {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("{}"))
+	})
+
+	database, err := db.Open(":memory:")
+	if err != nil {
+		t.Fatalf("opening database: %v", err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+
+	ts := httptest.NewServer(handler)
+	t.Cleanup(ts.Close)
+
+	engine := sync.New(database, ts.URL, "", sync.WithPushRetryInterval(100*time.Millisecond))
+	engine.Start()
+	t.Cleanup(engine.Stop)
+	sb := sync.NewSyncBackend(backend.NewLocalBackend(database), engine)
+
+	if _, err := sb.CreateProject(model.CreateProject{Name: "Queued"}); err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+
+	// The first push fails and backs off; the op must still be waiting.
+	time.Sleep(500 * time.Millisecond)
+	if engine.Status().PendingCount == 0 {
+		t.Fatal("op vanished while the API was failing")
+	}
+
+	mu.Lock()
+	failing = false
+	mu.Unlock()
+
+	// No Notify, no further mutation — only the ticker can clear this.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if engine.Status().PendingCount == 0 {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Error("queue never healed on its own after the API recovered")
+}

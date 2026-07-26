@@ -199,6 +199,15 @@ SELECT COUNT(*) FROM pending_sync;
 -- name: DeleteAllPendingSync :exec
 DELETE FROM pending_sync;
 
+-- name: MaxPendingSyncID :one
+SELECT CAST(COALESCE(MAX(id), 0) AS INTEGER) AS max_id FROM pending_sync;
+
+-- name: DeletePendingSyncUpTo :exec
+DELETE FROM pending_sync WHERE id <= ?;
+
+-- name: ListPendingSyncEntityIDsAfter :many
+SELECT DISTINCT entity_id FROM pending_sync WHERE id > ?;
+
 -- Sync: state tracking
 
 -- name: GetSyncState :one

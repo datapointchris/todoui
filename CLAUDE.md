@@ -68,12 +68,37 @@ prints can be passed to the next one. Do not switch to prefix matching — UUIDv
 front-loads its millisecond timestamp, so prefixes collide for everything
 created in the same window.
 
-CLI commands refresh from the API before running when sync is enabled and the
-last pull is over two minutes old (`refreshForCLI` in `main.go`). A new command
-pulls by default; `commandsThatSkipPull` is a denylist rather than an allowlist
-so that forgetting to register one cannot silently serve stale data. A pull
-failure warns and continues — local-first means an unreachable API degrades to
-local data, never an error.
+## Sync is automatic; `todoui sync` is a convenience, not a requirement
+
+`sync.interval` (default 2m, floored at 15s) is the single knob for how stale
+todoui may ever be, and it drives three loops:
+
+- **CLI** — `refreshForCLI` in `main.go` pulls before a command when the last
+  pull is older than the interval. A new command pulls by default;
+  `commandsThatSkipPull` is a denylist rather than an allowlist so that
+  forgetting to register one cannot silently serve stale data.
+- **TUI** — `syncPullTickMsg` re-arms itself every interval. It always
+  reschedules, even on the ticks it skips; a tick that returns no command kills
+  background sync for the rest of the session. `safeToAutoPull` gates the
+  reconcile to `modeNormal` because a pull rewrites items, memberships, and
+  ordering wholesale and would move the ground under a grab or a text entry.
+- **Push** — `pushLoop` carries a retry ticker alongside `Notify`. Notify only
+  fires on a local mutation, so without it a push that failed while the API was
+  down stayed queued until the user happened to edit something else.
+
+Anything user-visible distinguishes automatic from manual: an automatic pull
+neither flashes on success nor claims the status bar on failure, because it
+runs every interval and would otherwise bury real messages under noise. Failure
+surfaces through the engine status (`SYNC ERR`) instead. A CLI pull failure
+warns and continues — local-first means an unreachable API degrades to local
+data, never an error.
+
+`Pull` records a pending-sync high-water mark before it fetches, then clears
+only the ops at or below it and spares entities queued above it from the
+"deleted upstream" sweeps. A pull is seconds of round trips and the user keeps
+working through it; without that mark, an item typed mid-pull is deleted by the
+same pull and its queued create is dropped with it. Do not restore
+`DeleteAllPendingSync` here.
 
 ## Planning docs
 

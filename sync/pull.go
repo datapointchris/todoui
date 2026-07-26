@@ -50,12 +50,37 @@ func (e *Engine) PullIfStale(ctx context.Context, maxAge time.Duration) (bool, e
 // Pull fetches all data from the remote API and reconciles it with the local database.
 // It attempts to push pending ops first (so the server has our changes), then does a
 // full pull. Server state wins on conflicts.
+//
+// A failure is recorded on the status so the TUI's indicator reflects it. Pull runs
+// unattended on a timer, and an error only a foreground caller can see would leave
+// the bar reading SYNCED while nothing had reconciled for hours.
 func (e *Engine) Pull(ctx context.Context) error {
-	e.setStatus(func(s *SyncStatus) { s.Syncing = true })
-	defer e.setStatus(func(s *SyncStatus) { s.Syncing = false })
+	e.beginSync()
+	defer e.endSync()
 
+	err := e.pull(ctx)
+	e.setStatus(func(s *SyncStatus) {
+		s.Connected = err == nil
+		if err != nil {
+			s.LastError = err.Error()
+		} else {
+			s.LastError = ""
+		}
+	})
+	return err
+}
+
+func (e *Engine) pull(ctx context.Context) error {
 	// Push first: try to drain pending ops so server has our changes
 	e.drainPendingOps()
+
+	// Everything queued from here on describes a local change the fetch below
+	// cannot know about. Recording the high-water mark lets the reconciliation
+	// clear only what it actually superseded — see the delete calls at the end.
+	pushedThrough, err := e.q.MaxPendingSyncID(ctx)
+	if err != nil {
+		return fmt.Errorf("reading pending sync high-water mark: %w", err)
+	}
 
 	// Fetch all data from the server
 	projects, err := fetchJSON[[]model.Project](ctx, e.client, e.apiURL, "/projects/")
@@ -97,6 +122,19 @@ func (e *Engine) Pull(ctx context.Context) error {
 	defer func() { _ = tx.Rollback() }()
 	qtx := e.q.WithTx(tx)
 
+	// Entities changed locally while the fetch was in flight. The server response
+	// predates them, so the sweeps below would read them as "deleted upstream" and
+	// erase a row the user created seconds ago. Ids are UUIDv7 and unique across
+	// tables, so one set covers projects, items, and tasks alike.
+	pendingIDs, err := qtx.ListPendingSyncEntityIDsAfter(ctx, pushedThrough)
+	if err != nil {
+		return fmt.Errorf("listing in-flight sync entities: %w", err)
+	}
+	queuedLocally := make(map[string]bool, len(pendingIDs))
+	for _, id := range pendingIDs {
+		queuedLocally[id] = true
+	}
+
 	// Upsert projects
 	serverProjectIDs := make(map[string]bool, len(projects))
 	for _, p := range projects {
@@ -118,7 +156,7 @@ func (e *Engine) Pull(ctx context.Context) error {
 		return fmt.Errorf("listing local projects: %w", err)
 	}
 	for _, lp := range localProjects {
-		if !serverProjectIDs[lp.ID] {
+		if !serverProjectIDs[lp.ID] && !queuedLocally[lp.ID] {
 			if err := qtx.DeleteProject(ctx, lp.ID); err != nil {
 				return fmt.Errorf("deleting stale project %s: %w", lp.ID, err)
 			}
@@ -149,7 +187,7 @@ func (e *Engine) Pull(ctx context.Context) error {
 		return fmt.Errorf("listing local items: %w", err)
 	}
 	for _, li := range localItems {
-		if !serverItemIDs[li.ID] {
+		if !serverItemIDs[li.ID] && !queuedLocally[li.ID] {
 			if err := qtx.DeleteItem(ctx, li.ID); err != nil {
 				return fmt.Errorf("deleting stale item %s: %w", li.ID, err)
 			}
@@ -216,15 +254,16 @@ func (e *Engine) Pull(ctx context.Context) error {
 		return fmt.Errorf("listing local tasks: %w", err)
 	}
 	for _, lt := range localTasks {
-		if !serverTaskIDs[lt.ID] {
+		if !serverTaskIDs[lt.ID] && !queuedLocally[lt.ID] {
 			if err := qtx.DeleteTask(ctx, lt.ID); err != nil {
 				return fmt.Errorf("deleting stale task %s: %w", lt.ID, err)
 			}
 		}
 	}
 
-	// Clear any pending sync ops that are now redundant
-	if err := qtx.DeleteAllPendingSync(ctx); err != nil {
+	// Clear only the ops this reconciliation superseded. Anything queued after the
+	// high-water mark postdates the server response and still has to be pushed.
+	if err := qtx.DeletePendingSyncUpTo(ctx, pushedThrough); err != nil {
 		return fmt.Errorf("clearing pending sync: %w", err)
 	}
 
@@ -244,10 +283,10 @@ func (e *Engine) Pull(ctx context.Context) error {
 		return fmt.Errorf("committing sync: %w", err)
 	}
 
-	e.setStatus(func(s *SyncStatus) {
-		s.Connected = true
-		s.LastError = ""
-	})
+	// Ops that survived the truncation were queued mid-pull and are still unsent.
+	if len(queuedLocally) > 0 {
+		e.Notify()
+	}
 	return nil
 }
 

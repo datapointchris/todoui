@@ -1,7 +1,12 @@
 package tui
 
 import (
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	goSync "sync"
 	"testing"
 	"time"
 
@@ -10,6 +15,7 @@ import (
 	"github.com/datapointchris/todoui/backend"
 	"github.com/datapointchris/todoui/db"
 	"github.com/datapointchris/todoui/model"
+	"github.com/datapointchris/todoui/sync"
 )
 
 // newTestApp returns an app already showing one project's items, sized to
@@ -38,7 +44,7 @@ func newTestApp(t *testing.T, width, height int, itemTitles ...string) *App {
 		}
 	}
 
-	app := NewApp(b, nil, ":memory:")
+	app := NewApp(b, nil, ":memory:", 2*time.Minute)
 	send(t, app, tea.WindowSizeMsg{Width: width, Height: height})
 	send(t, app, app.Init()())
 	send(t, app, app.fetchItems()())
@@ -192,5 +198,150 @@ func TestCreatedTaskAppearsAsRow(t *testing.T) {
 	}
 	if !strings.Contains(app.View(), "subtask") {
 		t.Errorf("new task not rendered:\n%s", app.View())
+	}
+}
+
+// The auto-pull timer re-arms itself from its own message. A tick that returns
+// no command ends background sync for the rest of the session, so the skipped
+// ticks have to re-arm too — otherwise opening one modal at the wrong moment
+// silently reverts todoui to manual syncing.
+func TestSyncTickRearmsEvenWhenItSkipsThePull(t *testing.T) {
+	app := newTestApp(t, 80, 24, "Alpha")
+
+	for _, mode := range []appMode{modeNormal, modeAddItem, modeMove, modeHelp} {
+		app.appMode = mode
+		_, cmd := app.Update(syncPullTickMsg{})
+		if cmd == nil {
+			t.Errorf("tick in mode %v returned no command: the sync timer is now dead", mode)
+		}
+	}
+}
+
+// safeToAutoPull gates the reconcile, not the timer. A pull rewrites items and
+// ordering wholesale, which would move the ground under a grab or a text entry.
+func TestAutoPullOnlyRunsInNormalMode(t *testing.T) {
+	app := newTestApp(t, 80, 24, "Alpha")
+
+	app.appMode = modeNormal
+	if !app.safeToAutoPull() {
+		t.Error("normal mode must allow the background reconcile")
+	}
+	for _, mode := range []appMode{modeAddItem, modeEditNotes, modeMove, modeMoveProject, modeItemDetail} {
+		app.appMode = mode
+		if app.safeToAutoPull() {
+			t.Errorf("mode %v must defer the reconcile to the next tick", mode)
+		}
+	}
+}
+
+// An automatic pull lands every syncInterval. Announcing it would keep the
+// status bar permanently flashing and bury the messages the user acted to see.
+func TestAutomaticPullIsSilentAndManualPullIsNot(t *testing.T) {
+	app := newTestApp(t, 80, 24, "Alpha")
+
+	app.statusMsg = ""
+	send(t, app, syncPullDoneMsg{manual: false})
+	if app.statusMsg != "" {
+		t.Errorf("automatic pull announced itself: %q", app.statusMsg)
+	}
+
+	send(t, app, syncPullDoneMsg{manual: true})
+	if app.statusMsg == "" {
+		t.Error("a pull the user asked for should confirm it happened")
+	}
+}
+
+// A failing automatic pull is not something the user did. The status bar already
+// reads SYNC ERR off the engine; pinning an error banner every interval would
+// make a briefly unreachable API look like a broken app.
+func TestAutomaticPullFailureDoesNotHijackTheStatusBar(t *testing.T) {
+	app := newTestApp(t, 80, 24, "Alpha")
+
+	send(t, app, syncPullErrMsg{error: errors.New("connection refused"), manual: false})
+	if app.errorMsg != "" {
+		t.Errorf("automatic pull failure took over the status bar: %q", app.errorMsg)
+	}
+
+	send(t, app, syncPullErrMsg{error: errors.New("connection refused"), manual: true})
+	if app.errorMsg == "" {
+		t.Error("a pull the user asked for must report why it failed")
+	}
+}
+
+// End-to-end for the background timer: a tick in normal mode must actually
+// reconcile with the server and re-arm, and a tick in a modal must do neither
+// the pull nor lose the timer. This is the behavior that removes the need to
+// drop out of the TUI and run `todoui sync` by hand.
+func TestSyncTickReconcilesWithTheServer(t *testing.T) {
+	var mu goSync.Mutex
+	var hits int
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		hits++
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/projects/":
+			_ = json.NewEncoder(w).Encode([]model.Project{
+				{ID: "proj-1", Name: "Remote", Position: 0, CreatedAt: time.Now()},
+			})
+		case "/project-items/":
+			_ = json.NewEncoder(w).Encode([]model.ProjectItem{
+				{ID: "item-1", Title: "Added Elsewhere", CreatedAt: time.Now(), UpdatedAt: time.Now()},
+			})
+		case "/project-items/item-1/":
+			_ = json.NewEncoder(w).Encode(model.ProjectItemDetail{
+				ProjectItem: model.ProjectItem{ID: "item-1", Title: "Added Elsewhere", CreatedAt: time.Now(), UpdatedAt: time.Now()},
+				Projects:    []model.Project{{ID: "proj-1", Name: "Remote"}},
+			})
+		default:
+			_ = json.NewEncoder(w).Encode([]model.ProjectItemTask{})
+		}
+	})
+	ts := httptest.NewServer(handler)
+	t.Cleanup(ts.Close)
+
+	database, err := db.Open(":memory:")
+	if err != nil {
+		t.Fatalf("opening test db: %v", err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+
+	engine := sync.New(database, ts.URL, "")
+	t.Cleanup(engine.Stop)
+	app := NewApp(backend.NewLocalBackend(database), engine, ":memory:", 20*time.Millisecond)
+	send(t, app, tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	countHits := func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return hits
+	}
+
+	app.appMode = modeAddItem
+	send(t, app, syncPullTickMsg{})
+	if countHits() != 0 {
+		t.Fatalf("a tick during text entry reconciled anyway: %d requests", countHits())
+	}
+
+	app.appMode = modeNormal
+	send(t, app, syncPullTickMsg{})
+	if countHits() == 0 {
+		t.Fatal("a tick in normal mode never reached the server")
+	}
+
+	// An item that only ever existed on the server has to land in the TUI
+	// without the user asking for it.
+	if _, err := app.backend.GetItem("item-1"); err != nil {
+		t.Fatalf("background pull did not bring the remote item local: %v", err)
+	}
+	found := false
+	for _, p := range app.projects {
+		if p.Name == "Remote" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("pulled project never reached the rendered model: %v", app.projects)
 	}
 }

@@ -29,17 +29,12 @@ func main() {
 	}
 }
 
-// cliPullFreshness is how stale local data may be before a CLI command
-// refreshes it. Short enough that an agent reading todoui is not acting on
-// yesterday's picture, long enough that a burst of commands pulls once.
-const cliPullFreshness = 2 * time.Minute
-
 // commandsThatSkipPull never read or write todoui data, so making them wait on
 // the network buys nothing. Everything else pulls by default — an allowlist
 // would mean a new command silently serves stale data, which is the bug this
 // exists to fix.
 var commandsThatSkipPull = map[string]bool{
-	"ui":         true, // pulls itself on start, and keeps pulling
+	"ui":         true, // pulls on start, then on its own timer
 	"version":    true,
 	"update":     true,
 	"completion": true,
@@ -55,11 +50,11 @@ var commandsThatSkipPull = map[string]bool{
 //
 // Failure is deliberately not fatal. todoui is local-first: an unreachable API
 // must degrade to local data, not break the command.
-func refreshForCLI(cmd *cobra.Command, engine *sync.Engine, noSync bool) {
+func refreshForCLI(cmd *cobra.Command, engine *sync.Engine, noSync bool, freshness time.Duration) {
 	if engine == nil || noSync || commandsThatSkipPull[cmd.Name()] {
 		return
 	}
-	if _, err := engine.PullIfStale(cmd.Context(), cliPullFreshness); err != nil {
+	if _, err := engine.PullIfStale(cmd.Context(), freshness); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not refresh from %s (%v) — showing local data\n", engine.APIURL(), err)
 	}
 }
@@ -100,11 +95,11 @@ func rootCmd() *cobra.Command {
 				b = local
 			}
 
-			refreshForCLI(cmd, syncEngine, noSync)
+			refreshForCLI(cmd, syncEngine, noSync, cfg.Sync.Interval)
 			return nil
 		},
 		RunE: func(_ *cobra.Command, _ []string) error {
-			app := tui.NewApp(b, syncEngine, cfg.Local.DBPath)
+			app := tui.NewApp(b, syncEngine, cfg.Local.DBPath, cfg.Sync.Interval)
 			p := tea.NewProgram(app, tea.WithAltScreen())
 			_, err := p.Run()
 			return err
@@ -148,7 +143,7 @@ func rootCmd() *cobra.Command {
 		Short: "Launch the TUI (default when no command given)",
 		Args:  cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			app := tui.NewApp(b, syncEngine, cfg.Local.DBPath)
+			app := tui.NewApp(b, syncEngine, cfg.Local.DBPath, cfg.Sync.Interval)
 			p := tea.NewProgram(app, tea.WithAltScreen())
 			_, err := p.Run()
 			return err

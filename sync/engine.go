@@ -21,18 +21,29 @@ type Engine struct {
 	client *http.Client
 	apiURL string
 
-	mu     gosync.Mutex
-	status SyncStatus
+	mu        gosync.Mutex
+	status    SyncStatus
+	syncDepth int
 
-	pushCh chan struct{}
-	ctx    context.Context
-	cancel context.CancelFunc
-	done   chan struct{}
+	pushCh        chan struct{}
+	retryInterval time.Duration
+	ctx           context.Context
+	cancel        context.CancelFunc
+	done          chan struct{}
+}
+
+// Option customizes an Engine at construction.
+type Option func(*Engine)
+
+// WithPushRetryInterval overrides how often the push loop re-attempts a queue it
+// failed to drain. Tests use it to avoid waiting out the production interval.
+func WithPushRetryInterval(d time.Duration) Option {
+	return func(e *Engine) { e.retryInterval = d }
 }
 
 // New creates a sync engine. Call Start() to launch the background push loop.
 // If apiKey is non-empty, it is sent as a Bearer token on every request.
-func New(db *sql.DB, apiURL, apiKey string) *Engine {
+func New(db *sql.DB, apiURL, apiKey string, opts ...Option) *Engine {
 	ctx, cancel := context.WithCancel(context.Background())
 	client := &http.Client{Timeout: 10 * time.Second}
 	if apiKey != "" {
@@ -41,16 +52,21 @@ func New(db *sql.DB, apiURL, apiKey string) *Engine {
 			base: http.DefaultTransport,
 		}
 	}
-	return &Engine{
-		db:     db,
-		q:      generated.New(db),
-		client: client,
-		apiURL: apiURL,
-		pushCh: make(chan struct{}, 1),
-		ctx:    ctx,
-		cancel: cancel,
-		done:   make(chan struct{}),
+	e := &Engine{
+		db:            db,
+		q:             generated.New(db),
+		client:        client,
+		apiURL:        apiURL,
+		pushCh:        make(chan struct{}, 1),
+		retryInterval: defaultPushRetryInterval,
+		ctx:           ctx,
+		cancel:        cancel,
+		done:          make(chan struct{}),
 	}
+	for _, opt := range opts {
+		opt(e)
+	}
+	return e
 }
 
 // APIURL returns the remote API base URL this engine syncs with.
@@ -139,20 +155,62 @@ func (e *Engine) setStatus(fn func(s *SyncStatus)) {
 	fn(&e.status)
 }
 
+// beginSync/endSync track sync depth rather than a bare flag: Pull calls
+// drainPendingOps inside its own window, and a bool would clear on the inner
+// call's return, reporting SYNCED while a full pull was still in flight.
+func (e *Engine) beginSync() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.syncDepth++
+	e.status.Syncing = true
+}
+
+func (e *Engine) endSync() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.syncDepth--
+	if e.syncDepth <= 0 {
+		e.syncDepth = 0
+		e.status.Syncing = false
+	}
+}
+
+// defaultPushRetryInterval is how often the push loop re-attempts a queue it
+// failed to drain. Notify only fires on a local mutation, so without this a push
+// that failed while the API was unreachable stayed queued until the user
+// happened to edit something else — the queue never healed on its own.
+const defaultPushRetryInterval = 30 * time.Second
+
 func (e *Engine) pushLoop() {
+	retry := time.NewTicker(e.retryInterval)
+	defer retry.Stop()
+
 	for {
 		select {
 		case <-e.ctx.Done():
 			return
 		case <-e.pushCh:
 			e.drainPendingOps()
+		case <-retry.C:
+			e.retryPendingOps()
 		}
 	}
 }
 
+// retryPendingOps drains only when something is actually queued. An unconditional
+// drain would report Connected on an empty queue without having reached the
+// network, clearing a pull failure the status bar should still be showing.
+func (e *Engine) retryPendingOps() {
+	count, err := e.q.CountPendingSync(e.ctx)
+	if err != nil || count == 0 {
+		return
+	}
+	e.drainPendingOps()
+}
+
 func (e *Engine) drainPendingOps() {
-	e.setStatus(func(s *SyncStatus) { s.Syncing = true })
-	defer e.setStatus(func(s *SyncStatus) { s.Syncing = false })
+	e.beginSync()
+	defer e.endSync()
 
 	for {
 		if e.ctx.Err() != nil {

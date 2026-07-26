@@ -210,6 +210,15 @@ func (q *Queries) DeletePendingSyncByEntity(ctx context.Context, entityID string
 	return result.RowsAffected()
 }
 
+const deletePendingSyncUpTo = `-- name: DeletePendingSyncUpTo :exec
+DELETE FROM pending_sync WHERE id <= ?
+`
+
+func (q *Queries) DeletePendingSyncUpTo(ctx context.Context, id int64) error {
+	_, err := q.db.ExecContext(ctx, deletePendingSyncUpTo, id)
+	return err
+}
+
 const deleteProject = `-- name: DeleteProject :exec
 DELETE FROM projects WHERE id = ?
 `
@@ -1012,6 +1021,33 @@ func (q *Queries) ListPendingSync(ctx context.Context) ([]PendingSync, error) {
 	return items, nil
 }
 
+const listPendingSyncEntityIDsAfter = `-- name: ListPendingSyncEntityIDsAfter :many
+SELECT DISTINCT entity_id FROM pending_sync WHERE id > ?
+`
+
+func (q *Queries) ListPendingSyncEntityIDsAfter(ctx context.Context, id int64) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listPendingSyncEntityIDsAfter, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var entity_id string
+		if err := rows.Scan(&entity_id); err != nil {
+			return nil, err
+		}
+		items = append(items, entity_id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listProjectsWithItemCount = `-- name: ListProjectsWithItemCount :many
 SELECT p.id, p.name, p.description, p.position, p.created_at, COUNT(pi.id) AS item_count
 FROM projects p
@@ -1094,6 +1130,17 @@ func (q *Queries) ListTasksByItem(ctx context.Context, itemID string) ([]Project
 		return nil, err
 	}
 	return items, nil
+}
+
+const maxPendingSyncID = `-- name: MaxPendingSyncID :one
+SELECT CAST(COALESCE(MAX(id), 0) AS INTEGER) AS max_id FROM pending_sync
+`
+
+func (q *Queries) MaxPendingSyncID(ctx context.Context) (int64, error) {
+	row := q.db.QueryRowContext(ctx, maxPendingSyncID)
+	var max_id int64
+	err := row.Scan(&max_id)
+	return max_id, err
 }
 
 const removeDependency = `-- name: RemoveDependency :exec

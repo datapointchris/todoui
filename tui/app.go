@@ -110,8 +110,9 @@ type App struct {
 	loading  bool   // true while an async operation is in-flight
 
 	// Sync
-	syncEngine *sync.Engine
-	syncStatus sync.SyncStatus
+	syncEngine   *sync.Engine
+	syncStatus   sync.SyncStatus
+	syncInterval time.Duration
 
 	// Display info
 	dbPath string
@@ -119,7 +120,7 @@ type App struct {
 
 // NewApp creates a new TUI application backed by the given Backend.
 // syncEngine may be nil when sync is disabled.
-func NewApp(b backend.Backend, syncEngine *sync.Engine, dbPath string) *App {
+func NewApp(b backend.Backend, syncEngine *sync.Engine, dbPath string, syncInterval time.Duration) *App {
 	ti := textinput.New()
 	ti.CharLimit = 200
 
@@ -139,6 +140,7 @@ func NewApp(b backend.Backend, syncEngine *sync.Engine, dbPath string) *App {
 		notesInput:   ta,
 		depFilter:    df,
 		syncEngine:   syncEngine,
+		syncInterval: syncInterval,
 		dbPath:       dbPath,
 	}
 }
@@ -243,11 +245,17 @@ type errMsg struct{ error }
 // Status flash clear
 type clearStatusMsg struct{}
 
-// Sync messages
+// Sync messages. A pull carries whether the user asked for it: an automatic one
+// runs every syncInterval, so announcing it would flash the status bar forever
+// and a transient failure would pin an error banner over a working app.
 type (
 	syncStatusMsg   sync.SyncStatus
-	syncPullDoneMsg struct{}
-	syncPullErrMsg  struct{ error }
+	syncPullTickMsg struct{}
+	syncPullDoneMsg struct{ manual bool }
+	syncPullErrMsg  struct {
+		error
+		manual bool
+	}
 )
 
 const statusFlashDuration = 3 * time.Second
@@ -305,12 +313,12 @@ func wrapLine(s string, maxWidth int) []string {
 
 // --- Sync commands ---
 
-func syncPullCmd(e *sync.Engine) tea.Cmd {
+func syncPullCmd(e *sync.Engine, manual bool) tea.Cmd {
 	return func() tea.Msg {
 		if err := e.Pull(context.Background()); err != nil {
-			return syncPullErrMsg{err}
+			return syncPullErrMsg{error: err, manual: manual}
 		}
-		return syncPullDoneMsg{}
+		return syncPullDoneMsg{manual: manual}
 	}
 }
 
@@ -318,6 +326,21 @@ func syncStatusTickCmd(e *sync.Engine) tea.Cmd {
 	return tea.Tick(2*time.Second, func(_ time.Time) tea.Msg {
 		return syncStatusMsg(e.Status())
 	})
+}
+
+func syncPullTickCmd(d time.Duration) tea.Cmd {
+	return tea.Tick(d, func(_ time.Time) tea.Msg {
+		return syncPullTickMsg{}
+	})
+}
+
+// safeToAutoPull reports whether a background reconcile can run without pulling
+// the ground out from under the user. A pull rewrites items, memberships and
+// ordering wholesale, which would corrupt a grab in progress or refresh a
+// detail overlay into a snapshot of something else. Every other mode defers to
+// the next tick rather than skipping the pull outright.
+func (m *App) safeToAutoPull() bool {
+	return m.appMode == modeNormal
 }
 
 // --- Commands ---
@@ -881,8 +904,9 @@ func (m *App) Init() tea.Cmd {
 	if m.syncEngine != nil {
 		return tea.Batch(
 			fetchProjectsCmd(m.backend),
-			syncPullCmd(m.syncEngine),
+			syncPullCmd(m.syncEngine, false),
 			syncStatusTickCmd(m.syncEngine),
+			syncPullTickCmd(m.syncInterval),
 		)
 	}
 	return fetchProjectsCmd(m.backend)
@@ -1124,12 +1148,26 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.errorMsg = msg.Error()
 		return m, nil
 
+	case syncPullTickMsg:
+		next := syncPullTickCmd(m.syncInterval)
+		if m.syncEngine == nil || !m.safeToAutoPull() {
+			return m, next
+		}
+		return m, tea.Batch(syncPullCmd(m.syncEngine, false), next)
+
 	case syncPullDoneMsg:
-		flashCmd := m.flash("Synced with server")
-		return m, tea.Batch(fetchProjectsCmd(m.backend), flashCmd)
+		if !msg.manual {
+			return m, fetchProjectsCmd(m.backend)
+		}
+		return m, tea.Batch(fetchProjectsCmd(m.backend), m.flash("Synced with server"))
 
 	case syncPullErrMsg:
-		m.errorMsg = fmt.Sprintf("Sync: %v", msg.error)
+		// An automatic pull failing is not an error the user did anything to
+		// cause. The status bar already reads SYNC ERR off the engine status;
+		// hijacking the bar every interval would bury real messages.
+		if msg.manual {
+			m.errorMsg = fmt.Sprintf("Sync: %v", msg.error)
+		}
 		return m, nil
 
 	case syncStatusMsg:
@@ -1493,6 +1531,13 @@ func (m *App) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, undoCmd(m.backend)
 
 	// --- Phase 6: Advanced ---
+
+	case "R":
+		if m.syncEngine == nil {
+			flashCmd := m.flash("Sync is disabled — running local-only")
+			return m, flashCmd
+		}
+		return m, syncPullCmd(m.syncEngine, true)
 
 	case "?":
 		m.appMode = modeHelp
@@ -2767,6 +2812,7 @@ func (m *App) renderHelpOverlay() string {
   1              Filter: blocked only (toggle)
   2              Filter: all + archived (toggle)
   0              Filter: reset
+  R              Sync now (runs automatically too)
   q  Ctrl+C      Quit
   ?              Toggle this help`
 
