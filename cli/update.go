@@ -21,13 +21,23 @@ func Version() string {
 	return "dev"
 }
 
-func updateCmd() *cobra.Command {
-	return cobracmd.New(goselfupdate.Config{
+// UpdateConfig describes where todoui's releases come from.
+//
+// Exported because main wires the same config into both halves: the `update`
+// command that installs a release, and the daily check that mentions one. Two
+// copies would drift, and a drifted notify config points a user at a release
+// the update command will not install.
+func UpdateConfig() goselfupdate.Config {
+	return goselfupdate.Config{
 		Owner:   "datapointchris",
 		Repo:    "todoui",
 		Binary:  "todoui",
 		Version: Version(),
-	})
+	}
+}
+
+func updateCmd() *cobra.Command {
+	return cobracmd.New(UpdateConfig())
 }
 
 func versionCmd() *cobra.Command {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/datapointchris/goselfupdate/autoupdate"
 	"github.com/datapointchris/goselfupdate/cobracmd"
 	"github.com/spf13/cobra"
 
@@ -21,7 +23,8 @@ import (
 )
 
 func main() {
-	if err := rootCmd().Execute(); err != nil {
+	autoConfig := autoupdate.Config{Update: cli.UpdateConfig()}
+	if err := cobracmd.Execute(context.Background(), rootCmd(), autoConfig); err != nil {
 		if !errors.Is(err, cobracmd.ErrReported) {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		}
