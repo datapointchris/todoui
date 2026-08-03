@@ -45,7 +45,7 @@ ORDER BY created_at DESC;
 SELECT pi.*, m.position AS membership_position,
     (SELECT COUNT(*) FROM project_item_memberships m2 WHERE m2.item_id = pi.id) AS project_count
 FROM project_items pi
-JOIN project_item_memberships m ON pi.id = m.item_id
+INNER JOIN project_item_memberships m ON pi.id = m.item_id
 WHERE m.project_id = ? AND pi.archived = 0
 ORDER BY m.position, pi.created_at;
 
@@ -81,7 +81,7 @@ DELETE FROM project_item_memberships WHERE item_id = ? AND project_id = ?;
 -- name: GetItemProjects :many
 SELECT p.*
 FROM projects p
-JOIN project_item_memberships m ON p.id = m.project_id
+INNER JOIN project_item_memberships m ON p.id = m.project_id
 WHERE m.item_id = ?
 ORDER BY p.name;
 
@@ -112,7 +112,7 @@ DELETE FROM project_item_dependencies WHERE item_id = ? AND depends_on_id = ?;
 -- name: GetBlockers :many
 SELECT pi.*
 FROM project_items pi
-JOIN project_item_dependencies d ON pi.id = d.depends_on_id
+INNER JOIN project_item_dependencies d ON pi.id = d.depends_on_id
 WHERE d.item_id = ? AND pi.completed = 0;
 
 -- name: GetDependencyIDs :many
@@ -135,8 +135,8 @@ ORDER BY created_at DESC;
 -- name: ListBlockedItems :many
 SELECT DISTINCT pi.*
 FROM project_items pi
-JOIN project_item_dependencies d ON pi.id = d.item_id
-JOIN project_items blocker ON d.depends_on_id = blocker.id
+INNER JOIN project_item_dependencies d ON pi.id = d.item_id
+INNER JOIN project_items blocker ON d.depends_on_id = blocker.id
 WHERE blocker.completed = 0
   AND pi.completed = 0
   AND pi.archived = 0;
@@ -144,7 +144,7 @@ WHERE blocker.completed = 0
 -- name: ListArchivedItems :many
 SELECT pi.*, m.position AS membership_position
 FROM project_items pi
-JOIN project_item_memberships m ON pi.id = m.item_id
+INNER JOIN project_item_memberships m ON pi.id = m.item_id
 WHERE m.project_id = ? AND pi.archived = 1
 ORDER BY pi.updated_at DESC;
 

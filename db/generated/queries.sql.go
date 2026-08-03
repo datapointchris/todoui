@@ -276,7 +276,7 @@ func (q *Queries) GetAllDependencies(ctx context.Context) ([]ProjectItemDependen
 const getBlockers = `-- name: GetBlockers :many
 SELECT pi.id, pi.title, pi.notes, pi.repo, pi.completed, pi.archived, pi.created_at, pi.updated_at
 FROM project_items pi
-JOIN project_item_dependencies d ON pi.id = d.depends_on_id
+INNER JOIN project_item_dependencies d ON pi.id = d.depends_on_id
 WHERE d.item_id = ? AND pi.completed = 0
 `
 
@@ -423,7 +423,7 @@ func (q *Queries) GetItemMemberships(ctx context.Context, itemID string) ([]Proj
 const getItemProjects = `-- name: GetItemProjects :many
 SELECT p.id, p.name, p.description, p.position, p.created_at
 FROM projects p
-JOIN project_item_memberships m ON p.id = m.project_id
+INNER JOIN project_item_memberships m ON p.id = m.project_id
 WHERE m.item_id = ?
 ORDER BY p.name
 `
@@ -837,7 +837,7 @@ func (q *Queries) ListAllTasks(ctx context.Context) ([]ProjectItemTask, error) {
 const listArchivedItems = `-- name: ListArchivedItems :many
 SELECT pi.id, pi.title, pi.notes, pi.repo, pi.completed, pi.archived, pi.created_at, pi.updated_at, m.position AS membership_position
 FROM project_items pi
-JOIN project_item_memberships m ON pi.id = m.item_id
+INNER JOIN project_item_memberships m ON pi.id = m.item_id
 WHERE m.project_id = ? AND pi.archived = 1
 ORDER BY pi.updated_at DESC
 `
@@ -890,8 +890,8 @@ func (q *Queries) ListArchivedItems(ctx context.Context, projectID string) ([]Li
 const listBlockedItems = `-- name: ListBlockedItems :many
 SELECT DISTINCT pi.id, pi.title, pi.notes, pi.repo, pi.completed, pi.archived, pi.created_at, pi.updated_at
 FROM project_items pi
-JOIN project_item_dependencies d ON pi.id = d.item_id
-JOIN project_items blocker ON d.depends_on_id = blocker.id
+INNER JOIN project_item_dependencies d ON pi.id = d.item_id
+INNER JOIN project_items blocker ON d.depends_on_id = blocker.id
 WHERE blocker.completed = 0
   AND pi.completed = 0
   AND pi.archived = 0
@@ -933,7 +933,7 @@ const listItemsByProject = `-- name: ListItemsByProject :many
 SELECT pi.id, pi.title, pi.notes, pi.repo, pi.completed, pi.archived, pi.created_at, pi.updated_at, m.position AS membership_position,
     (SELECT COUNT(*) FROM project_item_memberships m2 WHERE m2.item_id = pi.id) AS project_count
 FROM project_items pi
-JOIN project_item_memberships m ON pi.id = m.item_id
+INNER JOIN project_item_memberships m ON pi.id = m.item_id
 WHERE m.project_id = ? AND pi.archived = 0
 ORDER BY m.position, pi.created_at
 `
