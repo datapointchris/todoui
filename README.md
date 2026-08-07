@@ -11,7 +11,9 @@ Personal project organization tool. Local-first SQLite with optional background 
 - **Dependencies** — items can block other items, with cycle detection
 - **Sub-tasks** — checklist tasks on each item
 - **Notes** — multiline notes on items
-- **Repo links** — items can name the repo they are work on, by `~/dev/repos.json` name
+- **Repo links** — items can name the repo they are work on, and `--repo` filters
+  every read by it. Validated against an optional registry at
+  `$XDG_DATA_HOME/todoui/repos.json`; without one, any name is accepted
 - **Project descriptions** — long-form notes/decisions per project, viewable and editable in project detail
 - **Undo** — revert the last mutation
 - **Search** — find items across all projects

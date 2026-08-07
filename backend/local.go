@@ -218,6 +218,24 @@ func (b *LocalBackend) ListAllItems() ([]model.ProjectItem, error) {
 	return toModelProjectItems(items), nil
 }
 
+// nullRepo renders the repo filter for sqlc. A nil pointer becomes an invalid
+// NullString, which the `repo IS ?` queries match against the untagged rows —
+// the deliberate "not repo work" case, not an absence of filtering.
+func nullRepo(repo *string) sql.NullString {
+	if repo == nil {
+		return sql.NullString{}
+	}
+	return sql.NullString{String: *repo, Valid: true}
+}
+
+func (b *LocalBackend) ListItemsByRepo(repo *string) ([]model.ProjectItem, error) {
+	items, err := b.q.ListItemsByRepo(b.ctx(), nullRepo(repo))
+	if err != nil {
+		return nil, fmt.Errorf("listing items by repo: %w", err)
+	}
+	return toModelProjectItems(items), nil
+}
+
 func (b *LocalBackend) ListAllItemsIncludingArchived() ([]model.ProjectItem, error) {
 	items, err := b.q.ListAllItemsRaw(b.ctx())
 	if err != nil {
@@ -679,6 +697,22 @@ func (b *LocalBackend) Search(query string) ([]model.ProjectItem, error) {
 	})
 	if err != nil {
 		return nil, fmt.Errorf("searching items: %w", err)
+	}
+	return toModelProjectItems(items), nil
+}
+
+func (b *LocalBackend) SearchByRepo(query string, repo *string) ([]model.ProjectItem, error) {
+	if repo == nil {
+		return b.Search(query)
+	}
+	q := sql.NullString{String: query, Valid: true}
+	items, err := b.q.SearchItemsByRepo(b.ctx(), generated.SearchItemsByRepoParams{
+		Repo:    nullRepo(repo),
+		Column2: q,
+		Column3: q,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("searching items by repo: %w", err)
 	}
 	return toModelProjectItems(items), nil
 }

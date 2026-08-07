@@ -9,6 +9,7 @@ import (
 
 	"github.com/datapointchris/todoui/backend"
 	"github.com/datapointchris/todoui/model"
+	"github.com/datapointchris/todoui/repos"
 )
 
 // commands takes a pointer to the Backend interface so that commands can be
@@ -76,6 +77,14 @@ func (c *commands) addCmd() *cobra.Command {
 			if len(projects) == 0 {
 				return fmt.Errorf("-p/--project is required")
 			}
+			// Flags are checked before the lookups: validating what was typed is
+			// free, and reporting the project miss first would hide a second
+			// error the user has to come back for.
+			if cmd.Flags().Changed("repo") {
+				if err := validateRepo(repo); err != nil {
+					return err
+				}
+			}
 			projectIDs, err := resolveProjects(c.backend(), projects)
 			if err != nil {
 				return err
@@ -108,7 +117,7 @@ func (c *commands) addCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringArrayVarP(&projects, "project", "p", nil, "project name (repeatable)")
-	cmd.Flags().StringVarP(&repo, "repo", "r", "", "repo this item is work on, by ~/dev/repos.json name")
+	cmd.Flags().StringVarP(&repo, "repo", "r", "", "repo this item is work on, by registry name")
 	cmd.Flags().StringVarP(&notes, "notes", "n", "", "markdown notes for the item")
 	return cmd
 }
@@ -145,20 +154,30 @@ func (c *commands) completionCmd(use, short string, completed bool, verb string)
 func (c *commands) listCmd() *cobra.Command {
 	var (
 		project  string
+		repo     string
 		archived bool
 		asJSON   bool
 	)
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List active items",
-		Args:  cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error {
+		Long: "With no flags, every active item grouped by project. --repo narrows to one\n" +
+			"repo's work across every project holding it; --repo \"\" gives the items that\n" +
+			"are not repo work at all.",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			b := c.backend()
 			if archived {
 				if project == "" {
 					return fmt.Errorf("--archived needs -p/--project")
 				}
 				return listArchived(b, project, asJSON)
+			}
+			if cmd.Flags().Changed("repo") {
+				if project != "" {
+					return fmt.Errorf("--repo and --project are different questions — pass one")
+				}
+				return listByRepo(b, repoFilter(cmd, repo), asJSON)
 			}
 			if project != "" {
 				return listByProject(b, project, asJSON)
@@ -167,9 +186,31 @@ func (c *commands) listCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVarP(&project, "project", "p", "", "filter by project name")
+	cmd.Flags().StringVar(&repo, "repo", "", "filter by repo name (empty string for untagged work)")
 	cmd.Flags().BoolVar(&archived, "archived", false, "list a project's archived items instead")
 	addJSONFlag(cmd, &asJSON)
 	return cmd
+}
+
+// validateRepo rejects a --repo the registry does not know. Loaded per call
+// rather than once at startup: the registry is a few dozen names read from disk,
+// and every command that does not touch --repo should not pay for it.
+func validateRepo(repo string) error {
+	registry, err := repos.Load(repos.DefaultPath())
+	if err != nil {
+		return err
+	}
+	return registry.Validate(repo)
+}
+
+// repoFilter renders --repo in the backend's convention, where nil means the
+// untagged items rather than "no filter". Callers gate on Changed() first, so an
+// absent flag never reaches here and the only nil it produces is `--repo ""`.
+func repoFilter(cmd *cobra.Command, repo string) *string {
+	if !cmd.Flags().Changed("repo") || repo == "" {
+		return nil
+	}
+	return &repo
 }
 
 func (c *commands) archiveCmd() *cobra.Command {
@@ -311,6 +352,9 @@ func (c *commands) editCmd() *cobra.Command {
 				input.Notes = &notes
 			}
 			if f.Changed("repo") {
+				if err := validateRepo(repo); err != nil {
+					return err
+				}
 				input.Repo = &repo
 			}
 			if input == (model.UpdateProjectItem{}) {
@@ -331,18 +375,27 @@ func (c *commands) editCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&title, "title", "", "new item title")
 	cmd.Flags().StringVar(&notes, "notes", "", "new markdown notes")
-	cmd.Flags().StringVar(&repo, "repo", "", "repo this item is work on, by ~/dev/repos.json name (empty string unlinks)")
+	cmd.Flags().StringVar(&repo, "repo", "", "repo this item is work on, by registry name (empty string unlinks)")
 	return cmd
 }
 
 func (c *commands) searchCmd() *cobra.Command {
-	var asJSON bool
+	var (
+		asJSON bool
+		repo   string
+	)
 	cmd := &cobra.Command{
 		Use:   "search <query>",
 		Short: "Search items by title or notes",
 		Args:  cobra.ExactArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
-			items, err := c.backend().Search(args[0])
+		RunE: func(cmd *cobra.Command, args []string) error {
+			var items []model.ProjectItem
+			var err error
+			if cmd.Flags().Changed("repo") {
+				items, err = c.backend().SearchByRepo(args[0], repoFilter(cmd, repo))
+			} else {
+				items, err = c.backend().Search(args[0])
+			}
 			if err != nil {
 				return err
 			}
@@ -355,6 +408,7 @@ func (c *commands) searchCmd() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().StringVar(&repo, "repo", "", "only items tagged with this repo (empty string for untagged work)")
 	addJSONFlag(cmd, &asJSON)
 	return cmd
 }
@@ -539,6 +593,28 @@ func listAll(b backend.Backend, asJSON bool) error {
 			printItem(item.ProjectItem)
 		}
 		fmt.Println()
+	}
+	return nil
+}
+
+func listByRepo(b backend.Backend, repo *string, asJSON bool) error {
+	items, err := b.ListItemsByRepo(repo)
+	if err != nil {
+		return err
+	}
+	if asJSON {
+		return printJSON(items)
+	}
+	if len(items) == 0 {
+		if repo == nil {
+			fmt.Println("No untagged items.")
+		} else {
+			fmt.Printf("No items for repo %s.\n", *repo)
+		}
+		return nil
+	}
+	for _, item := range items {
+		printItem(item)
 	}
 	return nil
 }

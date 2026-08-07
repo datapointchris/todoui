@@ -36,6 +36,10 @@ func (s *SyncBackend) ListAllItems() ([]model.ProjectItem, error) {
 	return s.local.ListAllItems()
 }
 
+func (s *SyncBackend) ListItemsByRepo(repo *string) ([]model.ProjectItem, error) {
+	return s.local.ListItemsByRepo(repo)
+}
+
 func (s *SyncBackend) ListAllItemsIncludingArchived() ([]model.ProjectItem, error) {
 	return s.local.ListAllItemsIncludingArchived()
 }
@@ -62,6 +66,10 @@ func (s *SyncBackend) ListTasks(itemID string) ([]model.ProjectItemTask, error) 
 
 func (s *SyncBackend) Search(query string) ([]model.ProjectItem, error) {
 	return s.local.Search(query)
+}
+
+func (s *SyncBackend) SearchByRepo(query string, repo *string) ([]model.ProjectItem, error) {
+	return s.local.SearchByRepo(query, repo)
 }
 
 func (s *SyncBackend) ListBlocked() ([]model.ProjectItem, error) {

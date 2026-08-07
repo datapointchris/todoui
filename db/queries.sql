@@ -41,6 +41,14 @@ SELECT * FROM project_items
 WHERE archived = 0
 ORDER BY created_at DESC;
 
+-- `IS` rather than `=` so one query answers both halves of the repo axis: a
+-- bound value matches that repo, and a bound NULL matches the untagged items,
+-- which `= NULL` would silently return nothing for.
+-- name: ListItemsByRepo :many
+SELECT * FROM project_items
+WHERE archived = 0 AND repo IS ?
+ORDER BY created_at DESC;
+
 -- name: ListItemsByProject :many
 SELECT pi.*, m.position AS membership_position,
     (SELECT COUNT(*) FROM project_item_memberships m2 WHERE m2.item_id = pi.id) AS project_count
@@ -138,6 +146,13 @@ SELECT * FROM project_item_dependencies WHERE item_id = ? OR depends_on_id = ?;
 -- name: SearchItems :many
 SELECT * FROM project_items
 WHERE (title LIKE '%' || ? || '%' OR notes LIKE '%' || ? || '%')
+  AND archived = 0
+ORDER BY created_at DESC;
+
+-- name: SearchItemsByRepo :many
+SELECT * FROM project_items
+WHERE repo IS ?
+  AND (title LIKE '%' || ? || '%' OR notes LIKE '%' || ? || '%')
   AND archived = 0
 ORDER BY created_at DESC;
 

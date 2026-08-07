@@ -997,6 +997,48 @@ func (q *Queries) ListItemsByProject(ctx context.Context, projectID string) ([]L
 	return items, nil
 }
 
+const listItemsByRepo = `-- name: ListItemsByRepo :many
+SELECT id, number, title, notes, repo, completed, archived, created_at, updated_at FROM project_items
+WHERE archived = 0 AND repo IS ?
+ORDER BY created_at DESC
+`
+
+// `IS` rather than `=` so one query answers both halves of the repo axis: a
+// bound value matches that repo, and a bound NULL matches the untagged items,
+// which `= NULL` would silently return nothing for.
+func (q *Queries) ListItemsByRepo(ctx context.Context, repo sql.NullString) ([]ProjectItem, error) {
+	rows, err := q.db.QueryContext(ctx, listItemsByRepo, repo)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ProjectItem
+	for rows.Next() {
+		var i ProjectItem
+		if err := rows.Scan(
+			&i.ID,
+			&i.Number,
+			&i.Title,
+			&i.Notes,
+			&i.Repo,
+			&i.Completed,
+			&i.Archived,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listPendingSync = `-- name: ListPendingSync :many
 SELECT id, operation, entity_type, entity_id, payload, created_at, attempts, last_error FROM pending_sync ORDER BY id ASC
 `
@@ -1229,6 +1271,53 @@ type SearchItemsParams struct {
 
 func (q *Queries) SearchItems(ctx context.Context, arg SearchItemsParams) ([]ProjectItem, error) {
 	rows, err := q.db.QueryContext(ctx, searchItems, arg.Column1, arg.Column2)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ProjectItem
+	for rows.Next() {
+		var i ProjectItem
+		if err := rows.Scan(
+			&i.ID,
+			&i.Number,
+			&i.Title,
+			&i.Notes,
+			&i.Repo,
+			&i.Completed,
+			&i.Archived,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const searchItemsByRepo = `-- name: SearchItemsByRepo :many
+SELECT id, number, title, notes, repo, completed, archived, created_at, updated_at FROM project_items
+WHERE repo IS ?
+  AND (title LIKE '%' || ? || '%' OR notes LIKE '%' || ? || '%')
+  AND archived = 0
+ORDER BY created_at DESC
+`
+
+type SearchItemsByRepoParams struct {
+	Repo    sql.NullString
+	Column2 sql.NullString
+	Column3 sql.NullString
+}
+
+func (q *Queries) SearchItemsByRepo(ctx context.Context, arg SearchItemsByRepoParams) ([]ProjectItem, error) {
+	rows, err := q.db.QueryContext(ctx, searchItemsByRepo, arg.Repo, arg.Column2, arg.Column3)
 	if err != nil {
 		return nil, err
 	}

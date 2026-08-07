@@ -15,6 +15,10 @@ type Backend interface {
 
 	// Items
 	ListAllItems() ([]model.ProjectItem, error)
+	// ListItemsByRepo narrows to one repo's work. A nil repo is the untagged
+	// items — the ones that are not repo work at all — which is a different
+	// question from "everything" and is why this takes a pointer.
+	ListItemsByRepo(repo *string) ([]model.ProjectItem, error)
 	// ListAllItemsIncludingArchived is what resolves a short id: an archived
 	// item still has to be addressable, or nothing can unarchive it.
 	ListAllItemsIncludingArchived() ([]model.ProjectItem, error)
@@ -44,6 +48,7 @@ type Backend interface {
 
 	// Search
 	Search(query string) ([]model.ProjectItem, error)
+	SearchByRepo(query string, repo *string) ([]model.ProjectItem, error)
 
 	// Filters
 	ListBlocked() ([]model.ProjectItem, error)

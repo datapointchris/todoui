@@ -101,6 +101,13 @@ func userConfigDir() string {
 	return filepath.Join(home, ".config")
 }
 
+// UserDataDir returns the XDG data directory ($XDG_DATA_HOME or ~/.local/share).
+// Exported so every package resolving a data path uses one resolver rather than
+// its own copy of the env-var-then-fallback shape.
+func UserDataDir() string {
+	return userDataDir()
+}
+
 // userDataDir returns the XDG data directory ($XDG_DATA_HOME or ~/.local/share).
 func userDataDir() string {
 	if dir := os.Getenv("XDG_DATA_HOME"); dir != "" {
