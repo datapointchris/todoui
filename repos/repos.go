@@ -92,6 +92,29 @@ func (r *Registry) Validate(name string) error {
 	return fmt.Errorf("unknown repo %q — see %s for the registered names", name, r.path)
 }
 
+// Knows reports whether name is a registered repo.
+//
+// The inverse question to Validate, and a separate method because the two want
+// opposite answers: Validate wants a repo tag to BE a registry name, and this
+// exists to refuse a PROJECT name that is one. Case- and space-insensitive,
+// because "Todoui " names the same thing "todoui" does and a ban a capital
+// letter walks around is decoration.
+func (r *Registry) Knows(name string) bool {
+	if !r.Available() {
+		return false
+	}
+	wanted := strings.ToLower(strings.TrimSpace(name))
+	if wanted == "" {
+		return false
+	}
+	for known := range r.names {
+		if strings.ToLower(known) == wanted {
+			return true
+		}
+	}
+	return false
+}
+
 // suggest returns registered names sharing a prefix or containing the input,
 // which covers the realistic typo: a near-miss on a name you already know.
 func (r *Registry) suggest(name string) []string {

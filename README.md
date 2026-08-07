@@ -95,6 +95,14 @@ todoui projects <id> --add homelab    # add item to project
 todoui projects <id> --remove work    # remove from project
 ```
 
+A project name must be bounded work — something that ends — so `projects create`
+refuses a name the repo registry knows, and so does a rename. `todoui` is
+banned; `todoui sync improvements` and `Extract xx from dotfiles` are not. A
+repo does not end, so a project named after one becomes the bucket every later
+papercut falls into; the repo association is the item's `--repo` tag instead,
+which crosses project boundaries and outlives any single project. Without a
+registry nothing is banned.
+
 A project is a finite effort, so completing it is what takes it out of the list
 — there is no separate archive step the way items have one. `drop` is the other
 way to close one and requires a reason, because "deferred" invites the same idea

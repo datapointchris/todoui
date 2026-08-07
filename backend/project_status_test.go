@@ -2,8 +2,12 @@ package backend
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/datapointchris/todoui/db"
 	"github.com/datapointchris/todoui/model"
 )
 
@@ -238,3 +242,71 @@ func TestListPutsActiveProjectsAheadOfClosedOnes(t *testing.T) {
 }
 
 func ptr(s string) *string { return &s }
+
+// --- The repo-named-project ban ---
+
+func backendRefusingRepos(t *testing.T, names ...string) *LocalBackend {
+	t.Helper()
+	entries := make([]string, len(names))
+	for i, name := range names {
+		entries[i] = `{"name":"` + name + `"}`
+	}
+	path := filepath.Join(t.TempDir(), "repos.json")
+	if err := os.WriteFile(path, []byte(`{"repos":[`+strings.Join(entries, ",")+`]}`), 0o600); err != nil {
+		t.Fatalf("writing registry: %v", err)
+	}
+	database, err := db.Open(":memory:")
+	if err != nil {
+		t.Fatalf("opening test db: %v", err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	return NewLocalBackend(database, RefusingRepoNames(path))
+}
+
+func TestAProjectCannotBeNamedAfterARepo(t *testing.T) {
+	b := backendRefusingRepos(t, "todoui", "dotfiles")
+
+	for _, name := range []string{"todoui", "Dotfiles"} {
+		_, err := b.CreateProject(model.CreateProject{Name: name})
+		if !errors.Is(err, model.ErrRepoNamedProject) {
+			t.Errorf("creating %q: got %v, want ErrRepoNamedProject", name, err)
+		}
+	}
+}
+
+func TestBoundedWorkNamingARepoIsAllowed(t *testing.T) {
+	// The test is whether the thing ENDS, not whether the repo name appears.
+	b := backendRefusingRepos(t, "todoui", "dotfiles")
+
+	for _, name := range []string{"todoui sync improvements", "Extract xx from dotfiles"} {
+		if _, err := b.CreateProject(model.CreateProject{Name: name}); err != nil {
+			t.Errorf("creating %q: %v", name, err)
+		}
+	}
+}
+
+// A ban one `edit` walks around is decoration.
+func TestAProjectCannotBeRenamedToARepo(t *testing.T) {
+	b := backendRefusingRepos(t, "todoui")
+	p, err := b.CreateProject(model.CreateProject{Name: "todoui sync improvements"})
+	if err != nil {
+		t.Fatalf("creating project: %v", err)
+	}
+
+	name := "todoui"
+	_, err = b.UpdateProject(p.ID, model.UpdateProject{Name: &name})
+
+	if !errors.Is(err, model.ErrRepoNamedProject) {
+		t.Errorf("got %v, want ErrRepoNamedProject", err)
+	}
+}
+
+// Same policy --repo validation follows: refusing to file work on a machine
+// without a registry is worse than the wrong name.
+func TestWithoutARegistryNothingIsBanned(t *testing.T) {
+	b := newTestBackend(t)
+
+	if _, err := b.CreateProject(model.CreateProject{Name: "todoui"}); err != nil {
+		t.Errorf("a backend with no registry must ban nothing: %v", err)
+	}
+}

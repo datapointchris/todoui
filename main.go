@@ -18,6 +18,7 @@ import (
 	"github.com/datapointchris/todoui/cli"
 	"github.com/datapointchris/todoui/config"
 	"github.com/datapointchris/todoui/db"
+	"github.com/datapointchris/todoui/repos"
 	"github.com/datapointchris/todoui/sync"
 	"github.com/datapointchris/todoui/tui"
 )
@@ -104,13 +105,14 @@ func rootCmd() *cobra.Command {
 			}
 			database = d
 
+			banRepoNames := backend.RefusingRepoNames(repos.DefaultPath())
 			if cfg.Sync.Enabled {
-				local := backend.NewLocalBackend(d)
+				local := backend.NewLocalBackend(d, banRepoNames)
 				syncEngine = sync.New(d, cfg.Sync.APIURL, cfg.Sync.APIKey)
 				syncEngine.Start()
 				b = sync.NewSyncBackend(local, syncEngine)
 			} else {
-				b = backend.NewLocalBackend(d, backend.AssigningItemNumbers())
+				b = backend.NewLocalBackend(d, backend.AssigningItemNumbers(), banRepoNames)
 			}
 
 			refreshForCLI(cmd, syncEngine, noSync, cfg.Sync.Interval)

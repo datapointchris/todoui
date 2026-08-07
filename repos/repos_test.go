@@ -97,3 +97,34 @@ func TestUnknownNameNamesTheRegistryItRead(t *testing.T) {
 		t.Errorf("the message must name the registry actually read, got %v", err)
 	}
 }
+
+func TestKnowsIdentifiesARepoName(t *testing.T) {
+	path := writeRegistry(t, `{"repos":[{"name":"todoui"},{"name":"dotfiles"}]}`)
+	registry, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	for _, name := range []string{"todoui", "Todoui", "  dotfiles  ", "DOTFILES"} {
+		if !registry.Knows(name) {
+			t.Errorf("Knows(%q) = false; a ban a capital letter walks around is decoration", name)
+		}
+	}
+	for _, name := range []string{"", "todoui sync improvements", "Extract xx from dotfiles"} {
+		if registry.Knows(name) {
+			t.Errorf("Knows(%q) = true; bounded work named after a repo is still bounded work", name)
+		}
+	}
+}
+
+func TestKnowsIsFalseWithoutARegistry(t *testing.T) {
+	// Same policy as Validate: no registry means no opinion, because refusing
+	// to file work on a machine without one is worse than the wrong name.
+	registry, err := Load(filepath.Join(t.TempDir(), "absent.json"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if registry.Knows("todoui") {
+		t.Error("a missing registry must not ban anything")
+	}
+}

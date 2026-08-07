@@ -83,6 +83,39 @@ resolving after the number arrives. Do not switch the fallback to prefix
 matching — UUIDv7 front-loads its millisecond timestamp, so prefixes collide
 for everything created in the same window.
 
+## A project name is bounded work, never a repo
+
+`projects create` refuses a name the repo registry knows, and so does a rename.
+The test is whether the thing ENDS, not whether the name reads like a verb
+phrase:
+
+    "todoui sync improvements"    OK — the sync improvements end
+    "Extract xx from dotfiles"    OK
+    "Migrate neovim to vim.pack"  OK
+    "todoui"                      banned — names a thing that exists
+
+The failure it prevents: a repo gets a project while it is being BUILT, which is
+finite and does complete. The repo then keeps existing, the next papercut has
+nowhere else to go, and the finished effort silently becomes the eternal bucket.
+The tell was dotfiles' own description, which had grown a hand-written BOUNDARY
+paragraph explaining which work belonged to it — a modelling gap patched with
+prose.
+
+The repo association is the item's `--repo` tag, which already crosses project
+boundaries and outlives any single project. "What is the dotfiles work" is a
+`--repo dotfiles` query spanning live projects, finished ones, and whatever is
+filed elsewhere.
+
+A one-item project is the floor, not the target: fifteen papercuts are four or
+five small thematic projects, not fifteen projects. If the ban produced one
+project per item the list would read like items, which is the complaint that
+started this.
+
+A missing registry bans nothing, the same policy `--repo` validation follows.
+
+Enforcement is on the backend (`RefusingRepoNames`), not in the CLI, because
+the TUI creates projects too and a rule only one surface enforces is decoration.
+
 ## A project has a status, and it is not an `archived` flag
 
 `projects.status` is `active`/`done`/`dropped`. For an item, complete and

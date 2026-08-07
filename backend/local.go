@@ -12,6 +12,7 @@ import (
 	"github.com/datapointchris/todoui/db/generated"
 	"github.com/datapointchris/todoui/graph"
 	"github.com/datapointchris/todoui/model"
+	"github.com/datapointchris/todoui/repos"
 )
 
 // LocalBackend provides direct SQLite access for local mode.
@@ -21,6 +22,9 @@ type LocalBackend struct {
 	// assignsItemNumbers is set when nothing upstream will hand one out, which
 	// is exactly the sync-disabled case. See AssigningItemNumbers.
 	assignsItemNumbers bool
+	// repoRegistryPath enables the repo-named-project ban. Empty means no
+	// registry and no ban. See RefusingRepoNames.
+	repoRegistryPath string
 }
 
 // LocalOption configures a LocalBackend at construction.
@@ -35,6 +39,22 @@ type LocalOption func(*LocalBackend)
 // would change under a user who had already written it down.
 func AssigningItemNumbers() LocalOption {
 	return func(b *LocalBackend) { b.assignsItemNumbers = true }
+}
+
+// RefusingRepoNames bans naming a project after a repo, reading the registry at
+// path on the create and rename paths only.
+//
+// A project name must be bounded work — something that ends — and a repo does
+// not end, so a project named after one silently becomes the eternal bucket the
+// next papercut falls into. The repo association is `--repo`, which already
+// crosses project boundaries and outlives any single project.
+//
+// It lives on the backend rather than in the CLI because the TUI creates
+// projects too, and a rule only the CLI enforces is decoration. Loaded lazily,
+// matching `validateRepo`: a command that never names a project should not pay
+// to read the registry.
+func RefusingRepoNames(path string) LocalOption {
+	return func(b *LocalBackend) { b.repoRegistryPath = path }
 }
 
 // NewLocalBackend creates a backend that operates directly on a local SQLite database.
@@ -58,6 +78,23 @@ func newID() string {
 }
 
 // --- Projects ---
+
+// refuseRepoName rejects a project name the repo registry knows. A missing
+// registry bans nothing, the same policy `--repo` validation follows: refusing
+// to file work on a machine without a registry is worse than the wrong name.
+func (b *LocalBackend) refuseRepoName(name string) error {
+	if b.repoRegistryPath == "" {
+		return nil
+	}
+	registry, err := repos.Load(b.repoRegistryPath)
+	if err != nil {
+		return err
+	}
+	if registry.Knows(name) {
+		return fmt.Errorf("%w: %q names a repo, which never ends — name the bounded work instead, and tag it with --repo %s", model.ErrRepoNamedProject, name, name)
+	}
+	return nil
+}
 
 func (b *LocalBackend) ListProjects() ([]model.ProjectWithItemCount, error) {
 	return b.ListProjectsByStatus(model.StatusActive)
@@ -92,6 +129,9 @@ func (b *LocalBackend) GetProject(id string) (*model.ProjectWithItemCount, error
 
 func (b *LocalBackend) CreateProject(input model.CreateProject) (*model.Project, error) {
 	ctx := b.ctx()
+	if err := b.refuseRepoName(input.Name); err != nil {
+		return nil, err
+	}
 	tx, err := b.db.Begin()
 	if err != nil {
 		return nil, fmt.Errorf("beginning create project transaction: %w", err)
@@ -138,6 +178,10 @@ func (b *LocalBackend) UpdateProject(id string, input model.UpdateProject) (*mod
 		ID:          id,
 	}
 	if input.Name != nil {
+		// Checked on rename too: a ban one `edit` walks around is decoration.
+		if err := b.refuseRepoName(*input.Name); err != nil {
+			return nil, err
+		}
 		params.Name = *input.Name
 	}
 	if input.Description != nil {
