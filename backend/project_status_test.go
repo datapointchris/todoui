@@ -1,0 +1,240 @@
+package backend
+
+import (
+	"errors"
+	"testing"
+
+	"github.com/datapointchris/todoui/model"
+)
+
+func mustSetStatus(t *testing.T, b *LocalBackend, id, status string, reason *string) *model.Project {
+	t.Helper()
+	p, err := b.SetProjectStatus(id, status, reason)
+	if err != nil {
+		t.Fatalf("setting project status to %s: %v", status, err)
+	}
+	return p
+}
+
+func projectNames(projects []model.ProjectWithItemCount) []string {
+	names := make([]string, len(projects))
+	for i, p := range projects {
+		names[i] = p.Name
+	}
+	return names
+}
+
+func TestNewProjectIsActive(t *testing.T) {
+	b := newTestBackend(t)
+	p := mustCreateProject(t, b, "live")
+
+	if p.Status != model.StatusActive {
+		t.Errorf("status = %q, want active", p.Status)
+	}
+	if p.ClosedAt != nil {
+		t.Errorf("closed_at = %v, want nil — the project has not been closed", p.ClosedAt)
+	}
+}
+
+func TestCompletingHidesTheProject(t *testing.T) {
+	b := newTestBackend(t)
+	p := mustCreateProject(t, b, "finite effort")
+
+	mustSetStatus(t, b, p.ID, model.StatusDone, nil)
+
+	active, err := b.ListProjects()
+	if err != nil {
+		t.Fatalf("listing projects: %v", err)
+	}
+	if len(active) != 0 {
+		t.Errorf("completed project still in the default list: %v", projectNames(active))
+	}
+
+	all, err := b.ListProjectsByStatus(model.StatusAll)
+	if err != nil {
+		t.Fatalf("listing all projects: %v", err)
+	}
+	if len(all) != 1 || all[0].Status != model.StatusDone {
+		t.Errorf("--status all must still show it, got %v", all)
+	}
+}
+
+func TestCompletingStampsTheClosingDate(t *testing.T) {
+	b := newTestBackend(t)
+	p := mustCreateProject(t, b, "finite effort")
+
+	done := mustSetStatus(t, b, p.ID, model.StatusDone, nil)
+
+	if done.ClosedAt == nil {
+		t.Error("closed_at must be stamped: created_at orders by when work started, not when it ended")
+	}
+}
+
+func TestDroppingWithoutAReasonIsRefused(t *testing.T) {
+	b := newTestBackend(t)
+	p := mustCreateProject(t, b, "abandoned")
+
+	for _, reason := range []*string{nil, ptr(""), ptr("   ")} {
+		if _, err := b.SetProjectStatus(p.ID, model.StatusDropped, reason); !errors.Is(err, model.ErrDropReasonRequired) {
+			t.Errorf("reason %v: got %v, want ErrDropReasonRequired", reason, err)
+		}
+	}
+
+	current, err := b.GetProject(p.ID)
+	if err != nil {
+		t.Fatalf("getting project: %v", err)
+	}
+	if current.Status != model.StatusActive {
+		t.Errorf("a refused drop must leave the project alone, got %q", current.Status)
+	}
+}
+
+func TestDroppingStoresTheReason(t *testing.T) {
+	b := newTestBackend(t)
+	p := mustCreateProject(t, b, "abandoned")
+
+	dropped := mustSetStatus(t, b, p.ID, model.StatusDropped, ptr("Go covers it"))
+
+	if dropped.Status != model.StatusDropped {
+		t.Errorf("status = %q, want dropped", dropped.Status)
+	}
+	if dropped.StatusReason == nil || *dropped.StatusReason != "Go covers it" {
+		t.Errorf("status_reason = %v, want the reason it was dropped", dropped.StatusReason)
+	}
+	if dropped.ClosedAt == nil {
+		t.Error("closed_at must be stamped on a drop as much as on a completion")
+	}
+}
+
+func TestReopeningClearsTheClosure(t *testing.T) {
+	b := newTestBackend(t)
+	p := mustCreateProject(t, b, "revived")
+	mustSetStatus(t, b, p.ID, model.StatusDropped, ptr("Not worth it"))
+
+	reopened := mustSetStatus(t, b, p.ID, model.StatusActive, nil)
+
+	if reopened.Status != model.StatusActive {
+		t.Errorf("status = %q, want active", reopened.Status)
+	}
+	if reopened.StatusReason != nil {
+		t.Errorf("a live project carries no reason for having been closed, got %q", *reopened.StatusReason)
+	}
+	if reopened.ClosedAt != nil {
+		t.Errorf("closed_at = %v, want nil", reopened.ClosedAt)
+	}
+}
+
+func TestEditingTheReasonKeepsTheOriginalClosingDate(t *testing.T) {
+	b := newTestBackend(t)
+	p := mustCreateProject(t, b, "abandoned")
+	first := mustSetStatus(t, b, p.ID, model.StatusDropped, ptr("first take"))
+
+	second := mustSetStatus(t, b, p.ID, model.StatusDropped, ptr("better wording"))
+
+	if second.ClosedAt == nil || !second.ClosedAt.Equal(*first.ClosedAt) {
+		t.Errorf("closed_at = %v, want the original %v — rewording is not a new closing decision",
+			second.ClosedAt, first.ClosedAt)
+	}
+}
+
+func TestClosingAProjectLeavesItsItemsAlone(t *testing.T) {
+	b := newTestBackend(t)
+	p := mustCreateProject(t, b, "half finished")
+	open := mustCreateItem(t, b, model.CreateProjectItem{Title: "never started", ProjectIDs: []string{p.ID}})
+	shipped := mustCreateItem(t, b, model.CreateProjectItem{Title: "shipped", ProjectIDs: []string{p.ID}})
+	completed := true
+	if _, err := b.UpdateItem(shipped.ID, model.UpdateProjectItem{Completed: &completed}); err != nil {
+		t.Fatalf("completing item: %v", err)
+	}
+
+	mustSetStatus(t, b, p.ID, model.StatusDropped, ptr("Ran out of road"))
+
+	items, err := b.ListItemsByProject(p.ID)
+	if err != nil {
+		t.Fatalf("listing items: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("got %d items, want both still there", len(items))
+	}
+	for _, item := range items {
+		if item.Archived {
+			t.Errorf("item %q was archived by closing the project — that rewrites what happened", item.Title)
+		}
+		if item.ID == open.ID && item.Completed {
+			t.Error("an item still open when the project closed WAS still open")
+		}
+	}
+}
+
+func TestAFinishedProjectGivesItsNameBack(t *testing.T) {
+	b := newTestBackend(t)
+	first := mustCreateProject(t, b, "clisteno")
+	mustSetStatus(t, b, first.ID, model.StatusDone, nil)
+
+	second, err := b.CreateProject(model.CreateProject{Name: "clisteno"})
+	if err != nil {
+		t.Fatalf("a closed project must stop owning its name: %v", err)
+	}
+	if second.ID == first.ID {
+		t.Error("expected a new project, got the old one back")
+	}
+}
+
+func TestTwoActiveProjectsCannotShareAName(t *testing.T) {
+	b := newTestBackend(t)
+	mustCreateProject(t, b, "clisteno")
+
+	if _, err := b.CreateProject(model.CreateProject{Name: "clisteno"}); !errors.Is(err, model.ErrDuplicateName) {
+		t.Errorf("got %v, want ErrDuplicateName", err)
+	}
+}
+
+func TestReopeningIntoATakenNameIsRefused(t *testing.T) {
+	b := newTestBackend(t)
+	closed := mustCreateProject(t, b, "clisteno")
+	mustSetStatus(t, b, closed.ID, model.StatusDone, nil)
+	mustCreateProject(t, b, "clisteno")
+
+	if _, err := b.SetProjectStatus(closed.ID, model.StatusActive, nil); !errors.Is(err, model.ErrDuplicateName) {
+		t.Errorf("got %v, want ErrDuplicateName — only the live project holds a name", err)
+	}
+}
+
+func TestUndoRestoresTheStatusAProjectHad(t *testing.T) {
+	b := newTestBackend(t)
+	p := mustCreateProject(t, b, "reconsidered")
+	mustSetStatus(t, b, p.ID, model.StatusDropped, ptr("thought better of it"))
+
+	if _, err := b.Undo(); err != nil {
+		t.Fatalf("undoing the drop: %v", err)
+	}
+
+	restored, err := b.GetProject(p.ID)
+	if err != nil {
+		t.Fatalf("getting project: %v", err)
+	}
+	if restored.Status != model.StatusActive {
+		t.Errorf("status = %q, want active — undo has to reverse the whole row, not just its name", restored.Status)
+	}
+	if restored.ClosedAt != nil || restored.StatusReason != nil {
+		t.Errorf("the closure survived the undo: closed_at=%v reason=%v", restored.ClosedAt, restored.StatusReason)
+	}
+}
+
+func TestListPutsActiveProjectsAheadOfClosedOnes(t *testing.T) {
+	b := newTestBackend(t)
+	closed := mustCreateProject(t, b, "finished")
+	mustCreateProject(t, b, "live")
+	mustSetStatus(t, b, closed.ID, model.StatusDone, nil)
+
+	all, err := b.ListProjectsByStatus(model.StatusAll)
+	if err != nil {
+		t.Fatalf("listing all projects: %v", err)
+	}
+
+	if got := projectNames(all); len(got) != 2 || got[0] != "live" {
+		t.Errorf("order = %v, want the active project first even though it was created second", got)
+	}
+}
+
+func ptr(s string) *string { return &s }

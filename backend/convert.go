@@ -22,17 +22,47 @@ func parseTime(s string) time.Time {
 	return time.Time{}
 }
 
-func toModelProject(p generated.Project) model.Project {
+// projectFields is what every project-shaped row has in common. sqlc generates a
+// distinct struct per query, so without this the same eight-field mapping is
+// written three times and only two of them get updated when a column is added.
+type projectFields struct {
+	ID           string
+	Name         string
+	Description  sql.NullString
+	Status       string
+	StatusReason sql.NullString
+	ClosedAt     sql.NullString
+	Position     int64
+	CreatedAt    string
+}
+
+func toModelProjectFields(f projectFields) model.Project {
 	proj := model.Project{
-		ID:        p.ID,
-		Name:      p.Name,
-		Position:  int(p.Position),
-		CreatedAt: parseTime(p.CreatedAt),
+		ID:        f.ID,
+		Name:      f.Name,
+		Status:    f.Status,
+		Position:  int(f.Position),
+		CreatedAt: parseTime(f.CreatedAt),
 	}
-	if p.Description.Valid {
-		proj.Description = &p.Description.String
+	if f.Description.Valid {
+		proj.Description = &f.Description.String
+	}
+	if f.StatusReason.Valid {
+		proj.StatusReason = &f.StatusReason.String
+	}
+	if f.ClosedAt.Valid {
+		closed := parseTime(f.ClosedAt.String)
+		proj.ClosedAt = &closed
 	}
 	return proj
+}
+
+func toModelProject(p generated.Project) model.Project {
+	return toModelProjectFields(projectFields{
+		ID: p.ID, Name: p.Name, Description: p.Description,
+		Status: p.Status, StatusReason: p.StatusReason, ClosedAt: p.ClosedAt,
+		Position: p.Position, CreatedAt: p.CreatedAt,
+	})
 }
 
 func toModelProjects(ps []generated.Project) []model.Project {
@@ -44,33 +74,23 @@ func toModelProjects(ps []generated.Project) []model.Project {
 }
 
 func toModelProjectWithItemCount(row generated.ListProjectsWithItemCountRow) model.ProjectWithItemCount {
-	proj := model.Project{
-		ID:        row.ID,
-		Name:      row.Name,
-		Position:  int(row.Position),
-		CreatedAt: parseTime(row.CreatedAt),
-	}
-	if row.Description.Valid {
-		proj.Description = &row.Description.String
-	}
 	return model.ProjectWithItemCount{
-		Project:   proj,
+		Project: toModelProjectFields(projectFields{
+			ID: row.ID, Name: row.Name, Description: row.Description,
+			Status: row.Status, StatusReason: row.StatusReason, ClosedAt: row.ClosedAt,
+			Position: row.Position, CreatedAt: row.CreatedAt,
+		}),
 		ItemCount: int(row.ItemCount),
 	}
 }
 
 func toModelProjectWithItemCountFromGet(row generated.GetProjectWithItemCountRow) model.ProjectWithItemCount {
-	proj := model.Project{
-		ID:        row.ID,
-		Name:      row.Name,
-		Position:  int(row.Position),
-		CreatedAt: parseTime(row.CreatedAt),
-	}
-	if row.Description.Valid {
-		proj.Description = &row.Description.String
-	}
 	return model.ProjectWithItemCount{
-		Project:   proj,
+		Project: toModelProjectFields(projectFields{
+			ID: row.ID, Name: row.Name, Description: row.Description,
+			Status: row.Status, StatusReason: row.StatusReason, ClosedAt: row.ClosedAt,
+			Position: row.Position, CreatedAt: row.CreatedAt,
+		}),
 		ItemCount: int(row.ItemCount),
 	}
 }

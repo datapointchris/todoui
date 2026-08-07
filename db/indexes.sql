@@ -21,3 +21,8 @@ CREATE INDEX IF NOT EXISTS idx_undo_recent ON undo_log(created_at DESC);
 -- cannot carry a UNIQUE constraint, so this is the only form that reaches an
 -- existing database too.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_items_number ON project_items(number);
+
+-- Partial, so a closed project stops owning its name and the next effort by
+-- that name can exist. Mirrors uq_projects_name_active on the API side, and is
+-- what lets a pull carrying a done `clisteno` beside a live one land at all.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_name_active ON projects(name) WHERE status = 'active';

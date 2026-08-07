@@ -20,11 +20,14 @@ type PendingSync struct {
 }
 
 type Project struct {
-	ID          string
-	Name        string
-	Description sql.NullString
-	Position    int64
-	CreatedAt   string
+	ID           string
+	Name         string
+	Description  sql.NullString
+	Status       string
+	StatusReason sql.NullString
+	ClosedAt     sql.NullString
+	Position     int64
+	CreatedAt    string
 }
 
 type ProjectItem struct {

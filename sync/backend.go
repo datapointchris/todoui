@@ -28,6 +28,10 @@ func (s *SyncBackend) ListProjects() ([]model.ProjectWithItemCount, error) {
 	return s.local.ListProjects()
 }
 
+func (s *SyncBackend) ListProjectsByStatus(status string) ([]model.ProjectWithItemCount, error) {
+	return s.local.ListProjectsByStatus(status)
+}
+
 func (s *SyncBackend) GetProject(id string) (*model.ProjectWithItemCount, error) {
 	return s.local.GetProject(id)
 }
@@ -95,6 +99,8 @@ func (s *SyncBackend) CreateProject(input model.CreateProject) (*model.Project, 
 		ID:          result.ID,
 		Name:        input.Name,
 		Description: input.Description,
+		Status:      result.Status,
+		Reason:      result.StatusReason,
 	})
 	s.engine.Notify()
 	return result, nil
@@ -106,6 +112,23 @@ func (s *SyncBackend) UpdateProject(id string, input model.UpdateProject) (*mode
 		return nil, err
 	}
 	_ = s.engine.QueueOp(OpUpdateProject, id, input)
+	s.engine.Notify()
+	return result, nil
+}
+
+// SetProjectStatus queues a PATCH rather than a complete/drop/reopen action
+// endpoint, matching the API: one write path, so the transition is validated in
+// one place. closed_at is left out of the payload because the server derives it
+// from the status, exactly as the local statement does.
+func (s *SyncBackend) SetProjectStatus(id, status string, reason *string) (*model.Project, error) {
+	result, err := s.local.SetProjectStatus(id, status, reason)
+	if err != nil {
+		return nil, err
+	}
+	_ = s.engine.QueueOp(OpUpdateProject, id, projectStatusPayload{
+		Status: status,
+		Reason: result.StatusReason,
+	})
 	s.engine.Notify()
 	return result, nil
 }
@@ -306,17 +329,24 @@ func (s *SyncBackend) Undo() (*model.UndoResult, error) {
 				ID:          restored.ID,
 				Name:        restored.Name,
 				Description: restored.Description,
+				Status:      restored.Status,
+				Reason:      restored.StatusReason,
 			})
 			for _, itemID := range result.RestoredItemIDs {
 				_ = s.engine.QueueOp(OpAddToProject, itemID, projectIDPayload{ProjectID: result.EntityID})
 			}
 		case result.RestoredProject != nil:
 			restored := result.RestoredProject
-			position := restored.Position
-			_ = s.engine.QueueOp(OpUpdateProject, result.EntityID, model.UpdateProject{
-				Name:        &restored.Name,
+			// One PATCH carrying the whole restored row, status included: the
+			// undo may have reversed a complete or a drop, and a body that
+			// omitted status would leave the server showing the project as
+			// closed after it came back locally.
+			_ = s.engine.QueueOp(OpUpdateProject, result.EntityID, projectRestorePayload{
+				Name:        restored.Name,
 				Description: restored.Description,
-				Position:    &position,
+				Position:    restored.Position,
+				Status:      restored.Status,
+				Reason:      restored.StatusReason,
 			})
 		case dropped == 0:
 			_ = s.engine.QueueOp(OpDeleteProject, result.EntityID, nil)
@@ -462,6 +492,28 @@ type createProjectPayload struct {
 	ID          string  `json:"id"`
 	Name        string  `json:"name"`
 	Description *string `json:"description,omitempty"`
+	// Sent even when active so a project completed offline does not come back
+	// alive on the push that first tells the server it exists.
+	Status string  `json:"status"`
+	Reason *string `json:"status_reason,omitempty"`
+}
+
+// projectStatusPayload is the PATCH body for a transition. Reason is whatever
+// the local statement settled on — the value sent when dropping, and null after
+// a reopen cleared it — so the two databases agree without a second round trip.
+type projectStatusPayload struct {
+	Status string  `json:"status"`
+	Reason *string `json:"status_reason"`
+}
+
+// projectRestorePayload is an undo's PATCH: the whole row as it was, so one
+// request reverses whichever field the undone mutation had changed.
+type projectRestorePayload struct {
+	Name        string  `json:"name"`
+	Description *string `json:"description"`
+	Position    int     `json:"position"`
+	Status      string  `json:"status"`
+	Reason      *string `json:"status_reason"`
 }
 
 type createItemPayload struct {

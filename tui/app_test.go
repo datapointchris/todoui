@@ -372,3 +372,96 @@ func TestItemRowShowsTheNumber(t *testing.T) {
 		}
 	}
 }
+
+// --- Project status ---
+
+func keys(t *testing.T, app *App, presses ...string) {
+	t.Helper()
+	for _, key := range presses {
+		send(t, app, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)})
+	}
+}
+
+func TestCompletedProjectLeavesTheProjectPane(t *testing.T) {
+	app := newTestApp(t, 100, 30)
+	app.activePane = projectPane
+
+	send(t, app, tea.KeyMsg{Type: tea.KeyEnter})
+	if app.appMode != modeProjectDetail {
+		t.Fatalf("expected the project detail overlay, got mode %v", app.appMode)
+	}
+	keys(t, app, "c")
+
+	if len(app.projects) != 0 {
+		t.Errorf("completing a project must take it out of the pane, still have %d", len(app.projects))
+	}
+}
+
+func TestShowClosedTogglesTheClosedProjectsBackIn(t *testing.T) {
+	app := newTestApp(t, 100, 30)
+	app.activePane = projectPane
+	send(t, app, tea.KeyMsg{Type: tea.KeyEnter})
+	keys(t, app, "c")
+	send(t, app, tea.KeyMsg{Type: tea.KeyEsc})
+
+	keys(t, app, "C")
+
+	if len(app.projects) != 1 {
+		t.Fatalf("C must bring closed projects back, got %d", len(app.projects))
+	}
+	if app.projects[0].Status != model.StatusDone {
+		t.Errorf("status = %q, want done", app.projects[0].Status)
+	}
+	if !strings.Contains(app.View(), "done") {
+		t.Errorf("the row must be labeled with its status:\n%s", app.View())
+	}
+
+	keys(t, app, "C")
+	if len(app.projects) != 0 {
+		t.Errorf("C again must hide them, got %d", len(app.projects))
+	}
+}
+
+// A reason is required, so dropping is a prompt rather than a keypress.
+func TestDroppingAProjectAsksWhy(t *testing.T) {
+	app := newTestApp(t, 100, 30)
+	app.activePane = projectPane
+	send(t, app, tea.KeyMsg{Type: tea.KeyEnter})
+
+	keys(t, app, "x")
+
+	if app.appMode != modeDropProject {
+		t.Fatalf("expected the drop prompt, got mode %v", app.appMode)
+	}
+	if len(app.projects) != 1 {
+		t.Error("nothing may be dropped before the reason is given")
+	}
+
+	keys(t, app, "Go covers it")
+	send(t, app, tea.KeyMsg{Type: tea.KeyEnter})
+
+	if len(app.projects) != 0 {
+		t.Fatalf("the drop did not land, still have %d projects", len(app.projects))
+	}
+	app.showClosed = true
+	send(t, app, fetchProjectsCmd(app.backend, app.projectStatusFilter())())
+	if got := app.projects[0].StatusReason; got == nil || *got != "Go covers it" {
+		t.Errorf("status_reason = %v, want the typed reason", got)
+	}
+}
+
+func TestCancellingTheDropPromptLeavesTheProjectAlone(t *testing.T) {
+	app := newTestApp(t, 100, 30)
+	app.activePane = projectPane
+	send(t, app, tea.KeyMsg{Type: tea.KeyEnter})
+	keys(t, app, "x")
+
+	send(t, app, tea.KeyMsg{Type: tea.KeyEsc})
+
+	if app.appMode != modeProjectDetail {
+		t.Errorf("Esc must return to the overlay it came from, got mode %v", app.appMode)
+	}
+	if len(app.projects) != 1 {
+		t.Error("canceling must not drop anything")
+	}
+}

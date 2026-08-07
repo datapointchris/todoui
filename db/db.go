@@ -75,6 +75,79 @@ func migrate(db *sql.DB) error {
 	if err := migrateItemNumber(db); err != nil {
 		return err
 	}
+	if err := migrateProjectStatus(db); err != nil {
+		return err
+	}
+	return nil
+}
+
+// migrateProjectStatus adds the project lifecycle columns and, critically, drops
+// the global UNIQUE on projects.name in favor of the partial index over active
+// projects in indexes.sql.
+//
+// The unique constraint is why this is a table rebuild rather than three ALTER
+// TABLE ADD COLUMNs. SQLite attaches it as an implicit index that no DDL can
+// drop, and leaving it would fail the entire pull transaction the first time the
+// server returned a completed project beside a live one sharing its name —
+// exactly the case the partial index exists to allow.
+//
+// Foreign keys are off for the swap because project_item_memberships references
+// projects ON DELETE CASCADE, so dropping the old table with them on would take
+// every membership with it. PRAGMA foreign_keys is a no-op inside a transaction,
+// hence the explicit ordering below; this is SQLite's own documented procedure
+// for altering a table it otherwise cannot.
+func migrateProjectStatus(db *sql.DB) error {
+	var name string
+	err := db.QueryRow("SELECT name FROM pragma_table_info('projects') WHERE name = 'status'").Scan(&name)
+	if err == nil {
+		return nil
+	} else if err != sql.ErrNoRows {
+		return fmt.Errorf("checking projects.status: %w", err)
+	}
+
+	if _, err := db.Exec("PRAGMA foreign_keys=OFF"); err != nil {
+		return fmt.Errorf("disabling foreign keys for the projects rebuild: %w", err)
+	}
+	// Restored even on the error paths: leaving the connection with foreign keys
+	// off would silently disable every cascade for the rest of the process.
+	defer func() { _, _ = db.Exec("PRAGMA foreign_keys=ON") }()
+
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("beginning the projects rebuild: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	const rebuild = `
+CREATE TABLE projects_rebuilt (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT,
+    status TEXT NOT NULL DEFAULT 'active',
+    status_reason TEXT,
+    closed_at TEXT,
+    position INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+INSERT INTO projects_rebuilt (id, name, description, position, created_at)
+    SELECT id, name, description, position, created_at FROM projects;
+DROP TABLE projects;
+ALTER TABLE projects_rebuilt RENAME TO projects;`
+	if _, err := tx.Exec(rebuild); err != nil {
+		return fmt.Errorf("rebuilding projects: %w", err)
+	}
+
+	var violations int
+	if err := tx.QueryRow("SELECT COUNT(*) FROM pragma_foreign_key_check").Scan(&violations); err != nil {
+		return fmt.Errorf("checking foreign keys after the projects rebuild: %w", err)
+	}
+	if violations > 0 {
+		return fmt.Errorf("projects rebuild left %d dangling foreign key rows", violations)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing the projects rebuild: %w", err)
+	}
 	return nil
 }
 

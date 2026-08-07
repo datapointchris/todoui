@@ -15,6 +15,9 @@ Personal project organization tool. Local-first SQLite with optional background 
   every read by it. Validated against an optional registry at
   `$XDG_DATA_HOME/todoui/repos.json`; without one, any name is accepted
 - **Project descriptions** — long-form notes/decisions per project, viewable and editable in project detail
+- **Project status** — a project is finished (`done`) or abandoned with a reason
+  (`dropped`), and either one hides it. A name is held only by the active project
+  bearing it, so a finished `clisteno` gives the name back
 - **Undo** — revert the last mutation
 - **Search** — find items across all projects
 - **Sync** — optional background push/pull to ichrisbirch API
@@ -82,11 +85,27 @@ todoui blockers <id>
 
 # Projects
 todoui projects list
+todoui projects list --status all     # also done and dropped
 todoui projects create "homelab"
+todoui projects complete homelab
+todoui projects drop homelab --reason "k3s covers it"
+todoui projects reopen homelab
 todoui projects <id>                  # view item's projects
 todoui projects <id> --add homelab    # add item to project
 todoui projects <id> --remove work    # remove from project
 ```
+
+A project is a finite effort, so completing it is what takes it out of the list
+— there is no separate archive step the way items have one. `drop` is the other
+way to close one and requires a reason, because "deferred" invites the same idea
+back next month. Closing a project does **not** touch its items: an item still
+open when the project finished was still open, and that is worth knowing.
+
+Only the active project holds its name, so completing `clisteno` frees the name
+for the next `clisteno` effort. A name resolves to the active project first,
+falls back to a lone closed one — which is what lets `projects reopen ifiles`
+name its target — and reports the candidates rather than guessing when several
+closed projects share it.
 
 **Ids**: an item is named by its number — `todoui view 118`. It is short because
 it is not the primary key: the key stays a UUID so items can be created offline
@@ -135,8 +154,12 @@ pre-command refresh with `--no-sync`.
 | `Esc` | Clear selections |
 | `a` | Add project |
 | `m` | Reorder (move mode) |
+| `C` | Show/hide closed projects |
 | `e` | Edit project name (in detail) |
 | `d` | Edit project description (in detail) |
+| `c` | Complete project (in detail) |
+| `x` | Drop project, prompting for why (in detail) |
+| `r` | Reopen a closed project (in detail) |
 | **On an item row** | |
 | `space` | Toggle done/incomplete |
 | `a` | Add item to current project |

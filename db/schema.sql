@@ -2,8 +2,20 @@
 
 CREATE TABLE projects (
     id TEXT PRIMARY KEY,
-    name TEXT NOT NULL UNIQUE,
+    -- Unique among ACTIVE projects only, via the partial index in indexes.sql.
+    -- A global UNIQUE would make a completed `clisteno` own the name forever,
+    -- and would fail the whole pull the moment the server returns two projects
+    -- that shared one.
+    name TEXT NOT NULL,
     description TEXT,
+    -- active | done | dropped. A project is a finite effort, so completing it
+    -- is what hides it — there is no separate archived flag the way items have
+    -- one. `dropped` requires a reason, which is what stops it reading as
+    -- deferred. No CHECK against a lookup table: the API validates the value
+    -- and this database mirrors what it is told.
+    status TEXT NOT NULL DEFAULT 'active',
+    status_reason TEXT,
+    closed_at TEXT,
     position INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );

@@ -60,7 +60,14 @@ func newID() string {
 // --- Projects ---
 
 func (b *LocalBackend) ListProjects() ([]model.ProjectWithItemCount, error) {
-	rows, err := b.q.ListProjectsWithItemCount(b.ctx())
+	return b.ListProjectsByStatus(model.StatusActive)
+}
+
+// ListProjectsByStatus takes a status name or model.StatusAll. Closing a project
+// is what takes it out of the list, so every caller that has not asked for
+// something else goes through ListProjects and sees the active ones.
+func (b *LocalBackend) ListProjectsByStatus(status string) ([]model.ProjectWithItemCount, error) {
+	rows, err := b.q.ListProjectsWithItemCount(b.ctx(), status)
 	if err != nil {
 		return nil, fmt.Errorf("listing projects: %w", err)
 	}
@@ -156,6 +163,54 @@ func (b *LocalBackend) UpdateProject(id string, input model.UpdateProject) (*mod
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("committing update project: %w", err)
+	}
+	result := toModelProject(p)
+	return &result, nil
+}
+
+// SetProjectStatus moves a project between active, done, and dropped. A reason
+// is required when dropping and ignored when reopening — the closing timestamp
+// and the reason are consequences of the transition, derived in the statement
+// rather than handed in, so an active project can never carry either.
+func (b *LocalBackend) SetProjectStatus(id, status string, reason *string) (*model.Project, error) {
+	ctx := b.ctx()
+	if status == model.StatusDropped && (reason == nil || strings.TrimSpace(*reason) == "") {
+		return nil, model.ErrDropReasonRequired
+	}
+
+	current, err := b.q.GetProject(ctx, id)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, model.ErrNotFound
+		}
+		return nil, fmt.Errorf("getting project for status change: %w", err)
+	}
+
+	tx, err := b.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("beginning project status transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	qtx := b.q.WithTx(tx)
+
+	p, err := qtx.SetProjectStatus(ctx, generated.SetProjectStatusParams{
+		NewStatus: status,
+		Reason:    toNullString(reason),
+		ID:        id,
+	})
+	if err != nil {
+		// Reopening into a name a live project has taken. Only active projects
+		// hold a name, so this can only fire on the way back to active.
+		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+			return nil, model.ErrDuplicateName
+		}
+		return nil, fmt.Errorf("setting project status: %w", err)
+	}
+	if err := b.logUndo(qtx, "update", "project", id, current); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("committing project status: %w", err)
 	}
 	result := toModelProject(p)
 	return &result, nil
@@ -1004,14 +1059,15 @@ func undoProject(ctx context.Context, qtx *generated.Queries, entry generated.Un
 			if err := json.Unmarshal([]byte(entry.PreviousState.String), &prev); err != nil {
 				return fmt.Errorf("unmarshaling previous project state: %w", err)
 			}
-			restored, err := qtx.UpdateProject(ctx, generated.UpdateProjectParams{
-				Name:        prev.Name,
-				Description: prev.Description,
-				Position:    prev.Position,
-				ID:          entry.EntityID,
-			})
-			if err != nil {
+			// Upsert rather than UpdateProject: the snapshot is the whole row,
+			// and UpdateProject writes only name/description/position, so
+			// undoing a complete or a drop would leave the status where it was.
+			if err := qtx.UpsertProject(ctx, generated.UpsertProjectParams(prev)); err != nil {
 				return fmt.Errorf("restoring previous project state: %w", err)
+			}
+			restored, err := qtx.GetProject(ctx, entry.EntityID)
+			if err != nil {
+				return fmt.Errorf("reading back the restored project: %w", err)
 			}
 			project := toModelProject(restored)
 			result.RestoredProject = &project

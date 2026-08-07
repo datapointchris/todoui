@@ -462,26 +462,107 @@ func (c *commands) projectsCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&addProject, "add", "", "add item to this project")
 	cmd.Flags().StringVar(&removeProject, "remove", "", "remove item from this project")
-	cmd.AddCommand(c.projectsListCmd(), c.projectsCreateCmd())
+	cmd.AddCommand(
+		c.projectsListCmd(),
+		c.projectsCreateCmd(),
+		c.projectsCompleteCmd(),
+		c.projectsDropCmd(),
+		c.projectsReopenCmd(),
+	)
 	return cmd
 }
 
 func (c *commands) projectsListCmd() *cobra.Command {
-	return &cobra.Command{
+	var status string
+	cmd := &cobra.Command{
 		Use:   "list",
-		Short: "List all projects",
-		Args:  cobra.NoArgs,
+		Short: "List the active projects",
+		Long: "Completed and dropped projects are hidden until --status asks for them.\n" +
+			"Closing a project is what takes it out of the list; that is the whole point.",
+		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			projects, err := c.backend().ListProjects()
+			projects, err := c.backend().ListProjectsByStatus(status)
 			if err != nil {
 				return err
 			}
+			// The status column earns its width only when the rows can differ
+			// in it, which the flag decides.
+			showStatus := status != model.StatusActive
 			for _, p := range projects {
+				if showStatus {
+					fmt.Printf("%s  %-40s %-8s %d\n", shortID(p.ID), p.Name, p.Status, p.ItemCount)
+					continue
+				}
 				fmt.Printf("%s  %-40s %d\n", shortID(p.ID), p.Name, p.ItemCount)
 			}
 			return nil
 		},
 	}
+	cmd.Flags().StringVar(&status, "status", model.StatusActive, "active, done, dropped, or all")
+	return cmd
+}
+
+// projectsCompleteCmd and its siblings write through SetProjectStatus rather
+// than three flavors of update, so the closing timestamp and the reason are
+// derived from the transition in one place.
+func (c *commands) projectsCompleteCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "complete <project>",
+		Short: "Mark a project finished, which hides it",
+		Long: "A project is a finite effort, so completing it is what takes it out of the\n" +
+			"list — there is no separate archive step. Its items are left as they are: an\n" +
+			"item still open when the project finished was still open.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			return c.setProjectStatus(args[0], model.StatusDone, nil, "Completed")
+		},
+	}
+}
+
+func (c *commands) projectsDropCmd() *cobra.Command {
+	var reason string
+	cmd := &cobra.Command{
+		Use:   "drop <project> --reason <why>",
+		Short: "Close a project you are not going to do",
+		Long: "--reason is required, and that is the point: \"deferred\" invites the same idea\n" +
+			"back next month, whereas dropped-and-here-is-why closes the question.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			if strings.TrimSpace(reason) == "" {
+				return model.ErrDropReasonRequired
+			}
+			return c.setProjectStatus(args[0], model.StatusDropped, &reason, "Dropped")
+		},
+	}
+	cmd.Flags().StringVar(&reason, "reason", "", "why it is dropped rather than deferred (required)")
+	return cmd
+}
+
+func (c *commands) projectsReopenCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "reopen <project>",
+		Short: "Return a closed project to the active list",
+		Long: "Clears the closing reason and date along with the status. Refused if an active\n" +
+			"project has taken the name in the meantime — only the live project holds a name.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			return c.setProjectStatus(args[0], model.StatusActive, nil, "Reopened")
+		},
+	}
+}
+
+func (c *commands) setProjectStatus(ref, status string, reason *string, verb string) error {
+	b := c.backend()
+	id, err := resolveProjectRef(b, ref)
+	if err != nil {
+		return err
+	}
+	project, err := b.SetProjectStatus(id, status, reason)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("%s project %s: %s\n", verb, shortID(project.ID), project.Name)
+	return nil
 }
 
 func (c *commands) projectsCreateCmd() *cobra.Command {
@@ -558,6 +639,50 @@ func resolveProjects(b backend.Backend, names []string) ([]string, error) {
 		ids = append(ids, id)
 	}
 	return ids, nil
+}
+
+// resolveProjectRef names a project the way `projects list` prints it — its name
+// or the 8-character id tail.
+//
+// A name is unique only among ACTIVE projects, so the active one wins outright:
+// while a live effort holds the name, that is what the name means. Falling back
+// to a lone closed match is what makes `projects reopen ifiles` addressable at
+// all, since by then no active project holds it. Several closed projects sharing
+// a name is genuinely ambiguous and says so rather than picking one.
+func resolveProjectRef(b backend.Backend, ref string) (string, error) {
+	all, err := b.ListProjectsByStatus(model.StatusAll)
+	if err != nil {
+		return "", fmt.Errorf("listing projects: %w", err)
+	}
+
+	var byName []model.ProjectWithItemCount
+	for _, p := range all {
+		if p.ID == ref || shortID(p.ID) == ref {
+			return p.ID, nil
+		}
+		if strings.EqualFold(p.Name, ref) {
+			byName = append(byName, p)
+		}
+	}
+
+	for _, p := range byName {
+		if p.Status == model.StatusActive {
+			return p.ID, nil
+		}
+	}
+	switch len(byName) {
+	case 0:
+		return "", fmt.Errorf("project %q not found", ref)
+	case 1:
+		return byName[0].ID, nil
+	default:
+		handles := make([]string, len(byName))
+		for i, p := range byName {
+			handles[i] = fmt.Sprintf("%s (%s)", shortID(p.ID), p.Status)
+		}
+		return "", fmt.Errorf("%q names %d closed projects and no active one; use an id: %s",
+			ref, len(byName), strings.Join(handles, ", "))
+	}
 }
 
 func findProjectByName(b backend.Backend, name string) (string, error) {

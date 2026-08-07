@@ -81,6 +81,7 @@ func TestOpen_IncrementalMigration(t *testing.T) {
 		CREATE TABLE projects (
 			id TEXT PRIMARY KEY,
 			name TEXT NOT NULL UNIQUE,
+			description TEXT,
 			position INTEGER NOT NULL DEFAULT 0,
 			created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 		);
@@ -147,6 +148,13 @@ func TestMigrate_AddsRepoColumnToExistingDatabase(t *testing.T) {
 	// A pre-repo database with a row already in it — the migration must add the
 	// column without disturbing existing items.
 	_, err = database.Exec(`
+		CREATE TABLE projects (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL UNIQUE,
+			description TEXT,
+			position INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+		);
 		CREATE TABLE project_items (
 			id TEXT PRIMARY KEY,
 			title TEXT NOT NULL,
@@ -193,6 +201,7 @@ func TestOpen_CreatesIndexes(t *testing.T) {
 		"idx_deps_depends",
 		"idx_items_active",
 		"idx_memberships_position",
+		"idx_projects_name_active",
 		"idx_tasks_item",
 		"idx_undo_recent",
 	}
@@ -260,6 +269,13 @@ func TestMigrate_AddsNumberColumnToExistingDatabase(t *testing.T) {
 	database.SetMaxOpenConns(1)
 
 	_, err = database.Exec(`
+		CREATE TABLE projects (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL UNIQUE,
+			description TEXT,
+			position INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+		);
 		CREATE TABLE project_items (
 			id TEXT PRIMARY KEY,
 			title TEXT NOT NULL,
@@ -321,5 +337,109 @@ func TestOpen_NumberIndexAllowsManyUnnumberedItems(t *testing.T) {
 	}
 	if _, err := database.Exec("INSERT INTO project_items (id, title, number) VALUES ('e', 'e', 7)"); err == nil {
 		t.Error("a duplicate number was accepted — the handle has to name exactly one item")
+	}
+}
+
+// TestMigrate_ReplacesTheGlobalNameConstraint is the one migration that rebuilds
+// a table rather than adding a column, because SQLite attaches a column-level
+// UNIQUE as an index no DDL can drop. Two things have to survive it: the rows,
+// and the memberships that cascade off projects when the old table is dropped.
+func TestMigrate_ReplacesTheGlobalNameConstraint(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("opening raw db: %v", err)
+	}
+	database.SetMaxOpenConns(1)
+	t.Cleanup(func() { _ = database.Close() })
+
+	if _, err := database.Exec("PRAGMA foreign_keys=ON"); err != nil {
+		t.Fatalf("enabling foreign keys: %v", err)
+	}
+	_, err = database.Exec(`
+		CREATE TABLE projects (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL UNIQUE,
+			description TEXT,
+			position INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+		);
+		CREATE TABLE project_items (
+			id TEXT PRIMARY KEY,
+			title TEXT NOT NULL,
+			notes TEXT,
+			repo TEXT,
+			number INTEGER,
+			completed INTEGER NOT NULL DEFAULT 0,
+			archived INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+			updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+		);
+		CREATE TABLE project_item_memberships (
+			item_id TEXT NOT NULL REFERENCES project_items(id) ON DELETE CASCADE,
+			project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+			position INTEGER NOT NULL DEFAULT 0,
+			PRIMARY KEY (item_id, project_id)
+		);
+		INSERT INTO projects (id, name, description, position) VALUES ('p1', 'clisteno', 'notes', 3);
+		INSERT INTO project_items (id, title) VALUES ('i1', 'existing item');
+		INSERT INTO project_item_memberships (item_id, project_id, position) VALUES ('i1', 'p1', 0);
+	`)
+	if err != nil {
+		t.Fatalf("creating pre-status tables: %v", err)
+	}
+
+	if err := migrate(database); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	var name, description, status string
+	var position int
+	row := database.QueryRow("SELECT name, description, status, position FROM projects WHERE id = 'p1'")
+	if err := row.Scan(&name, &description, &status, &position); err != nil {
+		t.Fatalf("selecting migrated project: %v", err)
+	}
+	if name != "clisteno" || description != "notes" || position != 3 {
+		t.Errorf("row lost data in the rebuild: name=%q description=%q position=%d", name, description, position)
+	}
+	if status != "active" {
+		t.Errorf("status = %q, want active — every project was active before the column existed", status)
+	}
+
+	// The whole reason foreign keys are off for the swap: memberships cascade
+	// off projects, so dropping the old table with them on would take these.
+	var memberships int
+	if err := database.QueryRow("SELECT COUNT(*) FROM project_item_memberships").Scan(&memberships); err != nil {
+		t.Fatalf("counting memberships: %v", err)
+	}
+	if memberships != 1 {
+		t.Errorf("memberships = %d, want 1 — the rebuild cascaded them away", memberships)
+	}
+
+	var foreignKeysOn int
+	if err := database.QueryRow("PRAGMA foreign_keys").Scan(&foreignKeysOn); err != nil {
+		t.Fatalf("reading foreign_keys pragma: %v", err)
+	}
+	if foreignKeysOn != 1 {
+		t.Error("foreign keys left off after the rebuild — every later cascade would silently stop working")
+	}
+
+	// The global constraint is gone and the partial one takes over. Created
+	// directly rather than by applying indexes.sql, which touches tables this
+	// fixture has no reason to build; that the file carries it is covered by
+	// TestOpen_CreatesIndexes.
+	if _, err := database.Exec(
+		"CREATE UNIQUE INDEX idx_projects_name_active ON projects(name) WHERE status = 'active'",
+	); err != nil {
+		t.Fatalf("creating the partial index: %v", err)
+	}
+	if _, err := database.Exec(
+		"INSERT INTO projects (id, name, status) VALUES ('p2', 'clisteno', 'done')",
+	); err != nil {
+		t.Errorf("a closed project must be allowed to share a name: %v", err)
+	}
+	if _, err := database.Exec(
+		"INSERT INTO projects (id, name) VALUES ('p3', 'clisteno')",
+	); err == nil {
+		t.Error("two ACTIVE projects sharing a name must still be refused")
 	}
 }

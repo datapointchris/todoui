@@ -81,8 +81,15 @@ func (e *Engine) pull(ctx context.Context) error {
 		return fmt.Errorf("reading pending sync high-water mark: %w", err)
 	}
 
-	// Fetch all data from the server
-	projects, err := fetchJSON[[]model.Project](ctx, e.client, e.apiURL, "/projects/")
+	// Fetch all data from the server.
+	//
+	// status=all because the sweep below deletes any local project the server
+	// did not return, cascading through to its memberships. Once /projects/
+	// defaults to active-only, an omitted-because-completed project reads as
+	// deleted-upstream and the row goes. Terminal projects are filtered for
+	// display locally instead. The param is ignored by an API predating it,
+	// which is what lets this ship ahead of the server change.
+	projects, err := fetchJSON[[]model.Project](ctx, e.client, e.apiURL, "/projects/?status=all")
 	if err != nil {
 		return fmt.Errorf("pulling projects: %w", err)
 	}
@@ -149,12 +156,22 @@ func (e *Engine) pull(ctx context.Context) error {
 	serverProjectIDs := make(map[string]bool, len(projects))
 	for _, p := range projects {
 		serverProjectIDs[p.ID] = true
+		// A server predating the status column sends none, and an empty status
+		// would violate NOT NULL and fail the whole pull. Absent means active,
+		// which is what every project was before the column existed.
+		status := p.Status
+		if status == "" {
+			status = model.StatusActive
+		}
 		if err := qtx.UpsertProject(ctx, generated.UpsertProjectParams{
-			ID:          p.ID,
-			Name:        p.Name,
-			Description: nullStr(p.Description),
-			Position:    int64(p.Position),
-			CreatedAt:   p.CreatedAt.Format(time.RFC3339Nano),
+			ID:           p.ID,
+			Name:         p.Name,
+			Description:  nullStr(p.Description),
+			Status:       status,
+			StatusReason: nullStr(p.StatusReason),
+			ClosedAt:     nullTime(p.ClosedAt),
+			Position:     int64(p.Position),
+			CreatedAt:    p.CreatedAt.Format(time.RFC3339Nano),
 		}); err != nil {
 			return fmt.Errorf("upserting project %s: %w", p.ID, err)
 		}
@@ -333,6 +350,16 @@ func nullStr(s *string) sql.NullString {
 		return sql.NullString{}
 	}
 	return sql.NullString{String: *s, Valid: true}
+}
+
+// nullTime stores a nullable timestamp in the same RFC3339Nano text every other
+// column uses, so a value written by a pull and one written by SQLite's own
+// strftime sort against each other.
+func nullTime(t *time.Time) sql.NullString {
+	if t == nil {
+		return sql.NullString{}
+	}
+	return sql.NullString{String: t.Format(time.RFC3339Nano), Valid: true}
 }
 
 func nullInt(n *int) sql.NullInt64 {

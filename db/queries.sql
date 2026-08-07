@@ -1,10 +1,15 @@
+-- Terminal projects are hidden unless asked for: closing a project is what takes
+-- it out of the list, so an unfiltered default would make completing one do
+-- nothing visible. Named parameter so the filter reads as a status rather than
+-- a bare `?`, and so sqlfluff sees a bind rather than an unqualified column.
 -- name: ListProjectsWithItemCount :many
 SELECT p.*, COUNT(pi.id) AS item_count
 FROM projects p
 LEFT JOIN project_item_memberships m ON p.id = m.project_id
 LEFT JOIN project_items pi ON m.item_id = pi.id AND pi.archived = 0
+WHERE CAST(@status_filter AS TEXT) = 'all' OR p.status = CAST(@status_filter AS TEXT)
 GROUP BY p.id
-ORDER BY p.position, p.name;
+ORDER BY p.closed_at IS NULL DESC, p.closed_at DESC, p.position ASC, p.name ASC;
 
 -- name: GetProject :one
 SELECT * FROM projects WHERE id = ?;
@@ -28,6 +33,23 @@ SET name = ?,
     description = ?,
     position = ?
 WHERE id = ?
+RETURNING *;
+
+-- Every consequence of the transition in one statement: closed_at is stamped on
+-- the way out and cleared on the way back, and the reason goes with it, so a
+-- caller cannot leave an active project carrying a closing date.
+-- name: SetProjectStatus :one
+UPDATE projects
+SET status = sqlc.arg(new_status),
+    status_reason = CASE WHEN sqlc.arg(new_status) = 'active' THEN NULL ELSE sqlc.narg(reason) END,
+    closed_at = CASE
+        WHEN sqlc.arg(new_status) = 'active' THEN NULL
+        -- Already closed and staying that way: keep the original date rather
+        -- than restamping it on an edit to the reason.
+        WHEN closed_at IS NOT NULL AND status = sqlc.arg(new_status) THEN closed_at
+        ELSE strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    END
+WHERE id = sqlc.arg(id)
 RETURNING *;
 
 -- name: DeleteProject :exec
@@ -247,11 +269,14 @@ ON CONFLICT(entity_type) DO UPDATE SET
 -- Sync: pull reconciliation (upserts)
 
 -- name: UpsertProject :exec
-INSERT INTO projects (id, name, description, position, created_at)
-VALUES (?, ?, ?, ?, ?)
+INSERT INTO projects (id, name, description, status, status_reason, closed_at, position, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
     name = excluded.name,
     description = excluded.description,
+    status = excluded.status,
+    status_reason = excluded.status_reason,
+    closed_at = excluded.closed_at,
     position = excluded.position;
 
 -- name: UpsertItem :exec

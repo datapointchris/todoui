@@ -102,7 +102,7 @@ func (q *Queries) CreateItem(ctx context.Context, arg CreateItemParams) (Project
 const createProject = `-- name: CreateProject :one
 INSERT INTO projects (id, name, description, position)
 VALUES (?, ?, ?, (SELECT COALESCE(MAX(position), 0) + 1 FROM projects))
-RETURNING id, name, description, position, created_at
+RETURNING id, name, description, status, status_reason, closed_at, position, created_at
 `
 
 type CreateProjectParams struct {
@@ -118,6 +118,9 @@ func (q *Queries) CreateProject(ctx context.Context, arg CreateProjectParams) (P
 		&i.ID,
 		&i.Name,
 		&i.Description,
+		&i.Status,
+		&i.StatusReason,
+		&i.ClosedAt,
 		&i.Position,
 		&i.CreatedAt,
 	)
@@ -426,7 +429,7 @@ func (q *Queries) GetItemMemberships(ctx context.Context, itemID string) ([]Proj
 }
 
 const getItemProjects = `-- name: GetItemProjects :many
-SELECT p.id, p.name, p.description, p.position, p.created_at
+SELECT p.id, p.name, p.description, p.status, p.status_reason, p.closed_at, p.position, p.created_at
 FROM projects p
 INNER JOIN project_item_memberships m ON p.id = m.project_id
 WHERE m.item_id = ?
@@ -446,6 +449,9 @@ func (q *Queries) GetItemProjects(ctx context.Context, itemID string) ([]Project
 			&i.ID,
 			&i.Name,
 			&i.Description,
+			&i.Status,
+			&i.StatusReason,
+			&i.ClosedAt,
 			&i.Position,
 			&i.CreatedAt,
 		); err != nil {
@@ -517,7 +523,7 @@ func (q *Queries) GetOldestPendingSync(ctx context.Context) (PendingSync, error)
 }
 
 const getProject = `-- name: GetProject :one
-SELECT id, name, description, position, created_at FROM projects WHERE id = ?
+SELECT id, name, description, status, status_reason, closed_at, position, created_at FROM projects WHERE id = ?
 `
 
 func (q *Queries) GetProject(ctx context.Context, id string) (Project, error) {
@@ -527,6 +533,9 @@ func (q *Queries) GetProject(ctx context.Context, id string) (Project, error) {
 		&i.ID,
 		&i.Name,
 		&i.Description,
+		&i.Status,
+		&i.StatusReason,
+		&i.ClosedAt,
 		&i.Position,
 		&i.CreatedAt,
 	)
@@ -561,7 +570,7 @@ func (q *Queries) GetProjectMemberships(ctx context.Context, projectID string) (
 }
 
 const getProjectWithItemCount = `-- name: GetProjectWithItemCount :one
-SELECT p.id, p.name, p.description, p.position, p.created_at, COUNT(pi.id) AS item_count
+SELECT p.id, p.name, p.description, p.status, p.status_reason, p.closed_at, p.position, p.created_at, COUNT(pi.id) AS item_count
 FROM projects p
 LEFT JOIN project_item_memberships m ON p.id = m.project_id
 LEFT JOIN project_items pi ON m.item_id = pi.id AND pi.archived = 0
@@ -570,12 +579,15 @@ GROUP BY p.id
 `
 
 type GetProjectWithItemCountRow struct {
-	ID          string
-	Name        string
-	Description sql.NullString
-	Position    int64
-	CreatedAt   string
-	ItemCount   int64
+	ID           string
+	Name         string
+	Description  sql.NullString
+	Status       string
+	StatusReason sql.NullString
+	ClosedAt     sql.NullString
+	Position     int64
+	CreatedAt    string
+	ItemCount    int64
 }
 
 func (q *Queries) GetProjectWithItemCount(ctx context.Context, id string) (GetProjectWithItemCountRow, error) {
@@ -585,6 +597,9 @@ func (q *Queries) GetProjectWithItemCount(ctx context.Context, id string) (GetPr
 		&i.ID,
 		&i.Name,
 		&i.Description,
+		&i.Status,
+		&i.StatusReason,
+		&i.ClosedAt,
 		&i.Position,
 		&i.CreatedAt,
 		&i.ItemCount,
@@ -775,7 +790,7 @@ func (q *Queries) ListAllMemberships(ctx context.Context) ([]ProjectItemMembersh
 }
 
 const listAllProjectsRaw = `-- name: ListAllProjectsRaw :many
-SELECT id, name, description, position, created_at FROM projects ORDER BY position, name
+SELECT id, name, description, status, status_reason, closed_at, position, created_at FROM projects ORDER BY position, name
 `
 
 func (q *Queries) ListAllProjectsRaw(ctx context.Context) ([]Project, error) {
@@ -791,6 +806,9 @@ func (q *Queries) ListAllProjectsRaw(ctx context.Context) ([]Project, error) {
 			&i.ID,
 			&i.Name,
 			&i.Description,
+			&i.Status,
+			&i.StatusReason,
+			&i.ClosedAt,
 			&i.Position,
 			&i.CreatedAt,
 		); err != nil {
@@ -1103,25 +1121,33 @@ func (q *Queries) ListPendingSyncEntityIDsAfter(ctx context.Context, id int64) (
 }
 
 const listProjectsWithItemCount = `-- name: ListProjectsWithItemCount :many
-SELECT p.id, p.name, p.description, p.position, p.created_at, COUNT(pi.id) AS item_count
+SELECT p.id, p.name, p.description, p.status, p.status_reason, p.closed_at, p.position, p.created_at, COUNT(pi.id) AS item_count
 FROM projects p
 LEFT JOIN project_item_memberships m ON p.id = m.project_id
 LEFT JOIN project_items pi ON m.item_id = pi.id AND pi.archived = 0
+WHERE CAST(?1 AS TEXT) = 'all' OR p.status = CAST(?1 AS TEXT)
 GROUP BY p.id
-ORDER BY p.position, p.name
+ORDER BY p.closed_at IS NULL DESC, p.closed_at DESC, p.position ASC, p.name ASC
 `
 
 type ListProjectsWithItemCountRow struct {
-	ID          string
-	Name        string
-	Description sql.NullString
-	Position    int64
-	CreatedAt   string
-	ItemCount   int64
+	ID           string
+	Name         string
+	Description  sql.NullString
+	Status       string
+	StatusReason sql.NullString
+	ClosedAt     sql.NullString
+	Position     int64
+	CreatedAt    string
+	ItemCount    int64
 }
 
-func (q *Queries) ListProjectsWithItemCount(ctx context.Context) ([]ListProjectsWithItemCountRow, error) {
-	rows, err := q.db.QueryContext(ctx, listProjectsWithItemCount)
+// Terminal projects are hidden unless asked for: closing a project is what takes
+// it out of the list, so an unfiltered default would make completing one do
+// nothing visible. Named parameter so the filter reads as a status rather than
+// a bare `?`, and so sqlfluff sees a bind rather than an unqualified column.
+func (q *Queries) ListProjectsWithItemCount(ctx context.Context, statusFilter string) ([]ListProjectsWithItemCountRow, error) {
+	rows, err := q.db.QueryContext(ctx, listProjectsWithItemCount, statusFilter)
 	if err != nil {
 		return nil, err
 	}
@@ -1133,6 +1159,9 @@ func (q *Queries) ListProjectsWithItemCount(ctx context.Context) ([]ListProjects
 			&i.ID,
 			&i.Name,
 			&i.Description,
+			&i.Status,
+			&i.StatusReason,
+			&i.ClosedAt,
 			&i.Position,
 			&i.CreatedAt,
 			&i.ItemCount,
@@ -1363,6 +1392,46 @@ func (q *Queries) SetItemNumber(ctx context.Context, arg SetItemNumberParams) er
 	return err
 }
 
+const setProjectStatus = `-- name: SetProjectStatus :one
+UPDATE projects
+SET status = ?1,
+    status_reason = CASE WHEN ?1 = 'active' THEN NULL ELSE ?2 END,
+    closed_at = CASE
+        WHEN ?1 = 'active' THEN NULL
+        -- Already closed and staying that way: keep the original date rather
+        -- than restamping it on an edit to the reason.
+        WHEN closed_at IS NOT NULL AND status = ?1 THEN closed_at
+        ELSE strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    END
+WHERE id = ?3
+RETURNING id, name, description, status, status_reason, closed_at, position, created_at
+`
+
+type SetProjectStatusParams struct {
+	NewStatus string
+	Reason    sql.NullString
+	ID        string
+}
+
+// Every consequence of the transition in one statement: closed_at is stamped on
+// the way out and cleared on the way back, and the reason goes with it, so a
+// caller cannot leave an active project carrying a closing date.
+func (q *Queries) SetProjectStatus(ctx context.Context, arg SetProjectStatusParams) (Project, error) {
+	row := q.db.QueryRowContext(ctx, setProjectStatus, arg.NewStatus, arg.Reason, arg.ID)
+	var i Project
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Description,
+		&i.Status,
+		&i.StatusReason,
+		&i.ClosedAt,
+		&i.Position,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const updateItem = `-- name: UpdateItem :one
 UPDATE project_items
 SET title = ?,
@@ -1443,7 +1512,7 @@ SET name = ?,
     description = ?,
     position = ?
 WHERE id = ?
-RETURNING id, name, description, position, created_at
+RETURNING id, name, description, status, status_reason, closed_at, position, created_at
 `
 
 type UpdateProjectParams struct {
@@ -1465,6 +1534,9 @@ func (q *Queries) UpdateProject(ctx context.Context, arg UpdateProjectParams) (P
 		&i.ID,
 		&i.Name,
 		&i.Description,
+		&i.Status,
+		&i.StatusReason,
+		&i.ClosedAt,
 		&i.Position,
 		&i.CreatedAt,
 	)
@@ -1595,20 +1667,26 @@ func (q *Queries) UpsertMembership(ctx context.Context, arg UpsertMembershipPara
 
 const upsertProject = `-- name: UpsertProject :exec
 
-INSERT INTO projects (id, name, description, position, created_at)
-VALUES (?, ?, ?, ?, ?)
+INSERT INTO projects (id, name, description, status, status_reason, closed_at, position, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
     name = excluded.name,
     description = excluded.description,
+    status = excluded.status,
+    status_reason = excluded.status_reason,
+    closed_at = excluded.closed_at,
     position = excluded.position
 `
 
 type UpsertProjectParams struct {
-	ID          string
-	Name        string
-	Description sql.NullString
-	Position    int64
-	CreatedAt   string
+	ID           string
+	Name         string
+	Description  sql.NullString
+	Status       string
+	StatusReason sql.NullString
+	ClosedAt     sql.NullString
+	Position     int64
+	CreatedAt    string
 }
 
 // Sync: pull reconciliation (upserts)
@@ -1617,6 +1695,9 @@ func (q *Queries) UpsertProject(ctx context.Context, arg UpsertProjectParams) er
 		arg.ID,
 		arg.Name,
 		arg.Description,
+		arg.Status,
+		arg.StatusReason,
+		arg.ClosedAt,
 		arg.Position,
 		arg.CreatedAt,
 	)

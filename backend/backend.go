@@ -6,10 +6,19 @@ import "github.com/datapointchris/todoui/model"
 // LocalBackend provides direct SQLite access; SyncBackend wraps it with background push/pull.
 type Backend interface {
 	// Projects
+	// ListProjects is the active projects. Closing a project is what takes it
+	// out of the list, so the default has to hide the terminal ones or
+	// completing one would do nothing visible.
 	ListProjects() ([]model.ProjectWithItemCount, error)
+	// ListProjectsByStatus takes a status name or model.StatusAll.
+	ListProjectsByStatus(status string) ([]model.ProjectWithItemCount, error)
 	GetProject(id string) (*model.ProjectWithItemCount, error)
 	CreateProject(input model.CreateProject) (*model.Project, error)
 	UpdateProject(id string, input model.UpdateProject) (*model.Project, error)
+	// SetProjectStatus moves a project between active, done, and dropped. The
+	// closing timestamp and the reason are derived from the transition rather
+	// than sent, so they cannot contradict the status they describe.
+	SetProjectStatus(id, status string, reason *string) (*model.Project, error)
 	DeleteProject(id string) error
 	ReorderProject(projectID string, newPosition int) error
 

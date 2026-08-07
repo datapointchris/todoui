@@ -53,7 +53,9 @@ It does not replace step 2.
 The CLI covers sub-tasks, dependencies, reordering, and archival both ways —
 see the README for the verb list. `todoui add "title" -p foo` still errors if
 project `foo` doesn't exist, so create it first with `todoui projects create
-foo` or in the TUI project pane with `a`.
+foo` or in the TUI project pane with `a`. It also errors if `foo` is closed:
+`resolveProjects` reads the active list, and filing new work into a finished
+project is not something to make easy.
 
 **The CLI exists for Claude Code and automation, not for Chris** — he drives
 todoui through the TUI. That is why the verb set mirrors `icb projects items`
@@ -80,6 +82,42 @@ reason suffix resolution survives: a handle a command printed has to keep
 resolving after the number arrives. Do not switch the fallback to prefix
 matching — UUIDv7 front-loads its millisecond timestamp, so prefixes collide
 for everything created in the same window.
+
+## A project has a status, and it is not an `archived` flag
+
+`projects.status` is `active`/`done`/`dropped`. For an item, complete and
+archive are orthogonal and both make sense; for a project they collapse, because
+a project is a finite effort with a definition of done — so completion *is* the
+hide signal and there is no second flag. `dropped` exists beside `done` because
+`done` alone would force you to lie about anything you merely stopped caring
+about, and it requires a reason: "deferred" invites re-proposal, "dropped, and
+here is why" closes the question.
+
+`SetProjectStatus` is the only write path, and `closed_at` and `status_reason`
+are derived inside its statement rather than accepted from a caller, so an
+active project can never carry either. `UpdateProject` deliberately does not
+touch status.
+
+**Closing a project does not cascade to its items.** An item still open when the
+project was dropped WAS still open; "shipped 8 of 11, dropped with 3 open" is a
+real signal and eleven archived items is not. Visibility is derived from the
+project instead. This was tried by hand the other way once and reverted.
+
+**A name is held only by the active project bearing it.** That is
+`idx_projects_name_active` in `indexes.sql`, a partial unique index, and it is
+what lets a finished `clisteno` give the name back. `resolveProjectRef` in
+`cli/commands.go` mirrors the API's rule: active first, then a lone terminal
+match — without which `projects reopen ifiles` could not name its own target —
+then an error listing candidates. Never guess between several closed projects.
+
+`migrateProjectStatus` is the one migration that rebuilds a table rather than
+adding columns, because SQLite attaches the old column-level `UNIQUE(name)` as
+an implicit index no DDL can drop. Foreign keys are off across the swap:
+`project_item_memberships` cascades off `projects`, so dropping the old table
+with them on would take every membership. Do not simplify it into three
+`ALTER TABLE ADD COLUMN`s — leaving the global constraint in place fails the
+entire pull transaction the first time the server returns a done project beside
+a live one sharing its name.
 
 ## Sync is automatic; `todoui sync` is a convenience, not a requirement
 
@@ -119,6 +157,14 @@ Absent and empty are different answers, and reading absent as empty would delete
 every task and dependency locally on the first pull against an older API. That
 fallback is what makes deploy order between this repo and ichrisbirch irrelevant;
 do not drop it just because the API has shipped.
+
+The project pull asks for `?status=all` for the same reason in reverse: the sweep
+below it deletes any local project the server did not return, so an active-only
+response would read "completed upstream" as "deleted upstream" and cascade
+through to the memberships. Terminal projects are filtered for display locally.
+A server predating the column sends no status at all, which the upsert reads as
+`active` — absent is not empty here either, and that is what keeps deploy order
+between the two repos irrelevant for projects too.
 
 ## Planning docs
 

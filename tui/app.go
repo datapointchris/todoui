@@ -102,6 +102,7 @@ type App struct {
 
 	// All Items view
 	showingAll       bool            // true when the "All" pseudo-project is selected
+	showClosed       bool            // include completed and dropped projects in the pane
 	allGroups        []allItemGroup  // project groups for rendering headers in grouped views
 	selectedProjects map[string]bool // multi-select: project IDs toggled via space
 
@@ -353,19 +354,45 @@ func syncPullTickCmd(d time.Duration) tea.Cmd {
 // ordering wholesale, which would corrupt a grab in progress or refresh a
 // detail overlay into a snapshot of something else. Every other mode defers to
 // the next tick rather than skipping the pull outright.
+// projectStatusFilter is what the project pane is currently asking for. Closing
+// a project is what takes it out of the list, so the default hides the terminal
+// ones and `C` is how you get at them.
+func (m *App) projectStatusFilter() string {
+	if m.showClosed {
+		return model.StatusAll
+	}
+	return model.StatusActive
+}
+
 func (m *App) safeToAutoPull() bool {
 	return m.appMode == modeNormal
 }
 
 // --- Commands ---
 
-func fetchProjectsCmd(b backend.Backend) tea.Cmd {
+// fetchProjectsCmd loads the project pane. The status filter is threaded through
+// rather than read from the model because every refresh runs as a command off
+// the model's goroutine, and a toggle mid-flight would otherwise decide which
+// list a already-issued fetch returns.
+func fetchProjectsCmd(b backend.Backend, status string) tea.Cmd {
 	return func() tea.Msg {
-		projects, err := b.ListProjects()
+		projects, err := b.ListProjectsByStatus(status)
 		if err != nil {
 			return errMsg{err}
 		}
 		return projectsMsg(projects)
+	}
+}
+
+// setProjectStatusCmd runs a project transition. A drop without a reason is
+// refused by the backend, so the flash carries that message rather than the
+// caller pre-checking it.
+func setProjectStatusCmd(b backend.Backend, id, status string, reason *string) tea.Cmd {
+	return func() tea.Msg {
+		if _, err := b.SetProjectStatus(id, status, reason); err != nil {
+			return errMsg{err}
+		}
+		return projectUpdatedMsg{}
 	}
 }
 
@@ -917,13 +944,13 @@ func (m *App) groupHeaderAt(idx int) string {
 func (m *App) Init() tea.Cmd {
 	if m.syncEngine != nil {
 		return tea.Batch(
-			fetchProjectsCmd(m.backend),
+			fetchProjectsCmd(m.backend, m.projectStatusFilter()),
 			syncPullCmd(m.syncEngine, false),
 			syncStatusTickCmd(m.syncEngine),
 			syncPullTickCmd(m.syncInterval),
 		)
 	}
-	return fetchProjectsCmd(m.backend)
+	return fetchProjectsCmd(m.backend, m.projectStatusFilter())
 }
 
 func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -994,7 +1021,7 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case itemCreatedMsg:
 		flashCmd := m.flash("Item created")
-		return m, tea.Batch(fetchProjectsCmd(m.backend), flashCmd)
+		return m, tea.Batch(fetchProjectsCmd(m.backend, m.projectStatusFilter()), flashCmd)
 
 	case itemUpdatedMsg:
 		var flashCmd tea.Cmd
@@ -1003,27 +1030,27 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.appMode == modeItemDetail && m.itemDetail != nil {
 			return m, tea.Batch(
-				fetchProjectsCmd(m.backend),
+				fetchProjectsCmd(m.backend, m.projectStatusFilter()),
 				fetchItemDetailCmd(m.backend, m.itemDetail.ID, m.blockedSet[m.itemDetail.ID]),
 				flashCmd,
 			)
 		}
-		return m, tea.Batch(fetchProjectsCmd(m.backend), flashCmd)
+		return m, tea.Batch(fetchProjectsCmd(m.backend, m.projectStatusFilter()), flashCmd)
 
 	case projectCreatedMsg:
 		flashCmd := m.flash("Project created")
-		return m, tea.Batch(fetchProjectsCmd(m.backend), flashCmd)
+		return m, tea.Batch(fetchProjectsCmd(m.backend, m.projectStatusFilter()), flashCmd)
 
 	case projectUpdatedMsg:
 		flashCmd := m.flash("Project updated")
 		if m.appMode == modeProjectDetail && m.projectDetail != nil {
 			return m, tea.Batch(
-				fetchProjectsCmd(m.backend),
+				fetchProjectsCmd(m.backend, m.projectStatusFilter()),
 				fetchProjectDetailCmd(m.backend, m.projectDetail.ID),
 				flashCmd,
 			)
 		}
-		return m, tea.Batch(fetchProjectsCmd(m.backend), flashCmd)
+		return m, tea.Batch(fetchProjectsCmd(m.backend, m.projectStatusFilter()), flashCmd)
 
 	case projectDetailMsg:
 		m.projectDetail = msg.project
@@ -1032,7 +1059,7 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case undoResultMsg:
 		flashCmd := m.flash(fmt.Sprintf("Undo: %s", string(msg)))
-		return m, tea.Batch(fetchProjectsCmd(m.backend), flashCmd)
+		return m, tea.Batch(fetchProjectsCmd(m.backend, m.projectStatusFilter()), flashCmd)
 
 	case itemDetailMsg:
 		// Preserve the cursor when the overlay is already open (so
@@ -1069,12 +1096,12 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.returnMode == modeItemDetail && m.itemDetail != nil {
 			m.appMode = modeItemDetail
 			return m, tea.Batch(
-				fetchProjectsCmd(m.backend),
+				fetchProjectsCmd(m.backend, m.projectStatusFilter()),
 				fetchItemDetailCmd(m.backend, m.itemDetail.ID, m.blockedSet[m.itemDetail.ID]),
 				flashCmd,
 			)
 		}
-		return m, tea.Batch(fetchProjectsCmd(m.backend), flashCmd)
+		return m, tea.Batch(fetchProjectsCmd(m.backend, m.projectStatusFilter()), flashCmd)
 
 	case searchResultsMsg:
 		m.searchResults = msg
@@ -1110,7 +1137,7 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case projectReorderedMsg:
 		flashCmd := m.flash("Project reordered")
-		return m, tea.Batch(fetchProjectsCmd(m.backend), flashCmd)
+		return m, tea.Batch(fetchProjectsCmd(m.backend, m.projectStatusFilter()), flashCmd)
 
 	case depCandidatesMsg:
 		// Filter out the item itself from each group
@@ -1147,11 +1174,11 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case depLinkedMsg:
 		flashCmd := m.flash("Dependency linked")
-		return m, tea.Batch(fetchProjectsCmd(m.backend), flashCmd)
+		return m, tea.Batch(fetchProjectsCmd(m.backend, m.projectStatusFilter()), flashCmd)
 
 	case depUnlinkedMsg:
 		flashCmd := m.flash("Dependency unlinked")
-		return m, tea.Batch(fetchProjectsCmd(m.backend), flashCmd)
+		return m, tea.Batch(fetchProjectsCmd(m.backend, m.projectStatusFilter()), flashCmd)
 
 	case clearStatusMsg:
 		m.statusMsg = ""
@@ -1171,9 +1198,9 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case syncPullDoneMsg:
 		if !msg.manual {
-			return m, fetchProjectsCmd(m.backend)
+			return m, fetchProjectsCmd(m.backend, m.projectStatusFilter())
 		}
-		return m, tea.Batch(fetchProjectsCmd(m.backend), m.flash("Synced with server"))
+		return m, tea.Batch(fetchProjectsCmd(m.backend, m.projectStatusFilter()), m.flash("Synced with server"))
 
 	case syncPullErrMsg:
 		// An automatic pull failing is not an error the user did anything to
@@ -1218,7 +1245,7 @@ func (m *App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleNotesKey(msg)
 	case modeProjectDetail:
 		return m.handleProjectDetailKey(msg)
-	case modeEditProjectName:
+	case modeEditProjectName, modeDropProject:
 		return m.handleInputKey(msg)
 	case modeHelp:
 		return m.handleHelpKey(msg)
@@ -1410,6 +1437,22 @@ func (m *App) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 		return m, nil
+
+	case "C":
+		if m.activePane != projectPane {
+			return m, nil
+		}
+		m.showClosed = !m.showClosed
+		// The cursor indexes the list that is about to be replaced, and the
+		// shorter list is the one that would panic.
+		m.projectCursor = 0
+		m.projectScroll = 0
+		m.selectedProjects = nil
+		note := "Closed projects hidden"
+		if m.showClosed {
+			note = "Showing closed projects"
+		}
+		return m, tea.Batch(fetchProjectsCmd(m.backend, m.projectStatusFilter()), m.flash(note))
 
 	case "A":
 		if len(m.projects) > 0 {
@@ -1718,6 +1761,13 @@ func (m *App) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.titleInput.Blur()
 			if m.projectDetail != nil {
 				return m, updateProjectCmd(m.backend, m.projectDetail.ID, model.UpdateProject{Name: &value})
+			}
+
+		case modeDropProject:
+			m.appMode = m.returnMode
+			m.titleInput.Blur()
+			if m.projectDetail != nil {
+				return m, setProjectStatusCmd(m.backend, m.projectDetail.ID, model.StatusDropped, &value)
 			}
 		}
 
@@ -2044,6 +2094,34 @@ func (m *App) handleProjectDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.returnMode = modeProjectDetail
 		m.appMode = modeEditProjectDesc
 		return m, cmd
+
+	case "c":
+		if model.IsTerminalStatus(m.projectDetail.Status) {
+			flashCmd := m.flash("Already closed — r reopens it")
+			return m, flashCmd
+		}
+		return m, setProjectStatusCmd(m.backend, m.projectDetail.ID, model.StatusDone, nil)
+
+	case "x":
+		if model.IsTerminalStatus(m.projectDetail.Status) {
+			flashCmd := m.flash("Already closed — r reopens it")
+			return m, flashCmd
+		}
+		// A reason is required, so dropping is a prompt rather than a keypress:
+		// "deferred" invites the same idea back, "dropped, and here is why" does not.
+		m.titleInput.SetValue("")
+		m.titleInput.Placeholder = "Why dropped rather than deferred?"
+		cmd := m.titleInput.Focus()
+		m.returnMode = modeProjectDetail
+		m.appMode = modeDropProject
+		return m, cmd
+
+	case "r":
+		if !model.IsTerminalStatus(m.projectDetail.Status) {
+			flashCmd := m.flash("Already active")
+			return m, flashCmd
+		}
+		return m, setProjectStatusCmd(m.backend, m.projectDetail.ID, model.StatusActive, nil)
 	}
 
 	return m, nil
@@ -2234,7 +2312,7 @@ func (m *App) handleMoveProjectKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "esc":
 		m.appMode = modeNormal
-		return m, fetchProjectsCmd(m.backend)
+		return m, fetchProjectsCmd(m.backend, m.projectStatusFilter())
 	}
 
 	return m, nil
@@ -2469,7 +2547,7 @@ func (m *App) View() string {
 	}
 
 	switch m.appMode {
-	case modeAddItem, modeAddItemMulti, modeAddProject, modeAddTask, modeEditTitle, modeEditProjectName:
+	case modeAddItem, modeAddItemMulti, modeAddProject, modeAddTask, modeEditTitle, modeEditProjectName, modeDropProject:
 		overlay := m.renderInputOverlay()
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, overlay)
 	case modeProjectPicker:
@@ -2530,6 +2608,15 @@ func (m *App) View() string {
 	return lipgloss.JoinVertical(lipgloss.Left, panes, statusBar)
 }
 
+// projectName names the overlay's project, or nothing when the overlay opened
+// without one — a prompt is not worth a nil check at every call site.
+func projectName(p *model.ProjectWithItemCount) string {
+	if p == nil {
+		return ""
+	}
+	return p.Name
+}
+
 func (m *App) renderInputOverlay() string {
 	var prompt string
 	switch m.appMode {
@@ -2545,6 +2632,8 @@ func (m *App) renderInputOverlay() string {
 		prompt = "Edit title"
 	case modeEditProjectName:
 		prompt = "Edit project name"
+	case modeDropProject:
+		prompt = fmt.Sprintf("Drop %q — why, rather than deferring it?", truncate(projectName(m.projectDetail), 40))
 	}
 
 	var lines []string
@@ -2711,6 +2800,16 @@ func (m *App) renderProjectDetailOverlay() string {
 		dimStyle.Render(fmt.Sprintf("%d items", p.ItemCount)),
 	))
 	lines = append(lines, dimStyle.Render(fmt.Sprintf("  Created: %s", p.CreatedAt.Format("Jan 2, 2006"))))
+	if model.IsTerminalStatus(p.Status) {
+		closed := p.Status
+		if p.ClosedAt != nil {
+			closed += " " + p.ClosedAt.Format("Jan 2, 2006")
+		}
+		lines = append(lines, dimStyle.Render("  "+closed))
+		if p.StatusReason != nil && *p.StatusReason != "" {
+			lines = append(lines, dimStyle.Render("  Reason: "+*p.StatusReason))
+		}
+	}
 
 	if p.Description != nil && *p.Description != "" {
 		lines = append(lines, "")
@@ -2721,7 +2820,11 @@ func (m *App) renderProjectDetailOverlay() string {
 	}
 
 	lines = append(lines, "")
-	lines = append(lines, dimStyle.Render("  [e]dit name  [d]escription  [Esc]close"))
+	actions := "  [e]dit name  [d]escription  [c]omplete  dro[x]  [Esc]close"
+	if model.IsTerminalStatus(p.Status) {
+		actions = "  [e]dit name  [d]escription  [r]eopen  [Esc]close"
+	}
+	lines = append(lines, dimStyle.Render(actions))
 
 	content := strings.Join(lines, "\n")
 
@@ -2798,8 +2901,14 @@ func (m *App) renderHelpOverlay() string {
   Enter          Project detail
   a              Add project
   m              Move/reorder project
+  C              Show/hide closed projects
   space          Toggle multi-select
-  Esc            Clear selections`
+  Esc            Clear selections
+
+  In project detail
+  c              Complete project
+  x              Drop project (asks why)
+  r              Reopen a closed project`
 		lines = append(lines, actions)
 	} else {
 		actions := `
@@ -3102,6 +3211,11 @@ func (m *App) renderProjectPane(width, height int) string {
 				name = "● " + name
 			}
 			body := fmt.Sprintf("%s (%d)", name, p.ItemCount)
+			// Only while closed projects are on show: every row reads "active"
+			// otherwise, which spends width to say nothing.
+			if m.showClosed && model.IsTerminalStatus(p.Status) {
+				body = fmt.Sprintf("%s [%s] (%d)", name, p.Status, p.ItemCount)
+			}
 
 			var line string
 			if isMoving {
