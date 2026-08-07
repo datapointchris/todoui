@@ -103,14 +103,14 @@ func rootCmd() *cobra.Command {
 				return fmt.Errorf("opening database: %w", err)
 			}
 			database = d
-			local := backend.NewLocalBackend(d)
 
 			if cfg.Sync.Enabled {
+				local := backend.NewLocalBackend(d)
 				syncEngine = sync.New(d, cfg.Sync.APIURL, cfg.Sync.APIKey)
 				syncEngine.Start()
 				b = sync.NewSyncBackend(local, syncEngine)
 			} else {
-				b = local
+				b = backend.NewLocalBackend(d, backend.AssigningItemNumbers())
 			}
 
 			refreshForCLI(cmd, syncEngine, noSync, cfg.Sync.Interval)
@@ -168,7 +168,11 @@ func rootCmd() *cobra.Command {
 		},
 	})
 
-	cli.RegisterAll(root, &b)
+	cli.RegisterAll(root, &b, func() {
+		if syncEngine != nil {
+			syncEngine.Flush()
+		}
+	})
 
 	return root
 }

@@ -25,6 +25,14 @@ type Engine struct {
 	status    SyncStatus
 	syncDepth int
 
+	// drainMu serializes drainPendingOps. It reads the oldest queued op, pushes
+	// it, and only then deletes it, so two drains at once both read the same op
+	// and both push it — a 201 followed by a 409 for every create, with the
+	// server burning an item number on the insert that lost. Two can overlap
+	// easily: Notify wakes the push loop on the same mutation that a caller then
+	// flushes for, and the retry ticker fires regardless of either.
+	drainMu gosync.Mutex
+
 	pushCh        chan struct{}
 	retryInterval time.Duration
 	ctx           context.Context
@@ -197,6 +205,17 @@ func (e *Engine) pushLoop() {
 	}
 }
 
+// Flush drains the queue now instead of waiting for the push loop, and returns
+// once it is empty or the network refused it.
+//
+// The CLI calls it after a create so the command can print the number the
+// server just assigned. Nothing is lost when the API is unreachable: the op
+// stays queued exactly as it would have, and the item keeps its UUID tail as a
+// handle until a later push or pull earns it a number.
+func (e *Engine) Flush() {
+	e.retryPendingOps()
+}
+
 // retryPendingOps drains only when something is actually queued. An unconditional
 // drain would report Connected on an empty queue without having reached the
 // network, clearing a pull failure the status bar should still be showing.
@@ -209,6 +228,9 @@ func (e *Engine) retryPendingOps() {
 }
 
 func (e *Engine) drainPendingOps() {
+	e.drainMu.Lock()
+	defer e.drainMu.Unlock()
+
 	e.beginSync()
 	defer e.endSync()
 

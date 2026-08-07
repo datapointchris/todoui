@@ -173,3 +173,66 @@ func TestResolveTaskIDIsScopedToItsItem(t *testing.T) {
 		t.Error("a task must not resolve against an item it does not belong to")
 	}
 }
+
+// The number is what commands print now, so it is the first thing that has to
+// resolve back.
+func TestResolveItemIDAcceptsTheNumber(t *testing.T) {
+	b := newNumberingTestBackend(t)
+	project, err := b.CreateProject(model.CreateProject{Name: "work"})
+	if err != nil {
+		t.Fatalf("creating project: %v", err)
+	}
+	first, err := b.CreateItem(model.CreateProjectItem{Title: "first", ProjectIDs: []string{project.ID}})
+	if err != nil {
+		t.Fatalf("creating item: %v", err)
+	}
+	second, err := b.CreateItem(model.CreateProjectItem{Title: "second", ProjectIDs: []string{project.ID}})
+	if err != nil {
+		t.Fatalf("creating item: %v", err)
+	}
+
+	resolved, err := resolveItemID(b, itemHandle(second.ProjectItem))
+	if err != nil {
+		t.Fatalf("resolving the number the CLI printed: %v", err)
+	}
+	if resolved != second.ID {
+		t.Errorf("expected %q, got %q", second.ID, resolved)
+	}
+
+	// And the older form keeps working, because ids already written down have to.
+	if resolved, err := resolveItemID(b, shortID(first.ID)); err != nil || resolved != first.ID {
+		t.Errorf("resolveItemID(suffix) = %q, %v; want %q, nil", resolved, err, first.ID)
+	}
+}
+
+// An item created while the API was unreachable has no number, and the tail is
+// the only handle it has until the push lands.
+func TestItemHandleFallsBackToTheTailBeforeTheNumberArrives(t *testing.T) {
+	b := newTestBackend(t)
+	project, err := b.CreateProject(model.CreateProject{Name: "work"})
+	if err != nil {
+		t.Fatalf("creating project: %v", err)
+	}
+	item, err := b.CreateItem(model.CreateProjectItem{Title: "unnumbered", ProjectIDs: []string{project.ID}})
+	if err != nil {
+		t.Fatalf("creating item: %v", err)
+	}
+
+	handle := itemHandle(item.ProjectItem)
+	if handle != shortID(item.ID) {
+		t.Errorf("handle = %q, want the UUID tail %q", handle, shortID(item.ID))
+	}
+	if _, err := resolveItemID(b, handle); err != nil {
+		t.Errorf("the handle a command printed must resolve: %v", err)
+	}
+}
+
+func newNumberingTestBackend(t *testing.T) backend.Backend {
+	t.Helper()
+	database, err := db.Open(":memory:")
+	if err != nil {
+		t.Fatalf("opening test db: %v", err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	return backend.NewLocalBackend(database, backend.AssigningItemNumbers())
+}

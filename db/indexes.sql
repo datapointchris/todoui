@@ -14,3 +14,10 @@ CREATE INDEX IF NOT EXISTS idx_deps_depends ON project_item_dependencies(depends
 CREATE INDEX IF NOT EXISTS idx_tasks_item ON project_item_tasks(item_id);
 
 CREATE INDEX IF NOT EXISTS idx_undo_recent ON undo_log(created_at DESC);
+
+-- SQLite allows any number of NULLs in a unique index, which is what lets an
+-- item wait for its number without colliding with every other item doing the
+-- same. Declared here rather than in schema.sql because ALTER TABLE ADD COLUMN
+-- cannot carry a UNIQUE constraint, so this is the only form that reaches an
+-- existing database too.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_items_number ON project_items(number);

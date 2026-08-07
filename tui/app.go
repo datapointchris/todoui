@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -90,13 +91,14 @@ type App struct {
 	moveProjectPos int
 
 	// Dependency linking
-	depItems     []model.ProjectItem // flat list of selectable items (filtered view)
-	depAllItems  []depGroup          // all items grouped by project (source of truth)
-	depCursor    int
-	depItemID    string
-	depItemName  string
-	depFilter    textinput.Model
-	depFiltering bool // true when typing in filter input
+	depItems      []model.ProjectItem // flat list of selectable items (filtered view)
+	depAllItems   []depGroup          // all items grouped by project (source of truth)
+	depCursor     int
+	depItemID     string
+	depItemName   string
+	depItemHandle string
+	depFilter     textinput.Model
+	depFiltering  bool // true when typing in filter input
 
 	// All Items view
 	showingAll       bool            // true when the "All" pseudo-project is selected
@@ -267,9 +269,21 @@ func (m *App) flash(msg string) tea.Cmd {
 	})
 }
 
-// shortID returns the last 8 characters of a UUID for display. UUIDv7 front-loads
-// the 48-bit millisecond timestamp, so any prefix is identical for everything
-// created in the same ~65s window. The entropy is in the tail.
+// itemHandle names an item the way it is typed on the command line: its number,
+// or the UUID tail while it is still waiting for one. An item created here
+// while the API was unreachable has no number until its create is pushed, and
+// showing nothing in that window would leave the row unnameable.
+func itemHandle(item model.ProjectItem) string {
+	if item.Number != nil {
+		return strconv.Itoa(*item.Number)
+	}
+	return shortID(item.ID)
+}
+
+// shortID returns the last 8 characters of a UUID for display. Projects and
+// tasks have no number of their own, so it is still their handle. UUIDv7
+// front-loads the 48-bit millisecond timestamp, so any prefix is identical for
+// everything created in the same ~65s window. The entropy is in the tail.
 func shortID(id string) string {
 	if len(id) >= 8 {
 		return id[len(id)-8:]
@@ -1619,6 +1633,7 @@ func (m *App) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			item := m.currentItem()
 			m.depItemID = item.ID
 			m.depItemName = item.Title
+			m.depItemHandle = itemHandle(item.ProjectItem)
 			return m, fetchDepCandidatesCmd(m.backend, m.projects)
 		}
 		return m, nil
@@ -1632,6 +1647,7 @@ func (m *App) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			item := m.currentItem()
 			m.depItemID = item.ID
 			m.depItemName = item.Title
+			m.depItemHandle = itemHandle(item.ProjectItem)
 			return m, fetchDepBlockersCmd(m.backend, item.ID)
 		}
 		return m, nil
@@ -1938,6 +1954,7 @@ func (m *App) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.depItemID = m.itemDetail.ID
 		m.depItemName = m.itemDetail.Title
+		m.depItemHandle = itemHandle(m.itemDetail.ProjectItem)
 		return m, fetchDepCandidatesCmd(m.backend, m.projects)
 
 	case "B":
@@ -1947,6 +1964,7 @@ func (m *App) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.depItemID = m.itemDetail.ID
 		m.depItemName = m.itemDetail.Title
+		m.depItemHandle = itemHandle(m.itemDetail.ProjectItem)
 		return m, fetchDepBlockersCmd(m.backend, m.itemDetail.ID)
 
 	case "t":
@@ -2555,7 +2573,7 @@ func (m *App) renderDetailOverlay() string {
 		return ""
 	}
 
-	header := overlayTitleStyle.Render(fmt.Sprintf("Item %s", shortID(d.ID)))
+	header := overlayTitleStyle.Render(fmt.Sprintf("Item %s", itemHandle(d.ProjectItem)))
 
 	status := "○ incomplete"
 	if d.Completed {
@@ -2616,7 +2634,7 @@ func (m *App) renderDetailOverlay() string {
 				}
 			}
 			lines = append(lines, blockerStyle.Render(
-				fmt.Sprintf("○ %s%s (%s)", prefix, b.Title, shortID(b.ID)),
+				fmt.Sprintf("○ %s%s (%s)", prefix, b.Title, itemHandle(b)),
 			))
 		}
 	}
@@ -2726,9 +2744,9 @@ func (m *App) renderNotesOverlay() string {
 	} else {
 		title = "Edit Notes"
 		if m.itemDetail != nil {
-			subtitle = fmt.Sprintf("  Item: %s (%s)", m.itemDetail.Title, shortID(m.itemDetail.ID))
+			subtitle = fmt.Sprintf("  Item: %s (%s)", m.itemDetail.Title, itemHandle(m.itemDetail.ProjectItem))
 		} else if item := m.currentItem(); item != nil {
-			subtitle = fmt.Sprintf("  Item: %s (%s)", item.Title, shortID(item.ID))
+			subtitle = fmt.Sprintf("  Item: %s (%s)", item.Title, itemHandle(item.ProjectItem))
 		}
 	}
 
@@ -2840,7 +2858,7 @@ func (m *App) renderSearchOverlay() string {
 		if item.Completed {
 			status = "✓"
 		}
-		line := fmt.Sprintf("%s %s  %s", status, item.Title, itemIDStyle.Render(shortID(item.ID)))
+		line := fmt.Sprintf("%s %s  %s", status, item.Title, itemIDStyle.Render(itemHandle(item)))
 		if !m.searchFocused && i == m.searchCursor {
 			line = searchResultSelectedStyle.Render("> " + line)
 		} else {
@@ -2868,9 +2886,9 @@ func (m *App) renderSearchOverlay() string {
 func (m *App) renderDepLinkOverlay() string {
 	var header string
 	if m.appMode == modeDepUnlink {
-		header = fmt.Sprintf("Unlink dependency from: %s (%s)", m.depItemName, shortID(m.depItemID))
+		header = fmt.Sprintf("Unlink dependency from: %s (%s)", m.depItemName, m.depItemHandle)
 	} else {
-		header = fmt.Sprintf("Link dependency for: %s (%s)", m.depItemName, shortID(m.depItemID))
+		header = fmt.Sprintf("Link dependency for: %s (%s)", m.depItemName, m.depItemHandle)
 	}
 
 	var lines []string
@@ -2936,7 +2954,7 @@ func (m *App) renderDepLinkOverlay() string {
 					if item.Completed {
 						status = "✓"
 					}
-					line := fmt.Sprintf("%s %s  %s", status, item.Title, itemIDStyle.Render(shortID(item.ID)))
+					line := fmt.Sprintf("%s %s  %s", status, item.Title, itemIDStyle.Render(itemHandle(item)))
 					if flatIdx == m.depCursor {
 						line = pickerSelectedStyle.Render("> " + line)
 					} else {
@@ -2955,7 +2973,7 @@ func (m *App) renderDepLinkOverlay() string {
 				if item.Completed {
 					status = "✓"
 				}
-				line := fmt.Sprintf("%s %s  %s", status, item.Title, itemIDStyle.Render(shortID(item.ID)))
+				line := fmt.Sprintf("%s %s  %s", status, item.Title, itemIDStyle.Render(itemHandle(item)))
 				if i == m.depCursor {
 					line = pickerSelectedStyle.Render("> " + line)
 				} else {
@@ -3248,7 +3266,7 @@ func (m *App) renderItemPane(width, height int) string {
 					}
 				}
 				lines = append(lines, blockerStyle.Render(
-					fmt.Sprintf("└─ blocked by: %s%s (%s)", prefix, b.Title, shortID(b.ID)),
+					fmt.Sprintf("└─ blocked by: %s%s (%s)", prefix, b.Title, itemHandle(b)),
 				))
 				linesUsed++
 			}
@@ -3316,7 +3334,7 @@ func (m *App) renderItemLine(item model.ProjectItemInProject, selected bool, wid
 		taskIndicator = fmt.Sprintf(" [%d/%d]", tc[0], tc[1])
 	}
 
-	idText := shortID(item.ID)
+	idText := itemHandle(item.ProjectItem)
 
 	var content string
 	if item.Completed {

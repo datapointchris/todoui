@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	goSync "sync"
 	"testing"
@@ -30,7 +31,9 @@ func newTestApp(t *testing.T, width, height int, itemTitles ...string) *App {
 	}
 	t.Cleanup(func() { _ = database.Close() })
 
-	b := backend.NewLocalBackend(database)
+	// AssigningItemNumbers because the harness passes a nil sync engine, which
+	// is the sync-off case: nothing upstream will number these items.
+	b := backend.NewLocalBackend(database, backend.AssigningItemNumbers())
 	project, err := b.CreateProject(model.CreateProject{Name: "work"})
 	if err != nil {
 		t.Fatalf("creating project: %v", err)
@@ -343,5 +346,29 @@ func TestSyncTickReconcilesWithTheServer(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("pulled project never reached the rendered model: %v", app.projects)
+	}
+}
+
+// The row is where the handle has to be legible: the id column was 8 characters
+// of hex tail, which resolves but which nobody can read back off the screen.
+func TestItemRowShowsTheNumber(t *testing.T) {
+	app := newTestApp(t, 100, 30, "First item", "Second item")
+
+	view := app.View()
+
+	items, err := app.backend.ListAllItems()
+	if err != nil {
+		t.Fatalf("listing items: %v", err)
+	}
+	for _, item := range items {
+		if item.Number == nil {
+			t.Fatalf("item %q has no number in a sync-off database", item.Title)
+		}
+		if !strings.Contains(view, strconv.Itoa(*item.Number)) {
+			t.Errorf("view is missing the handle %d for %q", *item.Number, item.Title)
+		}
+		if strings.Contains(view, shortID(item.ID)) {
+			t.Errorf("view still shows the UUID tail %s for %q", shortID(item.ID), item.Title)
+		}
 	}
 }

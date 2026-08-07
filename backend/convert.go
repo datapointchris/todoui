@@ -78,6 +78,7 @@ func toModelProjectWithItemCountFromGet(row generated.GetProjectWithItemCountRow
 func toModelProjectItem(pi generated.ProjectItem) model.ProjectItem {
 	item := model.ProjectItem{
 		ID:        pi.ID,
+		Number:    nullInt64ToIntPtr(pi.Number),
 		Title:     pi.Title,
 		Completed: pi.Completed != 0,
 		Archived:  pi.Archived != 0,
@@ -104,6 +105,7 @@ func toModelProjectItems(pis []generated.ProjectItem) []model.ProjectItem {
 func toModelProjectItemInProject(row generated.ListItemsByProjectRow) model.ProjectItemInProject {
 	item := model.ProjectItem{
 		ID:        row.ID,
+		Number:    nullInt64ToIntPtr(row.Number),
 		Title:     row.Title,
 		Completed: row.Completed != 0,
 		Archived:  row.Archived != 0,
@@ -126,6 +128,7 @@ func toModelProjectItemInProject(row generated.ListItemsByProjectRow) model.Proj
 func toModelProjectItemInProjectFromArchived(row generated.ListArchivedItemsRow) model.ProjectItemInProject {
 	item := model.ProjectItem{
 		ID:        row.ID,
+		Number:    nullInt64ToIntPtr(row.Number),
 		Title:     row.Title,
 		Completed: row.Completed != 0,
 		Archived:  row.Archived != 0,
@@ -178,4 +181,15 @@ func boolToInt64(b *bool) int64 {
 		return 0
 	}
 	return 1
+}
+
+// nullInt64ToIntPtr converts a nullable number column to the model's optional
+// int. Null means the item has not been given a number yet, which is different
+// from having the number zero.
+func nullInt64ToIntPtr(n sql.NullInt64) *int {
+	if !n.Valid {
+		return nil
+	}
+	v := int(n.Int64)
+	return &v
 }

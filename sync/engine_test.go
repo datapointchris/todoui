@@ -837,3 +837,116 @@ func TestPull_FallsBackWhenTheServerOmitsEmbeddedFields(t *testing.T) {
 		t.Errorf("fallback lost the item's dependencies: %v", blockers)
 	}
 }
+
+// The number is what a caller prints and types, and the create response is the
+// first place it exists. Waiting for the next pull would leave the item unnamed
+// for up to a full sync interval after the command that made it returned.
+func TestPush_RecordsTheNumberTheServerAssigned(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/project-items/" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"number": 231}`))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("{}"))
+	})
+	sb, engine := setupSync(t, handler)
+
+	p, _ := sb.CreateProject(model.CreateProject{Name: "Numbered"})
+	item, err := sb.CreateItem(model.CreateProjectItem{Title: "Earns a number", ProjectIDs: []string{p.ID}})
+	if err != nil {
+		t.Fatalf("CreateItem: %v", err)
+	}
+	if item.Number != nil {
+		t.Fatalf("Number = %d before the push, want nil", *item.Number)
+	}
+
+	engine.Flush()
+
+	pushed, err := sb.GetItem(item.ID)
+	if err != nil {
+		t.Fatalf("GetItem: %v", err)
+	}
+	if pushed.Number == nil {
+		t.Fatal("Number is still nil after the push — the create response was discarded")
+	}
+	if *pushed.Number != 231 {
+		t.Errorf("Number = %d, want 231", *pushed.Number)
+	}
+}
+
+// A create that reached the server is applied whether or not its response
+// decodes. Failing here would re-queue it and file the item twice.
+func TestPush_AnUndecodableCreateResponseIsNotAFailure(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/project-items/" {
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte("not json"))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("{}"))
+	})
+	sb, engine := setupSync(t, handler)
+
+	p, _ := sb.CreateProject(model.CreateProject{Name: "Garbled"})
+	item, err := sb.CreateItem(model.CreateProjectItem{Title: "Still filed once", ProjectIDs: []string{p.ID}})
+	if err != nil {
+		t.Fatalf("CreateItem: %v", err)
+	}
+
+	engine.Flush()
+
+	if pending := engine.Status().PendingCount; pending != 0 {
+		t.Errorf("pending ops = %d, want 0 — the create landed and must not be retried", pending)
+	}
+	stored, err := sb.GetItem(item.ID)
+	if err != nil {
+		t.Fatalf("GetItem: %v", err)
+	}
+	if stored.Number != nil {
+		t.Errorf("Number = %d, want nil — the next pull supplies it", *stored.Number)
+	}
+}
+
+// Two drains overlapping pushed the same queued op twice — a 201 followed by a
+// 409, and a server-side item number burned on the insert that lost the race.
+// Notify wakes the push loop on the same mutation a caller then flushes for, so
+// the overlap happens on an ordinary create rather than under contrived load.
+func TestPush_AQueuedCreateIsPushedExactlyOnce(t *testing.T) {
+	var mu goSync.Mutex
+	creates := 0
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/project-items/" {
+			mu.Lock()
+			creates++
+			mu.Unlock()
+			time.Sleep(20 * time.Millisecond)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"number": 9}`))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("{}"))
+	})
+	sb, engine := setupSync(t, handler)
+
+	p, _ := sb.CreateProject(model.CreateProject{Name: "Once"})
+	if _, err := sb.CreateItem(model.CreateProjectItem{Title: "Pushed once", ProjectIDs: []string{p.ID}}); err != nil {
+		t.Fatalf("CreateItem: %v", err)
+	}
+
+	// The create already woke the push loop; flushing races a drain that is
+	// very likely still in flight.
+	engine.Flush()
+	time.Sleep(300 * time.Millisecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if creates != 1 {
+		t.Errorf("POST /project-items/ called %d times, want exactly 1", creates)
+	}
+}

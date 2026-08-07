@@ -53,9 +53,18 @@ ORDER BY m.position, pi.created_at;
 SELECT * FROM project_items WHERE id = ?;
 
 -- name: CreateItem :one
-INSERT INTO project_items (id, title, notes, repo)
-VALUES (?, ?, ?, ?)
+INSERT INTO project_items (id, number, title, notes, repo)
+VALUES (?, ?, ?, ?, ?)
 RETURNING *;
+
+-- Only used when sync is off and this database assigns its own numbers. With
+-- sync on the server is the authority and this would hand out a number it is
+-- about to disagree with.
+-- name: NextItemNumber :one
+SELECT COALESCE(MAX(number), 0) + 1 FROM project_items;
+
+-- name: SetItemNumber :exec
+UPDATE project_items SET number = ? WHERE id = ?;
 
 -- name: UpdateItem :one
 UPDATE project_items
@@ -231,9 +240,10 @@ ON CONFLICT(id) DO UPDATE SET
     position = excluded.position;
 
 -- name: UpsertItem :exec
-INSERT INTO project_items (id, title, notes, repo, completed, archived, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO project_items (id, number, title, notes, repo, completed, archived, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
+    number = excluded.number,
     title = excluded.title,
     notes = excluded.notes,
     repo = excluded.repo,

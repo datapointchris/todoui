@@ -251,3 +251,75 @@ func TestOpen_CreatesIndexes(t *testing.T) {
 		}
 	})
 }
+
+func TestMigrate_AddsNumberColumnToExistingDatabase(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("opening raw db: %v", err)
+	}
+	database.SetMaxOpenConns(1)
+
+	_, err = database.Exec(`
+		CREATE TABLE project_items (
+			id TEXT PRIMARY KEY,
+			title TEXT NOT NULL,
+			notes TEXT,
+			repo TEXT,
+			completed INTEGER NOT NULL DEFAULT 0,
+			archived INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+			updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+		);
+		INSERT INTO project_items (id, title) VALUES ('i1', 'pre-number item');
+	`)
+	if err != nil {
+		t.Fatalf("creating pre-number table: %v", err)
+	}
+
+	if err := migrate(database); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	// Deliberately not backfilled: with sync on the pull supplies every number,
+	// and with sync off the first create allocates from an empty column.
+	var number sql.NullInt64
+	var title string
+	row := database.QueryRow("SELECT title, number FROM project_items WHERE id = 'i1'")
+	if err := row.Scan(&title, &number); err != nil {
+		t.Fatalf("selecting migrated row: %v", err)
+	}
+	if title != "pre-number item" {
+		t.Errorf("existing row was disturbed: title = %q", title)
+	}
+	if number.Valid {
+		t.Errorf("number should be null for a pre-existing item, got %d", number.Int64)
+	}
+
+	if err := migrate(database); err != nil {
+		t.Fatalf("second migrate: %v", err)
+	}
+}
+
+// Several items can be waiting for a number at once, so the unique index has to
+// tolerate more than one null. SQLite does; a UNIQUE column constraint applied
+// to a backfilled column would not have been reachable by ALTER TABLE anyway.
+func TestOpen_NumberIndexAllowsManyUnnumberedItems(t *testing.T) {
+	database, err := Open(":memory:")
+	if err != nil {
+		t.Fatalf("opening database: %v", err)
+	}
+	defer func() { _ = database.Close() }()
+
+	for _, id := range []string{"a", "b", "c"} {
+		if _, err := database.Exec("INSERT INTO project_items (id, title) VALUES (?, ?)", id, id); err != nil {
+			t.Fatalf("inserting unnumbered item %s: %v", id, err)
+		}
+	}
+
+	if _, err := database.Exec("INSERT INTO project_items (id, title, number) VALUES ('d', 'd', 7)"); err != nil {
+		t.Fatalf("inserting numbered item: %v", err)
+	}
+	if _, err := database.Exec("INSERT INTO project_items (id, title, number) VALUES ('e', 'e', 7)"); err == nil {
+		t.Error("a duplicate number was accepted — the handle has to name exactly one item")
+	}
+}

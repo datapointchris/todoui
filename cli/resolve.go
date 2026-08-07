@@ -2,28 +2,40 @@ package cli
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/datapointchris/todoui/backend"
 	"github.com/datapointchris/todoui/model"
 )
 
-// Every command prints ids through shortID, so every command has to accept one
-// back. Matching is on the suffix rather than a prefix because UUIDv7
-// front-loads its millisecond timestamp — a prefix is identical for everything
-// created in the same ~65s window and would collide constantly.
-//
-// A full UUID still works, which is what makes output from one command safe to
-// paste into the next regardless of which form produced it.
+// An item is named by its number, which is what every command prints. The two
+// older forms still resolve, because ids written into a note or held by an
+// agent from before the number existed have to keep working: a full UUID, and a
+// unique suffix of one. Matching is on the suffix rather than a prefix because
+// UUIDv7 front-loads its millisecond timestamp — a prefix is identical for
+// everything created in the same ~65s window and would collide constantly.
 
-// resolveItemID turns a full UUID or a unique id suffix into a full item id.
-// Archived items are included: an archived item that cannot be named is an
-// item that cannot be unarchived.
+// resolveItemID turns an item number, a full UUID, or a unique id suffix into a
+// full item id. Archived items are included: an archived item that cannot be
+// named is an item that cannot be unarchived.
 func resolveItemID(b backend.Backend, ref string) (string, error) {
 	items, err := b.ListAllItemsIncludingArchived()
 	if err != nil {
 		return "", fmt.Errorf("listing items to resolve %q: %w", ref, err)
 	}
+
+	// A number names exactly one item, so it wins over a suffix that happens to
+	// be all digits. Falling through rather than erroring keeps an all-digit
+	// UUID tail resolvable for an item that has no number yet.
+	if number, err := strconv.Atoi(ref); err == nil {
+		for _, item := range items {
+			if item.Number != nil && *item.Number == number {
+				return item.ID, nil
+			}
+		}
+	}
+
 	ids := make([]string, len(items))
 	for i, item := range items {
 		ids[i] = item.ID

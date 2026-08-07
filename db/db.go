@@ -72,6 +72,30 @@ func migrate(db *sql.DB) error {
 	if err := migrateItemRepo(db); err != nil {
 		return err
 	}
+	if err := migrateItemNumber(db); err != nil {
+		return err
+	}
+	return nil
+}
+
+// migrateItemNumber adds project_items.number to databases created before the
+// column existed. Left null rather than backfilled: with sync on the server
+// owns the numbering and the next pull fills every row in, and with sync off
+// the first create allocates from an empty column, which starts at 1.
+//
+// The UNIQUE constraint lives in indexes.sql because ALTER TABLE ADD COLUMN
+// cannot carry one.
+func migrateItemNumber(db *sql.DB) error {
+	var name string
+	err := db.QueryRow("SELECT name FROM pragma_table_info('project_items') WHERE name = 'number'").Scan(&name)
+	if err == sql.ErrNoRows {
+		if _, err := db.Exec("ALTER TABLE project_items ADD COLUMN number INTEGER"); err != nil {
+			return fmt.Errorf("adding project_items.number: %w", err)
+		}
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("checking project_items.number: %w", err)
+	}
 	return nil
 }
 

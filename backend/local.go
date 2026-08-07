@@ -18,11 +18,32 @@ import (
 type LocalBackend struct {
 	db *sql.DB
 	q  *generated.Queries
+	// assignsItemNumbers is set when nothing upstream will hand one out, which
+	// is exactly the sync-disabled case. See AssigningItemNumbers.
+	assignsItemNumbers bool
+}
+
+// LocalOption configures a LocalBackend at construction.
+type LocalOption func(*LocalBackend)
+
+// AssigningItemNumbers makes this database the authority for item numbers.
+//
+// Pass it when sync is off — the work machine, which is never allowed to reach
+// the ichrisbirch API, so its database is a disjoint universe that no server
+// will ever number. With sync on the server assigns instead, because a number
+// guessed locally and a number assigned upstream would disagree and the handle
+// would change under a user who had already written it down.
+func AssigningItemNumbers() LocalOption {
+	return func(b *LocalBackend) { b.assignsItemNumbers = true }
 }
 
 // NewLocalBackend creates a backend that operates directly on a local SQLite database.
-func NewLocalBackend(db *sql.DB) *LocalBackend {
-	return &LocalBackend{db: db, q: generated.New(db)}
+func NewLocalBackend(db *sql.DB, opts ...LocalOption) *LocalBackend {
+	b := &LocalBackend{db: db, q: generated.New(db)}
+	for _, opt := range opts {
+		opt(b)
+	}
+	return b
 }
 
 // Compile-time check that LocalBackend implements Backend.
@@ -261,11 +282,21 @@ func (b *LocalBackend) CreateItem(input model.CreateProjectItem) (*model.Project
 	qtx := b.q.WithTx(tx)
 	ctx := b.ctx()
 
+	number := sql.NullInt64{}
+	if b.assignsItemNumbers {
+		next, err := qtx.NextItemNumber(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("allocating item number: %w", err)
+		}
+		number = sql.NullInt64{Int64: next, Valid: true}
+	}
+
 	pi, err := qtx.CreateItem(ctx, generated.CreateItemParams{
-		ID:    newID(),
-		Title: input.Title,
-		Notes: toNullString(input.Notes),
-		Repo:  repoToNullString(input.Repo),
+		ID:     newID(),
+		Number: number,
+		Title:  input.Title,
+		Notes:  toNullString(input.Notes),
+		Repo:   repoToNullString(input.Repo),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("creating item: %w", err)
@@ -970,8 +1001,13 @@ func undoProject(ctx context.Context, qtx *generated.Queries, entry generated.Un
 	return nil
 }
 
+// shortEntityID names whatever an undo entry points at. It stays the UUID tail
+// even for items, which display their number everywhere else: undoing a create
+// leaves nothing to look the number up on, so the one identifier that works for
+// every entry is the id the entry already carries.
+//
 // UUIDv7 front-loads the millisecond timestamp, so a prefix is identical for
-// everything created in the same ~65s window. Matches the CLI and TUI display.
+// everything created in the same ~65s window. The entropy is in the tail.
 func shortEntityID(id string) string {
 	if len(id) >= 8 {
 		return id[len(id)-8:]

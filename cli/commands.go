@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -15,13 +16,26 @@ import (
 // dereferences the pointer at execution time, when it's guaranteed to be set.
 type commands struct {
 	b *backend.Backend
+	// flushSync pushes what is queued and waits for the server, so a create can
+	// print the number it was just given. Nil when sync is off, where the
+	// number was assigned locally and there is nothing to wait for.
+	flushSync func()
 }
 
 func (c *commands) backend() backend.Backend { return *c.b }
 
-// RegisterAll adds all CLI subcommands to the given parent command.
-func RegisterAll(parent *cobra.Command, b *backend.Backend) {
-	c := &commands{b: b}
+// flush blocks until queued writes have reached the server, or returns straight
+// away when there is no server to reach.
+func (c *commands) flush() {
+	if c.flushSync != nil {
+		c.flushSync()
+	}
+}
+
+// RegisterAll adds all CLI subcommands to the given parent command. flushSync
+// may be nil.
+func RegisterAll(parent *cobra.Command, b *backend.Backend, flushSync func()) {
+	c := &commands{b: b, flushSync: flushSync}
 	parent.AddCommand(c.addCmd())
 	parent.AddCommand(c.doneCmd())
 	parent.AddCommand(c.reopenCmd())
@@ -80,7 +94,13 @@ func (c *commands) addCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Printf("Created item %s: %s\n", shortID(item.ID), item.Title)
+			// The number is assigned by the server, so the row has to be read
+			// back after the push to print the handle rather than the fallback.
+			c.flush()
+			if pushed, err := c.backend().GetItem(item.ID); err == nil {
+				item = pushed
+			}
+			fmt.Printf("Created item %s: %s\n", itemHandle(item.ProjectItem), item.Title)
 			for _, p := range item.Projects {
 				fmt.Printf("  → %s\n", p.Name)
 			}
@@ -116,7 +136,7 @@ func (c *commands) completionCmd(use, short string, completed bool, verb string)
 			if err != nil {
 				return err
 			}
-			fmt.Printf("%s: %s %s\n", verb, shortID(item.ID), item.Title)
+			fmt.Printf("%s: %s %s\n", verb, itemHandle(*item), item.Title)
 			return nil
 		},
 	}
@@ -175,7 +195,7 @@ func (c *commands) archivalCmd(use, short string, archived bool, verb string) *c
 			if err != nil {
 				return err
 			}
-			fmt.Printf("%s: %s %s\n", verb, shortID(item.ID), item.Title)
+			fmt.Printf("%s: %s %s\n", verb, itemHandle(*item), item.Title)
 			return nil
 		},
 	}
@@ -210,7 +230,7 @@ func (c *commands) reorderCmd() *cobra.Command {
 			if err := b.ReorderItem(itemID, projectID, position); err != nil {
 				return err
 			}
-			fmt.Printf("Moved %s to position %d in %s\n", shortID(itemID), position, project)
+			fmt.Printf("Moved %s to position %d in %s\n", itemHandleByID(b, itemID), position, project)
 			return nil
 		},
 	}
@@ -305,7 +325,7 @@ func (c *commands) editCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Printf("Updated %s: %s\n", shortID(item.ID), item.Title)
+			fmt.Printf("Updated %s: %s\n", itemHandle(*item), item.Title)
 			return nil
 		},
 	}
@@ -356,7 +376,7 @@ func (c *commands) deleteCmd() *cobra.Command {
 			if err := c.backend().DeleteItem(item.ID); err != nil {
 				return err
 			}
-			fmt.Printf("Deleted %s: %s\n", shortID(item.ID), item.Title)
+			fmt.Printf("Deleted %s: %s\n", itemHandle(item.ProjectItem), item.Title)
 			return nil
 		},
 	}
@@ -435,6 +455,28 @@ func (c *commands) projectsCreateCmd() *cobra.Command {
 
 // --- helpers ---
 
+// itemHandle names an item the way a person types it. The number is the handle;
+// the UUID tail is what an item has to answer to in the window between being
+// created offline and the push that earns it one. Both resolve, so a handle
+// printed before the number arrives keeps working after it does.
+func itemHandle(item model.ProjectItem) string {
+	if item.Number != nil {
+		return strconv.Itoa(*item.Number)
+	}
+	return shortID(item.ID)
+}
+
+// itemHandleByID is itemHandle for the write paths that thread an id rather
+// than the row. The lookup is one indexed read on a command that has already
+// resolved and mutated the item.
+func itemHandleByID(b backend.Backend, id string) string {
+	if item, err := b.GetItem(id); err == nil {
+		return itemHandle(item.ProjectItem)
+	}
+	return shortID(id)
+}
+
+// Projects and tasks have no number of their own, so they still show the tail.
 // UUIDv7 front-loads the 48-bit millisecond timestamp, so any prefix is identical
 // for everything created in the same ~65s window. The entropy is in the tail.
 func shortID(id string) string {
@@ -542,7 +584,7 @@ func showItemProjects(b backend.Backend, id string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("%s %s\n", shortID(item.ID), item.Title)
+	fmt.Printf("%s %s\n", itemHandle(item.ProjectItem), item.Title)
 	fmt.Println("Projects:")
 	for _, p := range item.Projects {
 		fmt.Printf("  • %s\n", p.Name)
@@ -558,7 +600,7 @@ func addItemToProject(b backend.Backend, itemID string, projectName string) erro
 	if err := b.AddToProject(itemID, projectID); err != nil {
 		return err
 	}
-	fmt.Printf("Added %s to %s\n", shortID(itemID), projectName)
+	fmt.Printf("Added %s to %s\n", itemHandleByID(b, itemID), projectName)
 	return nil
 }
 
@@ -570,6 +612,6 @@ func removeItemFromProject(b backend.Backend, itemID string, projectName string)
 	if err := b.RemoveFromProject(itemID, projectID); err != nil {
 		return err
 	}
-	fmt.Printf("Removed %s from %s\n", shortID(itemID), projectName)
+	fmt.Printf("Removed %s from %s\n", itemHandleByID(b, itemID), projectName)
 	return nil
 }

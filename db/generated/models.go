@@ -29,6 +29,7 @@ type Project struct {
 
 type ProjectItem struct {
 	ID        string
+	Number    sql.NullInt64
 	Title     string
 	Notes     sql.NullString
 	Repo      sql.NullString

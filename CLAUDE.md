@@ -63,10 +63,23 @@ allowed to reach the API, so on that machine this CLI is the *only* way an
 agent can touch todoui, and any verb missing here is a capability that simply
 does not exist there.
 
-Ids resolve by suffix (`resolveItemID` in `cli/resolve.go`). Anything a command
-prints can be passed to the next one. Do not switch to prefix matching — UUIDv7
-front-loads its millisecond timestamp, so prefixes collide for everything
-created in the same window.
+An item is named by its **number** — short, unique, and what every command
+prints and takes back (`resolveItemID` in `cli/resolve.go`). The UUID is the
+sync key and stops there; it is in `--json` and nowhere a person reads.
+
+The number is assigned by whichever database is the authority. With sync on
+that is the ichrisbirch API, and `pushCreatedItem` writes the number out of the
+create response into the local row, so `todoui add` prints the handle in the
+same invocation. With sync off — the work machine, which can never reach the
+API — `AssigningItemNumbers` makes todoui allocate `max+1` itself, which cannot
+collide because that database is a disjoint universe.
+
+An item created while the API is unreachable has no number until its push
+lands, and shows its UUID tail until then (`itemHandle`). That is the only
+reason suffix resolution survives: a handle a command printed has to keep
+resolving after the number arrives. Do not switch the fallback to prefix
+matching — UUIDv7 front-loads its millisecond timestamp, so prefixes collide
+for everything created in the same window.
 
 ## Sync is automatic; `todoui sync` is a convenience, not a requirement
 

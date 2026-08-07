@@ -2,6 +2,7 @@ package sync
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -29,7 +30,7 @@ func (e *Engine) executePush(op generated.PendingSync) error {
 		return e.pushJSON(http.MethodPatch, fmt.Sprintf("/projects/%s/reorder", op.EntityID), op.Payload)
 
 	case OpCreateItem:
-		return e.pushJSON(http.MethodPost, "/project-items/", op.Payload)
+		return e.pushCreatedItem(op.EntityID, op.Payload)
 	case OpUpdateItem:
 		return e.pushJSON(http.MethodPatch, fmt.Sprintf("/project-items/%s/", op.EntityID), op.Payload)
 	case OpDeleteItem:
@@ -86,10 +87,41 @@ func (e *Engine) executePush(op generated.PendingSync) error {
 	}
 }
 
+// pushCreatedItem posts a queued item create and records the number the server
+// assigned to it.
+//
+// The number is the item's handle, and until the server answers there is none —
+// so without this the item would stay unnamed until the next pull, up to a full
+// sync interval after the command that created it returned. Long enough that
+// the thing you just filed cannot be referred to by the handle it already has.
+func (e *Engine) pushCreatedItem(itemID, payload string) error {
+	var created struct {
+		Number *int `json:"number"`
+	}
+	if err := e.pushJSONInto(http.MethodPost, "/project-items/", payload, &created); err != nil {
+		return err
+	}
+	if created.Number == nil {
+		return nil
+	}
+	return e.q.SetItemNumber(e.ctx, generated.SetItemNumberParams{
+		Number: sql.NullInt64{Int64: int64(*created.Number), Valid: true},
+		ID:     itemID,
+	})
+}
+
 // pushJSON sends a JSON request and handles the response.
 // 404/409 are treated as "drop this op" (returns nil).
 // Network errors and 5xx are retryable (returns error).
 func (e *Engine) pushJSON(method, path string, payload string) error {
+	return e.pushJSONInto(method, path, payload, nil)
+}
+
+// pushJSONInto is pushJSON with the response decoded into out when the server
+// accepted the request. A body that will not decode is not an error: the write
+// itself landed, and failing here would re-queue a create the server has
+// already applied. The missing field arrives on the next pull instead.
+func (e *Engine) pushJSONInto(method, path string, payload string, out any) error {
 	var body io.Reader
 	if payload != "" {
 		body = bytes.NewReader([]byte(payload))
@@ -108,9 +140,15 @@ func (e *Engine) pushJSON(method, path string, payload string) error {
 		return friendlyNetErr(err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	_, _ = io.ReadAll(resp.Body)
+	responseBody, _ := io.ReadAll(resp.Body)
 
-	return e.classifyResponse(resp.StatusCode)
+	if err := e.classifyResponse(resp.StatusCode); err != nil {
+		return err
+	}
+	if out != nil && resp.StatusCode < 400 {
+		_ = json.Unmarshal(responseBody, out)
+	}
+	return nil
 }
 
 // pushDelete sends a DELETE request.

@@ -30,7 +30,7 @@ func printItem(item model.ProjectItem) {
 	if item.Completed {
 		marker = "✓"
 	}
-	fmt.Printf("  %s %-8s %s\n", marker, shortID(item.ID), item.Title)
+	fmt.Printf("  %s %-8s %s\n", marker, itemHandle(item), item.Title)
 }
 
 func printTask(task model.ProjectItemTask) {
@@ -42,7 +42,7 @@ func printTask(task model.ProjectItemTask) {
 }
 
 func printItemDetail(item *model.ProjectItemDetail, tasks []model.ProjectItemTask, blockers []model.ProjectItem) {
-	fmt.Printf("%s %s\n", shortID(item.ID), item.Title)
+	fmt.Printf("%s %s\n", itemHandle(item.ProjectItem), item.Title)
 	if item.Repo != nil && *item.Repo != "" {
 		fmt.Printf("  repo:     %s\n", *item.Repo)
 	}
@@ -71,7 +71,7 @@ func printItemDetail(item *model.ProjectItemDetail, tasks []model.ProjectItemTas
 	if len(blockers) > 0 {
 		fmt.Println("\nBlocked by:")
 		for _, b := range blockers {
-			fmt.Printf("  %s %s\n", shortID(b.ID), b.Title)
+			fmt.Printf("  %s %s\n", itemHandle(b), b.Title)
 		}
 	}
 }

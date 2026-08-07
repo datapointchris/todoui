@@ -179,6 +179,7 @@ func (e *Engine) pull(ctx context.Context) error {
 		serverItemIDs[item.ID] = true
 		if err := qtx.UpsertItem(ctx, generated.UpsertItemParams{
 			ID:        item.ID,
+			Number:    nullInt(item.Number),
 			Title:     item.Title,
 			Notes:     nullStr(item.Notes),
 			Repo:      nullStr(item.Repo),
@@ -332,6 +333,13 @@ func nullStr(s *string) sql.NullString {
 		return sql.NullString{}
 	}
 	return sql.NullString{String: *s, Valid: true}
+}
+
+func nullInt(n *int) sql.NullInt64 {
+	if n == nil {
+		return sql.NullInt64{}
+	}
+	return sql.NullInt64{Int64: int64(*n), Valid: true}
 }
 
 func boolToInt(b bool) int64 {

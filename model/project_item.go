@@ -4,7 +4,12 @@ import "time"
 
 // ProjectItem is the base representation of an item in the system.
 type ProjectItem struct {
-	ID        string    `json:"id"`
+	ID string `json:"id"`
+	// Number is the handle — short, server-assigned, and the only one of the two
+	// identifiers meant to be read or typed. Nil for an item created while sync
+	// was unreachable, which has no number until its create is pushed. Both
+	// forms resolve on the command line; see cli/resolve.go.
+	Number    *int      `json:"number,omitempty"`
 	Title     string    `json:"title"`
 	Notes     *string   `json:"notes,omitempty"`
 	Repo      *string   `json:"repo,omitempty"`

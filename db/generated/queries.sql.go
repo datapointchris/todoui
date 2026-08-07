@@ -63,21 +63,23 @@ func (q *Queries) CountUndoLogs(ctx context.Context) (int64, error) {
 }
 
 const createItem = `-- name: CreateItem :one
-INSERT INTO project_items (id, title, notes, repo)
-VALUES (?, ?, ?, ?)
-RETURNING id, title, notes, repo, completed, archived, created_at, updated_at
+INSERT INTO project_items (id, number, title, notes, repo)
+VALUES (?, ?, ?, ?, ?)
+RETURNING id, number, title, notes, repo, completed, archived, created_at, updated_at
 `
 
 type CreateItemParams struct {
-	ID    string
-	Title string
-	Notes sql.NullString
-	Repo  sql.NullString
+	ID     string
+	Number sql.NullInt64
+	Title  string
+	Notes  sql.NullString
+	Repo   sql.NullString
 }
 
 func (q *Queries) CreateItem(ctx context.Context, arg CreateItemParams) (ProjectItem, error) {
 	row := q.db.QueryRowContext(ctx, createItem,
 		arg.ID,
+		arg.Number,
 		arg.Title,
 		arg.Notes,
 		arg.Repo,
@@ -85,6 +87,7 @@ func (q *Queries) CreateItem(ctx context.Context, arg CreateItemParams) (Project
 	var i ProjectItem
 	err := row.Scan(
 		&i.ID,
+		&i.Number,
 		&i.Title,
 		&i.Notes,
 		&i.Repo,
@@ -274,7 +277,7 @@ func (q *Queries) GetAllDependencies(ctx context.Context) ([]ProjectItemDependen
 }
 
 const getBlockers = `-- name: GetBlockers :many
-SELECT pi.id, pi.title, pi.notes, pi.repo, pi.completed, pi.archived, pi.created_at, pi.updated_at
+SELECT pi.id, pi.number, pi.title, pi.notes, pi.repo, pi.completed, pi.archived, pi.created_at, pi.updated_at
 FROM project_items pi
 INNER JOIN project_item_dependencies d ON pi.id = d.depends_on_id
 WHERE d.item_id = ? AND pi.completed = 0
@@ -291,6 +294,7 @@ func (q *Queries) GetBlockers(ctx context.Context, itemID string) ([]ProjectItem
 		var i ProjectItem
 		if err := rows.Scan(
 			&i.ID,
+			&i.Number,
 			&i.Title,
 			&i.Notes,
 			&i.Repo,
@@ -374,7 +378,7 @@ func (q *Queries) GetDependencyIDs(ctx context.Context, itemID string) ([]string
 }
 
 const getItem = `-- name: GetItem :one
-SELECT id, title, notes, repo, completed, archived, created_at, updated_at FROM project_items WHERE id = ?
+SELECT id, number, title, notes, repo, completed, archived, created_at, updated_at FROM project_items WHERE id = ?
 `
 
 func (q *Queries) GetItem(ctx context.Context, id string) (ProjectItem, error) {
@@ -382,6 +386,7 @@ func (q *Queries) GetItem(ctx context.Context, id string) (ProjectItem, error) {
 	var i ProjectItem
 	err := row.Scan(
 		&i.ID,
+		&i.Number,
 		&i.Title,
 		&i.Notes,
 		&i.Repo,
@@ -667,7 +672,7 @@ func (q *Queries) InsertUndoLog(ctx context.Context, arg InsertUndoLogParams) er
 }
 
 const listAllItems = `-- name: ListAllItems :many
-SELECT id, title, notes, repo, completed, archived, created_at, updated_at FROM project_items
+SELECT id, number, title, notes, repo, completed, archived, created_at, updated_at FROM project_items
 WHERE archived = 0
 ORDER BY created_at DESC
 `
@@ -683,6 +688,7 @@ func (q *Queries) ListAllItems(ctx context.Context) ([]ProjectItem, error) {
 		var i ProjectItem
 		if err := rows.Scan(
 			&i.ID,
+			&i.Number,
 			&i.Title,
 			&i.Notes,
 			&i.Repo,
@@ -705,7 +711,7 @@ func (q *Queries) ListAllItems(ctx context.Context) ([]ProjectItem, error) {
 }
 
 const listAllItemsRaw = `-- name: ListAllItemsRaw :many
-SELECT id, title, notes, repo, completed, archived, created_at, updated_at FROM project_items ORDER BY created_at DESC
+SELECT id, number, title, notes, repo, completed, archived, created_at, updated_at FROM project_items ORDER BY created_at DESC
 `
 
 func (q *Queries) ListAllItemsRaw(ctx context.Context) ([]ProjectItem, error) {
@@ -719,6 +725,7 @@ func (q *Queries) ListAllItemsRaw(ctx context.Context) ([]ProjectItem, error) {
 		var i ProjectItem
 		if err := rows.Scan(
 			&i.ID,
+			&i.Number,
 			&i.Title,
 			&i.Notes,
 			&i.Repo,
@@ -835,7 +842,7 @@ func (q *Queries) ListAllTasks(ctx context.Context) ([]ProjectItemTask, error) {
 }
 
 const listArchivedItems = `-- name: ListArchivedItems :many
-SELECT pi.id, pi.title, pi.notes, pi.repo, pi.completed, pi.archived, pi.created_at, pi.updated_at, m.position AS membership_position
+SELECT pi.id, pi.number, pi.title, pi.notes, pi.repo, pi.completed, pi.archived, pi.created_at, pi.updated_at, m.position AS membership_position
 FROM project_items pi
 INNER JOIN project_item_memberships m ON pi.id = m.item_id
 WHERE m.project_id = ? AND pi.archived = 1
@@ -844,6 +851,7 @@ ORDER BY pi.updated_at DESC
 
 type ListArchivedItemsRow struct {
 	ID                 string
+	Number             sql.NullInt64
 	Title              string
 	Notes              sql.NullString
 	Repo               sql.NullString
@@ -865,6 +873,7 @@ func (q *Queries) ListArchivedItems(ctx context.Context, projectID string) ([]Li
 		var i ListArchivedItemsRow
 		if err := rows.Scan(
 			&i.ID,
+			&i.Number,
 			&i.Title,
 			&i.Notes,
 			&i.Repo,
@@ -888,7 +897,7 @@ func (q *Queries) ListArchivedItems(ctx context.Context, projectID string) ([]Li
 }
 
 const listBlockedItems = `-- name: ListBlockedItems :many
-SELECT DISTINCT pi.id, pi.title, pi.notes, pi.repo, pi.completed, pi.archived, pi.created_at, pi.updated_at
+SELECT DISTINCT pi.id, pi.number, pi.title, pi.notes, pi.repo, pi.completed, pi.archived, pi.created_at, pi.updated_at
 FROM project_items pi
 INNER JOIN project_item_dependencies d ON pi.id = d.item_id
 INNER JOIN project_items blocker ON d.depends_on_id = blocker.id
@@ -908,6 +917,7 @@ func (q *Queries) ListBlockedItems(ctx context.Context) ([]ProjectItem, error) {
 		var i ProjectItem
 		if err := rows.Scan(
 			&i.ID,
+			&i.Number,
 			&i.Title,
 			&i.Notes,
 			&i.Repo,
@@ -930,7 +940,7 @@ func (q *Queries) ListBlockedItems(ctx context.Context) ([]ProjectItem, error) {
 }
 
 const listItemsByProject = `-- name: ListItemsByProject :many
-SELECT pi.id, pi.title, pi.notes, pi.repo, pi.completed, pi.archived, pi.created_at, pi.updated_at, m.position AS membership_position,
+SELECT pi.id, pi.number, pi.title, pi.notes, pi.repo, pi.completed, pi.archived, pi.created_at, pi.updated_at, m.position AS membership_position,
     (SELECT COUNT(*) FROM project_item_memberships m2 WHERE m2.item_id = pi.id) AS project_count
 FROM project_items pi
 INNER JOIN project_item_memberships m ON pi.id = m.item_id
@@ -940,6 +950,7 @@ ORDER BY m.position, pi.created_at
 
 type ListItemsByProjectRow struct {
 	ID                 string
+	Number             sql.NullInt64
 	Title              string
 	Notes              sql.NullString
 	Repo               sql.NullString
@@ -962,6 +973,7 @@ func (q *Queries) ListItemsByProject(ctx context.Context, projectID string) ([]L
 		var i ListItemsByProjectRow
 		if err := rows.Scan(
 			&i.ID,
+			&i.Number,
 			&i.Title,
 			&i.Notes,
 			&i.Repo,
@@ -1143,6 +1155,20 @@ func (q *Queries) MaxPendingSyncID(ctx context.Context) (int64, error) {
 	return max_id, err
 }
 
+const nextItemNumber = `-- name: NextItemNumber :one
+SELECT COALESCE(MAX(number), 0) + 1 FROM project_items
+`
+
+// Only used when sync is off and this database assigns its own numbers. With
+// sync on the server is the authority and this would hand out a number it is
+// about to disagree with.
+func (q *Queries) NextItemNumber(ctx context.Context) (int64, error) {
+	row := q.db.QueryRowContext(ctx, nextItemNumber)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const removeDependency = `-- name: RemoveDependency :exec
 DELETE FROM project_item_dependencies WHERE item_id = ? AND depends_on_id = ?
 `
@@ -1190,7 +1216,7 @@ func (q *Queries) RestoreMembership(ctx context.Context, arg RestoreMembershipPa
 }
 
 const searchItems = `-- name: SearchItems :many
-SELECT id, title, notes, repo, completed, archived, created_at, updated_at FROM project_items
+SELECT id, number, title, notes, repo, completed, archived, created_at, updated_at FROM project_items
 WHERE (title LIKE '%' || ? || '%' OR notes LIKE '%' || ? || '%')
   AND archived = 0
 ORDER BY created_at DESC
@@ -1212,6 +1238,7 @@ func (q *Queries) SearchItems(ctx context.Context, arg SearchItemsParams) ([]Pro
 		var i ProjectItem
 		if err := rows.Scan(
 			&i.ID,
+			&i.Number,
 			&i.Title,
 			&i.Notes,
 			&i.Repo,
@@ -1233,6 +1260,20 @@ func (q *Queries) SearchItems(ctx context.Context, arg SearchItemsParams) ([]Pro
 	return items, nil
 }
 
+const setItemNumber = `-- name: SetItemNumber :exec
+UPDATE project_items SET number = ? WHERE id = ?
+`
+
+type SetItemNumberParams struct {
+	Number sql.NullInt64
+	ID     string
+}
+
+func (q *Queries) SetItemNumber(ctx context.Context, arg SetItemNumberParams) error {
+	_, err := q.db.ExecContext(ctx, setItemNumber, arg.Number, arg.ID)
+	return err
+}
+
 const updateItem = `-- name: UpdateItem :one
 UPDATE project_items
 SET title = ?,
@@ -1242,7 +1283,7 @@ SET title = ?,
     archived = ?,
     updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
 WHERE id = ?
-RETURNING id, title, notes, repo, completed, archived, created_at, updated_at
+RETURNING id, number, title, notes, repo, completed, archived, created_at, updated_at
 `
 
 type UpdateItemParams struct {
@@ -1266,6 +1307,7 @@ func (q *Queries) UpdateItem(ctx context.Context, arg UpdateItemParams) (Project
 	var i ProjectItem
 	err := row.Scan(
 		&i.ID,
+		&i.Number,
 		&i.Title,
 		&i.Notes,
 		&i.Repo,
@@ -1405,9 +1447,10 @@ func (q *Queries) UpsertDependency(ctx context.Context, arg UpsertDependencyPara
 }
 
 const upsertItem = `-- name: UpsertItem :exec
-INSERT INTO project_items (id, title, notes, repo, completed, archived, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO project_items (id, number, title, notes, repo, completed, archived, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
+    number = excluded.number,
     title = excluded.title,
     notes = excluded.notes,
     repo = excluded.repo,
@@ -1418,6 +1461,7 @@ ON CONFLICT(id) DO UPDATE SET
 
 type UpsertItemParams struct {
 	ID        string
+	Number    sql.NullInt64
 	Title     string
 	Notes     sql.NullString
 	Repo      sql.NullString
@@ -1430,6 +1474,7 @@ type UpsertItemParams struct {
 func (q *Queries) UpsertItem(ctx context.Context, arg UpsertItemParams) error {
 	_, err := q.db.ExecContext(ctx, upsertItem,
 		arg.ID,
+		arg.Number,
 		arg.Title,
 		arg.Notes,
 		arg.Repo,

@@ -10,6 +10,11 @@ CREATE TABLE projects (
 
 CREATE TABLE project_items (
     id TEXT PRIMARY KEY,
+    -- The handle: short enough to type, unlike the UUID key. Assigned by the
+    -- ichrisbirch API when sync is on, and locally when it is off and this
+    -- database is the only authority. Null in the window between creating an
+    -- item offline and the push that earns it a number.
+    number INTEGER,
     title TEXT NOT NULL,
     notes TEXT,
     -- Registry name from ~/dev/repos.json. Null for the many items that are not

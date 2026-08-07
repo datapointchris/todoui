@@ -86,11 +86,18 @@ todoui projects <id> --add homelab    # add item to project
 todoui projects <id> --remove work    # remove from project
 ```
 
-**Ids**: every command prints the last 8 characters of an id, and every command
-accepts them — paste what one command printed into the next. A full UUID works
-too. Matching is on the suffix, not a prefix, because UUIDv7 front-loads its
-timestamp and every item created in the same minute shares a prefix. An
-ambiguous id is reported rather than guessed at.
+**Ids**: an item is named by its number — `todoui view 118`. It is short because
+it is not the primary key: the key stays a UUID so items can be created offline
+and pushed without a round trip to claim an id, and the number is the handle
+that gets printed and typed.
+
+The number comes from the ichrisbirch API when sync is on and from todoui
+itself when it is off. An item created while the API is unreachable has no
+number yet and shows the last 8 characters of its id instead; that form still
+resolves afterwards, as does a full UUID, so anything a command has ever
+printed can be pasted into the next one. Matching is on the suffix, not a
+prefix, because UUIDv7 front-loads its timestamp and every item created in the
+same minute shares a prefix. An ambiguous id is reported rather than guessed at.
 
 **`--json`** is available on `list`, `view`, `search`, `tasks`, `blockers`, and
 `blocked`, and emits full ids.

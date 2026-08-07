@@ -23,7 +23,7 @@ func (c *commands) addDependencyCmd() *cobra.Command {
 			if err := b.AddDependency(itemID, dependsOnID); err != nil {
 				return err
 			}
-			fmt.Printf("%s now depends on %s\n", shortID(itemID), shortID(dependsOnID))
+			fmt.Printf("%s now depends on %s\n", itemHandleByID(b, itemID), itemHandleByID(b, dependsOnID))
 			return nil
 		},
 	}
@@ -43,7 +43,7 @@ func (c *commands) removeDependencyCmd() *cobra.Command {
 			if err := b.RemoveDependency(itemID, dependsOnID); err != nil {
 				return err
 			}
-			fmt.Printf("%s no longer depends on %s\n", shortID(itemID), shortID(dependsOnID))
+			fmt.Printf("%s no longer depends on %s\n", itemHandleByID(b, itemID), itemHandleByID(b, dependsOnID))
 			return nil
 		},
 	}
