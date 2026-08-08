@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -35,19 +36,111 @@ func TestOpen_FreshDatabase(t *testing.T) {
 	}
 }
 
-func TestOpen_ForeignKeysEnabled(t *testing.T) {
-	database, err := Open(":memory:")
+// An in-memory database is pinned to one connection, which is exactly why the
+// old version of this test passed while cascades were inert everywhere else.
+// The pragma has to hold on a file-backed database, on every connection the
+// pool hands out.
+func TestOpen_ForeignKeysEnabledOnEveryConnection(t *testing.T) {
+	database, err := Open(filepath.Join(t.TempDir(), "fk.db"))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer func() { _ = database.Close() }()
 
-	var fk int
-	if err := database.QueryRow("PRAGMA foreign_keys").Scan(&fk); err != nil {
-		t.Fatalf("checking foreign_keys: %v", err)
+	var mu sync.Mutex
+	var off int
+	var wg sync.WaitGroup
+	for range 40 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			var fk int
+			if err := database.QueryRow("PRAGMA foreign_keys").Scan(&fk); err != nil || fk != 1 {
+				mu.Lock()
+				off++
+				mu.Unlock()
+			}
+		}()
 	}
-	if fk != 1 {
-		t.Errorf("expected foreign_keys=1, got %d", fk)
+	wg.Wait()
+	if off > 0 {
+		t.Errorf("%d of 40 connections had foreign keys off: every cascade in the schema is inert on them", off)
+	}
+}
+
+// The cascade is the thing foreign keys were declared for. Deleting a project
+// left its memberships behind for as long as the pragma only reached one
+// connection, which is how a real database collected 46 orphans.
+func TestDeletingAProjectTakesItsMembershipsWithIt(t *testing.T) {
+	database, err := Open(filepath.Join(t.TempDir(), "cascade.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = database.Close() }()
+
+	mustExec(t, database, `INSERT INTO projects (id, name) VALUES ('p1', 'work')`)
+	mustExec(t, database, `INSERT INTO project_items (id, title) VALUES ('i1', 'thing')`)
+	mustExec(t, database, `INSERT INTO project_item_memberships (item_id, project_id, position) VALUES ('i1', 'p1', 0)`)
+	mustExec(t, database, `DELETE FROM projects WHERE id = 'p1'`)
+
+	var left int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM project_item_memberships`).Scan(&left); err != nil {
+		t.Fatalf("counting memberships: %v", err)
+	}
+	if left != 0 {
+		t.Errorf("%d membership(s) survived the project they belong to", left)
+	}
+}
+
+// Databases written before the pragma reached every connection carry orphans
+// that the projects rebuild's own foreign key check then refuses to migrate
+// past, which locks the user out of their data entirely.
+func TestOpen_SweepsOrphansLeftByTheUnenforcedCascade(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "orphans.db")
+
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("opening raw: %v", err)
+	}
+	if _, err := raw.Exec(schema); err != nil {
+		t.Fatalf("applying schema: %v", err)
+	}
+	mustExec(t, raw, `INSERT INTO project_items (id, title) VALUES ('i1', 'thing')`)
+	mustExec(t, raw, `INSERT INTO project_item_memberships (item_id, project_id, position) VALUES ('i1', 'gone', 0)`)
+	mustExec(t, raw, `INSERT INTO project_item_dependencies (item_id, depends_on_id) VALUES ('i1', 'gone')`)
+	mustExec(t, raw, `INSERT INTO project_item_tasks (id, item_id, title) VALUES ('t1', 'gone', 'orphan')`)
+	if err := raw.Close(); err != nil {
+		t.Fatalf("closing raw: %v", err)
+	}
+
+	database, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open refused a database with orphaned rows: %v", err)
+	}
+	defer func() { _ = database.Close() }()
+
+	var violations int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM pragma_foreign_key_check`).Scan(&violations); err != nil {
+		t.Fatalf("checking foreign keys: %v", err)
+	}
+	if violations != 0 {
+		t.Errorf("%d orphaned rows survived the sweep", violations)
+	}
+
+	// The item itself is not collateral: only the unreachable rows go.
+	var items int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM project_items`).Scan(&items); err != nil {
+		t.Fatalf("counting items: %v", err)
+	}
+	if items != 1 {
+		t.Errorf("the sweep took %d item(s) with it", 1-items)
+	}
+}
+
+func mustExec(t *testing.T, database *sql.DB, query string) {
+	t.Helper()
+	if _, err := database.Exec(query); err != nil {
+		t.Fatalf("%s: %v", query, err)
 	}
 }
 

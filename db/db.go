@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	_ "embed"
 	"fmt"
@@ -14,9 +15,17 @@ var schema string
 //go:embed indexes.sql
 var indexes string
 
+// Pragmas ride in the DSN rather than being executed after the open, because
+// PRAGMA is per-connection and database/sql hands out a pool. Running
+// `PRAGMA foreign_keys=ON` through db.Exec sets it on whichever single
+// connection served that call and leaves every other one with SQLite's default,
+// which is off — so the ON DELETE CASCADE on every child table was inert, and a
+// project deleted by a sync sweep left its memberships behind as orphans.
+const connectionPragmas = "?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)"
+
 // Open creates a SQLite connection and ensures the schema exists.
 func Open(path string) (*sql.DB, error) {
-	db, err := sql.Open("sqlite", path)
+	db, err := sql.Open("sqlite", path+connectionPragmas)
 	if err != nil {
 		return nil, fmt.Errorf("opening database: %w", err)
 	}
@@ -25,17 +34,6 @@ func Open(path string) (*sql.DB, error) {
 	// Go's connection pool hands out separate blank databases to each goroutine.
 	if path == ":memory:" {
 		db.SetMaxOpenConns(1)
-	}
-
-	// Enable WAL mode and foreign keys
-	for _, pragma := range []string{
-		"PRAGMA journal_mode=WAL",
-		"PRAGMA foreign_keys=ON",
-	} {
-		if _, err := db.Exec(pragma); err != nil {
-			_ = db.Close()
-			return nil, fmt.Errorf("setting %s: %w", pragma, err)
-		}
 	}
 
 	if err := migrate(db); err != nil {
@@ -69,6 +67,9 @@ func migrate(db *sql.DB) error {
 	if err := migrateSyncTables(db); err != nil {
 		return err
 	}
+	if err := migrateOrphanedChildRows(db); err != nil {
+		return err
+	}
 	if err := migrateItemRepo(db); err != nil {
 		return err
 	}
@@ -77,6 +78,48 @@ func migrate(db *sql.DB) error {
 	}
 	if err := migrateProjectStatus(db); err != nil {
 		return err
+	}
+	return nil
+}
+
+// migrateOrphanedChildRows deletes rows the cascades would never have allowed:
+// memberships, dependencies and tasks whose parent is gone. Every database
+// written before foreign keys were actually enforced has them — a sync sweep
+// that deleted a project left its memberships pointing at nothing, and a real
+// database had accumulated 46 of them.
+//
+// Deleting is not a data loss decision. A membership whose project does not
+// exist names no project, so nothing can reach it and nothing can render it;
+// were the project to come back, the item pull rebuilds the membership from the
+// server's own answer. It runs before migrateProjectStatus because that
+// migration's foreign key check is what these rows fail.
+func migrateOrphanedChildRows(db *sql.DB) error {
+	sweeps := []struct {
+		table  string
+		delete string
+	}{
+		{"project_item_memberships", `DELETE FROM project_item_memberships
+			WHERE item_id NOT IN (SELECT id FROM project_items)
+			   OR project_id NOT IN (SELECT id FROM projects)`},
+		{"project_item_dependencies", `DELETE FROM project_item_dependencies
+			WHERE item_id NOT IN (SELECT id FROM project_items)
+			   OR depends_on_id NOT IN (SELECT id FROM project_items)`},
+		{"project_item_tasks", `DELETE FROM project_item_tasks
+			WHERE item_id NOT IN (SELECT id FROM project_items)`},
+	}
+	for _, sweep := range sweeps {
+		// Tasks and dependencies arrived with the schema rather than through a
+		// migration, so a database old enough may not have the table at all.
+		var name string
+		err := db.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name=?", sweep.table).Scan(&name)
+		if err == sql.ErrNoRows {
+			continue
+		} else if err != nil {
+			return fmt.Errorf("checking %s: %w", sweep.table, err)
+		}
+		if _, err := db.Exec(sweep.delete); err != nil {
+			return fmt.Errorf("sweeping orphaned %s: %w", sweep.table, err)
+		}
 	}
 	return nil
 }
@@ -96,6 +139,11 @@ func migrate(db *sql.DB) error {
 // every membership with it. PRAGMA foreign_keys is a no-op inside a transaction,
 // hence the explicit ordering below; this is SQLite's own documented procedure
 // for altering a table it otherwise cannot.
+//
+// The pragma and the transaction must reach the same connection, which is what
+// the reserved *sql.Conn is for. Issued through the pool they land wherever, so
+// the rebuild would run with cascades live and DROP TABLE projects would take
+// every membership in the database with it.
 func migrateProjectStatus(db *sql.DB) error {
 	var name string
 	err := db.QueryRow("SELECT name FROM pragma_table_info('projects') WHERE name = 'status'").Scan(&name)
@@ -105,14 +153,24 @@ func migrateProjectStatus(db *sql.DB) error {
 		return fmt.Errorf("checking projects.status: %w", err)
 	}
 
-	if _, err := db.Exec("PRAGMA foreign_keys=OFF"); err != nil {
+	ctx := context.Background()
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("reserving a connection for the projects rebuild: %w", err)
+	}
+	// Restored before the connection goes back to the pool: handing it back with
+	// foreign keys off would silently disable every cascade for whoever draws it
+	// next.
+	defer func() {
+		_, _ = conn.ExecContext(ctx, "PRAGMA foreign_keys=ON")
+		_ = conn.Close()
+	}()
+
+	if _, err := conn.ExecContext(ctx, "PRAGMA foreign_keys=OFF"); err != nil {
 		return fmt.Errorf("disabling foreign keys for the projects rebuild: %w", err)
 	}
-	// Restored even on the error paths: leaving the connection with foreign keys
-	// off would silently disable every cascade for the rest of the process.
-	defer func() { _, _ = db.Exec("PRAGMA foreign_keys=ON") }()
 
-	tx, err := db.Begin()
+	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("beginning the projects rebuild: %w", err)
 	}
