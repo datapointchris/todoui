@@ -67,6 +67,9 @@ func migrate(db *sql.DB) error {
 	if err := migrateSyncTables(db); err != nil {
 		return err
 	}
+	if err := migrateSyncOrigin(db); err != nil {
+		return err
+	}
 	if err := migrateOrphanedChildRows(db); err != nil {
 		return err
 	}
@@ -78,6 +81,30 @@ func migrate(db *sql.DB) error {
 	}
 	if err := migrateProjectStatus(db); err != nil {
 		return err
+	}
+	return nil
+}
+
+// migrateSyncOrigin adds the table that pairs a database with its API. Left
+// empty for an existing database: which API it belongs to is not derivable from
+// anything in it, so the first pull is what records it.
+func migrateSyncOrigin(db *sql.DB) error {
+	var name string
+	err := db.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name='sync_origin'").Scan(&name)
+	if err == nil {
+		return nil
+	} else if err != sql.ErrNoRows {
+		return fmt.Errorf("checking sync_origin: %w", err)
+	}
+
+	const create = `
+CREATE TABLE sync_origin (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    api_url TEXT NOT NULL,
+    adopted_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);`
+	if _, err := db.Exec(create); err != nil {
+		return fmt.Errorf("creating sync_origin: %w", err)
 	}
 	return nil
 }

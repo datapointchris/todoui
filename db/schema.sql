@@ -78,6 +78,16 @@ CREATE TABLE sync_state (
     last_push_at TEXT NOT NULL DEFAULT '1970-01-01T00:00:00.000Z'
 );
 
+-- Which API this database belongs to. A pull deletes everything the server did
+-- not return, so a database and its API are a pair and pointing one at the other
+-- one is a wipe rather than a sync. Recording the pairing is what lets a pull
+-- refuse instead of obeying. Single row, enforced by the CHECK.
+CREATE TABLE sync_origin (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    api_url TEXT NOT NULL,
+    adopted_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
 CREATE TABLE undo_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     action TEXT NOT NULL,

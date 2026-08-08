@@ -54,10 +54,27 @@ func (e *Engine) PullIfStale(ctx context.Context, maxAge time.Duration) (bool, e
 // unattended on a timer, and an error only a foreground caller can see would leave
 // the bar reading SYNCED while nothing had reconciled for hours.
 func (e *Engine) Pull(ctx context.Context) error {
+	return e.PullWith(ctx, PullOptions{})
+}
+
+// PullOptions carries the deliberate overrides of the two guards that stand
+// between a misconfigured reconcile and an emptied database. Neither is
+// reachable from the background timers — a guard something automatic can waive
+// is not a guard.
+type PullOptions struct {
+	// Adopt binds the database to this API before reconciling, which is the
+	// only way the pairing ever changes. `todoui sync --adopt`.
+	Adopt bool
+	// AllowLargeSweep permits a pull that would delete most of what is here.
+	// `todoui sync --force`.
+	AllowLargeSweep bool
+}
+
+func (e *Engine) PullWith(ctx context.Context, opts PullOptions) error {
 	e.beginSync()
 	defer e.endSync()
 
-	err := e.pull(ctx)
+	err := e.pull(ctx, opts)
 	e.setStatus(func(s *SyncStatus) {
 		s.Connected = err == nil
 		if err != nil {
@@ -69,7 +86,24 @@ func (e *Engine) Pull(ctx context.Context) error {
 	return err
 }
 
-func (e *Engine) pull(ctx context.Context) error {
+func (e *Engine) pull(ctx context.Context, opts PullOptions) error {
+	if opts.Adopt {
+		if err := e.AdoptOrigin(ctx); err != nil {
+			return fmt.Errorf("adopting %s: %w", e.apiURL, err)
+		}
+	}
+	// Before the push, not after: draining first would send this database's
+	// queued work to an API that is not its own.
+	adopt, err := e.checkOrigin(ctx)
+	if err != nil {
+		return err
+	}
+	if adopt {
+		if err := e.AdoptOrigin(ctx); err != nil {
+			return fmt.Errorf("recording %s as this database's origin: %w", e.apiURL, err)
+		}
+	}
+
 	// Push first: try to drain pending ops so server has our changes
 	e.drainPendingOps()
 
@@ -188,23 +222,30 @@ func (e *Engine) pull(ctx context.Context) error {
 	for id := range serverProjectIDs {
 		projectExists[id] = true
 	}
+	var staleProjects []string
 	for _, lp := range localProjects {
 		if !serverProjectIDs[lp.ID] && !queuedLocally[lp.ID] {
-			if err := qtx.DeleteProject(ctx, lp.ID); err != nil {
-				return fmt.Errorf("deleting stale project %s: %w", lp.ID, err)
-			}
+			staleProjects = append(staleProjects, lp.ID)
 			continue
 		}
 		projectExists[lp.ID] = true
 	}
+	if err := guardSweep("projects", len(staleProjects), len(localProjects), opts.AllowLargeSweep); err != nil {
+		return err
+	}
+	for _, id := range staleProjects {
+		if err := qtx.DeleteProject(ctx, id); err != nil {
+			return fmt.Errorf("deleting stale project %s: %w", id, err)
+		}
+	}
 
-	// Upsert items, numbers last.
+	// Upsert items, unnumbered.
 	//
 	// idx_items_number is unique and the upsert writes row by row, so an item
 	// taking a number another row has not given up yet fails the whole pull —
-	// which is what any renumbering upstream looks like from here. Clearing the
-	// server's items to unnumbered first makes the pass order-independent; the
-	// index is partial over non-null numbers, so any number of rows may sit
+	// which is what any renumbering upstream looks like from here. Clearing
+	// every server item to unnumbered first makes the pass order-independent;
+	// the index is partial over non-null numbers, so any number of rows may sit
 	// unnumbered in between.
 	serverItemIDs := make(map[string]bool, len(items))
 	for _, item := range items {
@@ -222,6 +263,36 @@ func (e *Engine) pull(ctx context.Context) error {
 			return fmt.Errorf("upserting item %s: %w", item.ID, err)
 		}
 	}
+	// Delete local items not on server
+	localItems, err := qtx.ListAllItemsRaw(ctx)
+	if err != nil {
+		return fmt.Errorf("listing local items: %w", err)
+	}
+	itemExists := make(map[string]bool, len(serverItemIDs))
+	for id := range serverItemIDs {
+		itemExists[id] = true
+	}
+	var staleItems []string
+	for _, li := range localItems {
+		if !serverItemIDs[li.ID] && !queuedLocally[li.ID] {
+			staleItems = append(staleItems, li.ID)
+			continue
+		}
+		itemExists[li.ID] = true
+	}
+	if err := guardSweep("items", len(staleItems), len(localItems), opts.AllowLargeSweep); err != nil {
+		return err
+	}
+	for _, id := range staleItems {
+		if err := qtx.DeleteItem(ctx, id); err != nil {
+			return fmt.Errorf("deleting stale item %s: %w", id, err)
+		}
+	}
+
+	// Numbers go on last of all, once the rows that are leaving have left: an
+	// item deleted upstream still holds its number until the sweep above runs,
+	// and the server reissuing that number to something else is exactly the
+	// collision this ordering avoids.
 	for _, item := range items {
 		if item.Number == nil {
 			continue
@@ -232,25 +303,6 @@ func (e *Engine) pull(ctx context.Context) error {
 		}); err != nil {
 			return fmt.Errorf("numbering item %s: %w", item.ID, err)
 		}
-	}
-
-	// Delete local items not on server
-	localItems, err := qtx.ListAllItemsRaw(ctx)
-	if err != nil {
-		return fmt.Errorf("listing local items: %w", err)
-	}
-	itemExists := make(map[string]bool, len(serverItemIDs))
-	for id := range serverItemIDs {
-		itemExists[id] = true
-	}
-	for _, li := range localItems {
-		if !serverItemIDs[li.ID] && !queuedLocally[li.ID] {
-			if err := qtx.DeleteItem(ctx, li.ID); err != nil {
-				return fmt.Errorf("deleting stale item %s: %w", li.ID, err)
-			}
-			continue
-		}
-		itemExists[li.ID] = true
 	}
 
 	// Replace all memberships with server state

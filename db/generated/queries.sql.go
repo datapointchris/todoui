@@ -40,12 +40,38 @@ func (q *Queries) AddItemToProject(ctx context.Context, arg AddItemToProjectPara
 	return err
 }
 
+const countItems = `-- name: CountItems :one
+SELECT COUNT(*) FROM project_items
+`
+
+func (q *Queries) CountItems(ctx context.Context) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countItems)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countPendingSync = `-- name: CountPendingSync :one
 SELECT COUNT(*) FROM pending_sync
 `
 
 func (q *Queries) CountPendingSync(ctx context.Context) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countPendingSync)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countProjects = `-- name: CountProjects :one
+
+SELECT COUNT(*) FROM projects
+`
+
+// Sync: state tracking
+// Counted rather than listed: the caller only needs to know whether this
+// database has anything to lose.
+func (q *Queries) CountProjects(ctx context.Context) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countProjects)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -613,12 +639,21 @@ func (q *Queries) GetProjectWithItemCount(ctx context.Context, id string) (GetPr
 	return i, err
 }
 
-const getSyncState = `-- name: GetSyncState :one
+const getSyncOrigin = `-- name: GetSyncOrigin :one
+SELECT api_url FROM sync_origin WHERE id = 1
+`
 
+func (q *Queries) GetSyncOrigin(ctx context.Context) (string, error) {
+	row := q.db.QueryRowContext(ctx, getSyncOrigin)
+	var api_url string
+	err := row.Scan(&api_url)
+	return api_url, err
+}
+
+const getSyncState = `-- name: GetSyncState :one
 SELECT entity_type, last_pull_at, last_push_at FROM sync_state WHERE entity_type = ?
 `
 
-// Sync: state tracking
 func (q *Queries) GetSyncState(ctx context.Context, entityType string) (SyncState, error) {
 	row := q.db.QueryRowContext(ctx, getSyncState, entityType)
 	var i SyncState
@@ -642,6 +677,19 @@ func (q *Queries) GetTask(ctx context.Context, id string) (ProjectItemTask, erro
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const hasPulledBefore = `-- name: HasPulledBefore :one
+SELECT COUNT(*) FROM sync_state WHERE last_pull_at > '1970-01-01T00:00:00.000Z'
+`
+
+// Whether this database has ever reconciled with an API. A database that has
+// pulled was bound to something, even if nothing recorded what.
+func (q *Queries) HasPulledBefore(ctx context.Context) (int64, error) {
+	row := q.db.QueryRowContext(ctx, hasPulledBefore)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
 }
 
 const insertPendingSync = `-- name: InsertPendingSync :exec
@@ -1446,6 +1494,21 @@ func (q *Queries) SetProjectStatus(ctx context.Context, arg SetProjectStatusPara
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const setSyncOrigin = `-- name: SetSyncOrigin :exec
+INSERT INTO sync_origin (id, api_url, adopted_at)
+VALUES (1, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+ON CONFLICT(id) DO UPDATE SET
+    api_url = excluded.api_url,
+    adopted_at = excluded.adopted_at
+`
+
+// Adoption is deliberate and always overwrites: the caller has already decided
+// this database belongs to this API.
+func (q *Queries) SetSyncOrigin(ctx context.Context, apiUrl string) error {
+	_, err := q.db.ExecContext(ctx, setSyncOrigin, apiUrl)
+	return err
 }
 
 const updateItem = `-- name: UpdateItem :one

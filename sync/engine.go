@@ -234,6 +234,18 @@ func (e *Engine) drainPendingOps() {
 	e.beginSync()
 	defer e.endSync()
 
+	// The push loop runs unattended, so this is the only thing standing between
+	// a mispointed engine and one database's work landing in another's API.
+	// Nothing is lost by stopping: the ops stay queued for a correctly pointed
+	// engine to drain.
+	if err := e.checkOriginMatch(e.ctx); err != nil {
+		e.setStatus(func(s *SyncStatus) {
+			s.Connected = false
+			s.LastError = err.Error()
+		})
+		return
+	}
+
 	for {
 		if e.ctx.Err() != nil {
 			return

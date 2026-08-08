@@ -149,6 +149,24 @@ An unreachable API warns on stderr (CLI) or shows `SYNC ERR` in the status bar
 the network. Force a reconcile with `todoui sync` or `R` in the TUI; skip the
 pre-command refresh with `--no-sync`.
 
+### A database belongs to one API
+
+A pull deletes every local row the server did not return, so a database and the
+API it reconciles against are a pair. The first pull records which API a
+database belongs to, and every pull and push after that refuses any other —
+pointing a database at the wrong API deletes everything that API has never heard
+of, and the reconcile has no way to tell that from a real deletion.
+
+```bash
+todoui sync --adopt    # bind this database to the configured API (it moved)
+todoui sync --force    # allow a pull that would delete most of what is here
+```
+
+`--force` exists because a truncated response, an authentication failure that
+still returns `200`, and a genuine mass deletion look identical from the client:
+a pull removing more than half of at least ten projects or items stops and asks.
+Neither flag is reachable from the background timers.
+
 ## TUI Keybindings
 
 | Key | Action |

@@ -152,6 +152,40 @@ with them on would take every membership. Do not simplify it into three
 entire pull transaction the first time the server returns a done project beside
 a live one sharing its name.
 
+## A database and its API are a pair — never mix a dev half with a prod half
+
+`.envrc` exports **three** coupled variables: `TODOUI_DB`, `TODOUI_SYNC_URL`,
+`TODOUI_SYNC_KEY`. They name one environment. Overriding one of them names an
+environment that does not exist, and for this tool that is destructive rather
+than merely wrong: a pull deletes every local row the server did not return, so
+a production database reconciled against the dev API is emptied of everything
+dev has never heard of. That is not hypothetical — it cost 42 projects and 286
+items, and the command printed `Synced.`
+
+**To run against production data, run from outside this repo**, where direnv has
+loaded nothing. Un-setting your way out is how the accident happened: `env -u`
+on the variable you remembered still leaves the two you did not. The fleet-wide
+form of this rule is `~/dev/standards/infrastructure.md` § "A dev environment
+override is all-or-nothing".
+
+`sync_origin` is the enforcement, because a rule only prose enforces is
+decoration. The first pull records which API the database belongs to, and every
+pull and push after that refuses any other (`OriginMismatch`). `--adopt` is the
+only way the pairing changes. A database that has pulled before but carries no
+origin — anything predating this — refuses to guess and asks to be bound, since
+inferring it from whichever environment is loaded *is* the mistake.
+
+`guardSweep` is the second layer, for when the API is right but its answer is
+not: a pull deleting more than half of at least ten local projects or items is
+refused, because a truncated response, an auth failure that still returns 200,
+and a genuine mass deletion are the same event seen from here. `--force` allows
+it. The floor exists so the guard stays silent on small databases, where losing
+most of it is a handful of rows; a guard that fires on ordinary days gets forced
+past by reflex and stops guarding anything.
+
+Neither override is reachable from the background timers. A guard something
+automatic can waive is not a guard.
+
 ## Sync is automatic; `todoui sync` is a convenience, not a requirement
 
 `sync.interval` (default 2m, floored at 15s) is the single knob for how stale

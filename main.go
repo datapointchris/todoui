@@ -140,22 +140,40 @@ func rootCmd() *cobra.Command {
 	root.PersistentFlags().BoolVar(&noSync, "no-sync", false,
 		"skip the pre-command refresh and use local data as-is")
 
-	root.AddCommand(&cobra.Command{
+	var adoptOrigin, forceSweep bool
+	syncCmd := &cobra.Command{
 		Use:   "sync",
 		Short: "Reconcile with the ichrisbirch API now",
-		Long:  "Pushes anything queued, then pulls, regardless of how recently the last pull ran.",
-		Args:  cobra.NoArgs,
+		Long: "Pushes anything queued, then pulls, regardless of how recently the last pull ran.\n\n" +
+			"A pull deletes everything the server did not return, so the database is bound to\n" +
+			"the API it was first pulled from and refuses to reconcile against any other.\n" +
+			"--adopt rebinds it; --force allows a pull that would delete most of what is here.",
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if syncEngine == nil {
 				return fmt.Errorf("sync is disabled — enable it in ~/.config/todoui/config.toml")
 			}
-			if err := syncEngine.Pull(cmd.Context()); err != nil {
+			// Named on the way in, not after: --adopt rewrites which API owns
+			// this database, and doing that silently is the mistake the binding
+			// exists to prevent.
+			if adoptOrigin {
+				fmt.Printf("Binding %s to %s\n", cfg.Local.DBPath, syncEngine.APIURL())
+			}
+			if err := syncEngine.PullWith(cmd.Context(), sync.PullOptions{
+				Adopt:           adoptOrigin,
+				AllowLargeSweep: forceSweep,
+			}); err != nil {
 				return err
 			}
 			fmt.Println("Synced.")
 			return nil
 		},
-	})
+	}
+	syncCmd.Flags().BoolVar(&adoptOrigin, "adopt", false,
+		"bind this database to the configured API, replacing whatever it was bound to")
+	syncCmd.Flags().BoolVar(&forceSweep, "force", false,
+		"allow a pull that would delete most of the local projects or items")
+	root.AddCommand(syncCmd)
 
 	// Explicit "ui" alias for the TUI
 	root.AddCommand(&cobra.Command{

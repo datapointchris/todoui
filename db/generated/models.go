@@ -62,6 +62,12 @@ type ProjectItemTask struct {
 	CreatedAt string
 }
 
+type SyncOrigin struct {
+	ID        int64
+	ApiUrl    string
+	AdoptedAt string
+}
+
 type SyncState struct {
 	EntityType string
 	LastPullAt string

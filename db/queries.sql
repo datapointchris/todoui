@@ -268,6 +268,31 @@ SELECT DISTINCT entity_id FROM pending_sync WHERE id > ?;
 
 -- Sync: state tracking
 
+-- Counted rather than listed: the caller only needs to know whether this
+-- database has anything to lose.
+-- name: CountProjects :one
+SELECT COUNT(*) FROM projects;
+
+-- name: CountItems :one
+SELECT COUNT(*) FROM project_items;
+
+-- Whether this database has ever reconciled with an API. A database that has
+-- pulled was bound to something, even if nothing recorded what.
+-- name: HasPulledBefore :one
+SELECT COUNT(*) FROM sync_state WHERE last_pull_at > '1970-01-01T00:00:00.000Z';
+
+-- name: GetSyncOrigin :one
+SELECT api_url FROM sync_origin WHERE id = 1;
+
+-- Adoption is deliberate and always overwrites: the caller has already decided
+-- this database belongs to this API.
+-- name: SetSyncOrigin :exec
+INSERT INTO sync_origin (id, api_url, adopted_at)
+VALUES (1, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+ON CONFLICT(id) DO UPDATE SET
+    api_url = excluded.api_url,
+    adopted_at = excluded.adopted_at;
+
 -- name: GetSyncState :one
 SELECT * FROM sync_state WHERE entity_type = ?;
 
