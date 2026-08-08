@@ -12,6 +12,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/datapointchris/todoui/backend"
 	"github.com/datapointchris/todoui/db"
@@ -23,6 +24,18 @@ import (
 // width x height. Commands are drained synchronously so the model reaches
 // the same state the event loop would put it in.
 func newTestApp(t *testing.T, width, height int, itemTitles ...string) *App {
+	t.Helper()
+	inputs := make([]model.CreateProjectItem, len(itemTitles))
+	for i, title := range itemTitles {
+		inputs[i] = model.CreateProjectItem{Title: title}
+	}
+	return newTestAppWithItems(t, width, height, inputs)
+}
+
+// newTestAppWithItems is newTestApp for the cases that need more than a title —
+// notes and repos change how many lines a row renders into, which is where
+// layout bugs live.
+func newTestAppWithItems(t *testing.T, width, height int, inputs []model.CreateProjectItem) *App {
 	t.Helper()
 
 	database, err := db.Open(":memory:")
@@ -38,12 +51,10 @@ func newTestApp(t *testing.T, width, height int, itemTitles ...string) *App {
 	if err != nil {
 		t.Fatalf("creating project: %v", err)
 	}
-	for _, title := range itemTitles {
-		if _, err := b.CreateItem(model.CreateProjectItem{
-			Title:      title,
-			ProjectIDs: []string{project.ID},
-		}); err != nil {
-			t.Fatalf("creating item %q: %v", title, err)
+	for _, input := range inputs {
+		input.ProjectIDs = []string{project.ID}
+		if _, err := b.CreateItem(input); err != nil {
+			t.Fatalf("creating item %q: %v", input.Title, err)
 		}
 	}
 
@@ -447,6 +458,241 @@ func TestDroppingAProjectAsksWhy(t *testing.T) {
 	send(t, app, fetchProjectsCmd(app.backend, app.projectStatusFilter())())
 	if got := app.projects[0].StatusReason; got == nil || *got != "Go covers it" {
 		t.Errorf("status_reason = %v, want the typed reason", got)
+	}
+}
+
+// --- Item pane scrolling ---
+
+// assertPaneInvariants checks the two properties the whole layout rests on:
+// the view fits the window it was given, and the row under the cursor is in it.
+// They hold at every size after every key, so one loop over sizes and
+// keystrokes covers a surface no manual pass can.
+//
+// The cursor check asserts on the line the renderer produced rather than on the
+// item's title, because a title wider than the pane is legitimately truncated —
+// what must not happen is the window being placed where that line is not.
+func assertPaneInvariants(t *testing.T, app *App, context string) {
+	t.Helper()
+	view := app.View()
+	if got := lipgloss.Height(view); got > app.height {
+		t.Fatalf("%s: the view is %d lines in a %d-line window:\n%s", context, got, app.height, view)
+	}
+	if app.currentRow() == nil {
+		return
+	}
+	block := app.renderRowBlock(app.rowCursor, app.width-app.projectPaneWidth()-4)
+	if app.rowHasLeadingBlank(app.rowCursor) {
+		block = block[1:]
+	}
+	if !strings.Contains(view, block[0]) {
+		t.Fatalf("%s: cursor sits on row %d/%d (scroll %d) but the pane does not render its line %q:\n%s",
+			context, app.rowCursor+1, len(app.rows), app.rowScroll, block[0], view)
+	}
+}
+
+// The pane scrolls by row index and renders by line. A row that renders into
+// more than one line — a note, a blocker, a group header — makes the two
+// disagree: syncScroll believes the cursor is inside the window while the
+// render runs out of lines before reaching it, so pressing j walks the cursor
+// off the bottom and the page never follows.
+func TestCursorStaysVisibleScrollingPastNotes(t *testing.T) {
+	notes := "a note that costs the row a second line"
+	inputs := make([]model.CreateProjectItem, 0, 12)
+	for i := range 12 {
+		inputs = append(inputs, model.CreateProjectItem{
+			Title: "item-" + strconv.Itoa(i),
+			Notes: &notes,
+		})
+	}
+
+	for _, height := range []int{10, 14, 24, 40} {
+		t.Run("height="+strconv.Itoa(height), func(t *testing.T) {
+			app := newTestAppWithItems(t, 80, height, inputs)
+			assertPaneInvariants(t, app, "at the top")
+			for range len(inputs) - 1 {
+				pressKey(t, app, "j")
+				assertPaneInvariants(t, app, "after j")
+			}
+			for range len(inputs) - 1 {
+				pressKey(t, app, "k")
+				assertPaneInvariants(t, app, "after k")
+			}
+		})
+	}
+}
+
+// The pane must never draw outside the box it was handed, or it pushes the
+// status bar off the terminal and the layout collapses.
+func TestItemPaneNeverOverflowsItsHeight(t *testing.T) {
+	notes := "a note that costs the row a second line"
+	inputs := make([]model.CreateProjectItem, 0, 12)
+	for i := range 12 {
+		inputs = append(inputs, model.CreateProjectItem{
+			Title: "item-" + strconv.Itoa(i),
+			Notes: &notes,
+		})
+	}
+
+	for _, height := range []int{10, 14, 24, 40} {
+		app := newTestAppWithItems(t, 80, height, inputs)
+		for range len(inputs) - 1 {
+			pressKey(t, app, "j")
+			if got := lipgloss.Height(app.View()); got > height {
+				t.Fatalf("height %d: view rendered %d lines at row %d:\n%s",
+					height, got, app.rowCursor+1, app.View())
+			}
+		}
+	}
+}
+
+// The grouped view adds a header and a blank separator to the first row of
+// every group, which is the same divergence between row count and line count
+// that notes cause — and the view where a long list is most likely to be read.
+func TestCursorStaysVisibleInTheGroupedView(t *testing.T) {
+	app := newTestApp(t, 80, 16)
+	for p := range 4 {
+		project, err := app.backend.CreateProject(model.CreateProject{Name: "project-" + strconv.Itoa(p)})
+		if err != nil {
+			t.Fatalf("creating project: %v", err)
+		}
+		for i := range 3 {
+			if _, err := app.backend.CreateItem(model.CreateProjectItem{
+				Title:      "p" + strconv.Itoa(p) + "-item-" + strconv.Itoa(i),
+				ProjectIDs: []string{project.ID},
+			}); err != nil {
+				t.Fatalf("creating item: %v", err)
+			}
+		}
+	}
+	send(t, app, fetchProjectsCmd(app.backend, app.projectStatusFilter())())
+	app.showingAll = true
+	send(t, app, fetchAllItemsCmd(app.backend, app.projects, app.filter)())
+	app.activePane = itemPane
+
+	if !app.isGroupedView() {
+		t.Fatal("expected the grouped All Items view")
+	}
+	assertPaneInvariants(t, app, "at the top")
+	for range len(app.rows) - 1 {
+		pressKey(t, app, "j")
+		assertPaneInvariants(t, app, "after j")
+	}
+}
+
+// addTask creates a sub-task on the first item and refreshes. Typing it in
+// through the prompt is the same result at a hundred keystrokes, each of which
+// waits out a flash timer.
+func addTask(t *testing.T, app *App, title string) {
+	t.Helper()
+	if _, err := app.backend.CreateTask(app.items[0].ID, model.CreateProjectItemTask{Title: title}); err != nil {
+		t.Fatalf("creating task: %v", err)
+	}
+	send(t, app, app.fetchItems()())
+}
+
+// The measure pass and the draw pass are separate so that showing twenty rows
+// does not cost the styling of three hundred. They have to agree exactly: a
+// height that is one line off from what gets drawn is the original scroll bug
+// with extra steps.
+func TestLayoutHeightMatchesWhatGetsRendered(t *testing.T) {
+	notes := "a note long enough to wrap more than once at a narrow pane width, with an em dash — in it"
+	inputs := make([]model.CreateProjectItem, 0, 6)
+	for i := range 6 {
+		in := model.CreateProjectItem{Title: "item-" + strconv.Itoa(i)}
+		if i%2 == 0 {
+			in.Notes = &notes
+		}
+		inputs = append(inputs, in)
+	}
+
+	for _, width := range []int{20, 40, 80, 200} {
+		app := newTestAppWithItems(t, width+30, 40, inputs)
+		addTask(t, app, "a task title that is itself longer than a narrow pane")
+
+		layout := app.itemPaneLayout(width)
+		for i := range app.rows {
+			if got, want := len(app.renderRowBlock(i, width)), layout.height[i]; got != want {
+				t.Errorf("width %d row %d: measured %d lines, rendered %d", width, i, want, got)
+			}
+		}
+	}
+}
+
+// Every line the pane emits has to fit the column it was handed, or lipgloss
+// wraps it at the border and the layout loses a line it never counted. Real
+// titles, notes and project names are all longer than a pane routinely is.
+func TestNoRenderedLineExceedsThePaneWidth(t *testing.T) {
+	notes := "notes with a very long unbroken token ————————————————————————————————— and more prose after it"
+	long := "a title that is very considerably longer than any reasonable pane will ever be, by design"
+	inputs := []model.CreateProjectItem{
+		{Title: long, Notes: &notes},
+		{Title: "short"},
+	}
+	for _, width := range []int{18, 25, 40, 80} {
+		app := newTestAppWithItems(t, width+30, 40, inputs)
+		addTask(t, app, long)
+
+		for i := range app.rows {
+			for _, line := range app.renderRowBlock(i, width) {
+				if got := lipgloss.Width(line); got > width {
+					t.Errorf("width %d row %d: line is %d wide: %q", width, i, got, line)
+				}
+			}
+		}
+	}
+}
+
+// --- Project pane ---
+
+// A total alone cannot tell a project with nothing left in it from one nobody
+// has started, which is the question the pane exists to answer at a glance.
+func TestProjectPaneShowsOpenAndDoneCounts(t *testing.T) {
+	app := newTestApp(t, 100, 30, "first", "second", "third")
+
+	pressKey(t, app, " ")
+
+	projects, err := app.backend.ListProjects()
+	if err != nil {
+		t.Fatalf("listing projects: %v", err)
+	}
+	if projects[0].ItemCount != 3 || projects[0].CompletedCount != 1 {
+		t.Fatalf("counts = %d items / %d done, want 3/1", projects[0].ItemCount, projects[0].CompletedCount)
+	}
+	if got := projects[0].OpenCount(); got != 2 {
+		t.Errorf("OpenCount() = %d, want 2", got)
+	}
+
+	send(t, app, fetchProjectsCmd(app.backend, app.projectStatusFilter())())
+	if view := app.View(); !strings.Contains(view, "○2") || !strings.Contains(view, "✓1") {
+		t.Errorf("project row does not show the open/done split:\n%s", view)
+	}
+}
+
+// The pane is where a name can be longer than the column it is drawn in, and
+// the count glyphs are multi-byte — truncating the finished line by byte cut
+// one in half and corrupted the row.
+func TestProjectPaneNeverOverflowsItsBox(t *testing.T) {
+	app := newTestApp(t, 60, 12, "only")
+	for p := range 20 {
+		if _, err := app.backend.CreateProject(model.CreateProject{
+			Name: "a-rather-long-project-name-" + strconv.Itoa(p),
+		}); err != nil {
+			t.Fatalf("creating project: %v", err)
+		}
+	}
+	send(t, app, fetchProjectsCmd(app.backend, app.projectStatusFilter())())
+	app.activePane = projectPane
+
+	for range 20 {
+		pressKey(t, app, "j")
+		view := app.View()
+		if got := lipgloss.Height(view); got > 12 {
+			t.Fatalf("view rendered %d lines in a 12-line window:\n%s", got, view)
+		}
+		if !strings.Contains(view, app.projects[app.projectCursor].Name[:10]) {
+			t.Fatalf("cursor on %q but the pane does not render it:\n%s",
+				app.projects[app.projectCursor].Name, view)
+		}
 	}
 }
 

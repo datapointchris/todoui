@@ -570,7 +570,11 @@ func (q *Queries) GetProjectMemberships(ctx context.Context, projectID string) (
 }
 
 const getProjectWithItemCount = `-- name: GetProjectWithItemCount :one
-SELECT p.id, p.name, p.description, p.status, p.status_reason, p.closed_at, p.position, p.created_at, COUNT(pi.id) AS item_count
+SELECT
+    p.id, p.name, p.description, p.status, p.status_reason, p.closed_at, p.position, p.created_at,
+    CAST(COALESCE(SUM(CASE WHEN pi.completed = 1 THEN 1 ELSE 0 END), 0) AS INTEGER)
+        AS completed_count,
+    COUNT(pi.id) AS item_count
 FROM projects p
 LEFT JOIN project_item_memberships m ON p.id = m.project_id
 LEFT JOIN project_items pi ON m.item_id = pi.id AND pi.archived = 0
@@ -579,15 +583,16 @@ GROUP BY p.id
 `
 
 type GetProjectWithItemCountRow struct {
-	ID           string
-	Name         string
-	Description  sql.NullString
-	Status       string
-	StatusReason sql.NullString
-	ClosedAt     sql.NullString
-	Position     int64
-	CreatedAt    string
-	ItemCount    int64
+	ID             string
+	Name           string
+	Description    sql.NullString
+	Status         string
+	StatusReason   sql.NullString
+	ClosedAt       sql.NullString
+	Position       int64
+	CreatedAt      string
+	CompletedCount int64
+	ItemCount      int64
 }
 
 func (q *Queries) GetProjectWithItemCount(ctx context.Context, id string) (GetProjectWithItemCountRow, error) {
@@ -602,6 +607,7 @@ func (q *Queries) GetProjectWithItemCount(ctx context.Context, id string) (GetPr
 		&i.ClosedAt,
 		&i.Position,
 		&i.CreatedAt,
+		&i.CompletedCount,
 		&i.ItemCount,
 	)
 	return i, err
@@ -1121,7 +1127,11 @@ func (q *Queries) ListPendingSyncEntityIDsAfter(ctx context.Context, id int64) (
 }
 
 const listProjectsWithItemCount = `-- name: ListProjectsWithItemCount :many
-SELECT p.id, p.name, p.description, p.status, p.status_reason, p.closed_at, p.position, p.created_at, COUNT(pi.id) AS item_count
+SELECT
+    p.id, p.name, p.description, p.status, p.status_reason, p.closed_at, p.position, p.created_at,
+    CAST(COALESCE(SUM(CASE WHEN pi.completed = 1 THEN 1 ELSE 0 END), 0) AS INTEGER)
+        AS completed_count,
+    COUNT(pi.id) AS item_count
 FROM projects p
 LEFT JOIN project_item_memberships m ON p.id = m.project_id
 LEFT JOIN project_items pi ON m.item_id = pi.id AND pi.archived = 0
@@ -1131,21 +1141,26 @@ ORDER BY p.closed_at IS NULL DESC, p.closed_at DESC, p.position ASC, p.name ASC
 `
 
 type ListProjectsWithItemCountRow struct {
-	ID           string
-	Name         string
-	Description  sql.NullString
-	Status       string
-	StatusReason sql.NullString
-	ClosedAt     sql.NullString
-	Position     int64
-	CreatedAt    string
-	ItemCount    int64
+	ID             string
+	Name           string
+	Description    sql.NullString
+	Status         string
+	StatusReason   sql.NullString
+	ClosedAt       sql.NullString
+	Position       int64
+	CreatedAt      string
+	CompletedCount int64
+	ItemCount      int64
 }
 
 // Terminal projects are hidden unless asked for: closing a project is what takes
 // it out of the list, so an unfiltered default would make completing one do
 // nothing visible. Named parameter so the filter reads as a status rather than
 // a bare `?`, and so sqlfluff sees a bind rather than an unqualified column.
+//
+// The completed split rides along with the total rather than being a second
+// query: the pane draws both numbers on every row, so asking twice would mean a
+// query per project.
 func (q *Queries) ListProjectsWithItemCount(ctx context.Context, statusFilter string) ([]ListProjectsWithItemCountRow, error) {
 	rows, err := q.db.QueryContext(ctx, listProjectsWithItemCount, statusFilter)
 	if err != nil {
@@ -1164,6 +1179,7 @@ func (q *Queries) ListProjectsWithItemCount(ctx context.Context, statusFilter st
 			&i.ClosedAt,
 			&i.Position,
 			&i.CreatedAt,
+			&i.CompletedCount,
 			&i.ItemCount,
 		); err != nil {
 			return nil, err

@@ -46,6 +46,16 @@ type Project struct {
 type ProjectWithItemCount struct {
 	Project
 	ItemCount int `json:"item_count"`
+	// How many of those are done. A total alone cannot distinguish a project
+	// with nothing left in it from one that has not been started. Derived from
+	// the local tables on every read rather than carried in the sync payload,
+	// so an API that does not send it costs nothing.
+	CompletedCount int `json:"completed_count"`
+}
+
+// OpenCount is the number that decides whether a project still wants work.
+func (p ProjectWithItemCount) OpenCount() int {
+	return p.ItemCount - p.CompletedCount
 }
 
 // CreateProject is the input for creating a new project.

@@ -303,27 +303,48 @@ func truncate(s string, maxWidth int) string {
 	return string(runes[:maxWidth-1]) + "…"
 }
 
-func wrapLine(s string, maxWidth int) []string {
-	if len(s) <= maxWidth {
-		return []string{s}
+// wrapPoints walks the break positions of a line wrapped to maxWidth, calling
+// emit with each piece. Runes rather than bytes throughout: a hard break by byte
+// offset splits a multi-byte rune in half, and the notes this wraps are full of
+// em dashes and arrows.
+func wrapPoints(s string, maxWidth int, emit func(piece []rune)) {
+	runes := []rune(s)
+	if len(runes) <= maxWidth {
+		emit(runes)
+		return
 	}
-	var result []string
-	for len(s) > maxWidth {
-		// Try to break at a space
+	for len(runes) > maxWidth {
 		cut := maxWidth
-		for cut > 0 && s[cut] != ' ' {
+		for cut > 0 && runes[cut] != ' ' {
 			cut--
 		}
 		if cut == 0 {
 			cut = maxWidth // no space found, hard break
 		}
-		result = append(result, s[:cut])
-		s = strings.TrimLeft(s[cut:], " ")
+		emit(runes[:cut])
+		runes = runes[cut:]
+		for len(runes) > 0 && runes[0] == ' ' {
+			runes = runes[1:]
+		}
 	}
-	if len(s) > 0 {
-		result = append(result, s)
+	if len(runes) > 0 {
+		emit(runes)
 	}
+}
+
+func wrapLine(s string, maxWidth int) []string {
+	var result []string
+	wrapPoints(s, maxWidth, func(piece []rune) { result = append(result, string(piece)) })
 	return result
+}
+
+// wrapCount is wrapLine's height without its allocations. The measure pass runs
+// over every item on every frame, so building the strings only to count them
+// was most of what a render cost on a real database.
+func wrapCount(s string, maxWidth int) int {
+	n := 0
+	wrapPoints(s, maxWidth, func([]rune) { n++ })
+	return n
 }
 
 // --- Sync commands ---
@@ -2530,6 +2551,26 @@ func syncScroll(cursor, scroll, viewHeight int) int {
 	return scroll
 }
 
+// scrollToBlock places the viewport so that the whole block of lines a row
+// renders into is visible. Distinct from syncScroll, which assumes one line per
+// entry and is what the project pane can still use.
+//
+// A block taller than the viewport is pinned to its first line: showing its
+// tail instead would hide the row the cursor is actually on.
+func scrollToBlock(start, span, scroll, viewHeight int) int {
+	if viewHeight <= 0 {
+		return 0
+	}
+	span = min(span, viewHeight)
+	if start < scroll {
+		return start
+	}
+	if start+span > scroll+viewHeight {
+		return start + span - viewHeight
+	}
+	return scroll
+}
+
 // paneContentHeight returns how many list items fit in a pane (minus title and status bar).
 func (m *App) paneContentHeight() int {
 	paneHeight := m.height - 3 // status bar (~1 line) + borders (2)
@@ -3113,17 +3154,57 @@ func (m *App) renderDepLinkOverlay() string {
 	return overlayBoxStyle.Width(boxWidth).Render(content)
 }
 
+// projectCounts renders a project's open and done tallies. The glyphs are the
+// item pane's own — ○ for open, ✓ for done — so the two panes read as one
+// vocabulary, and a zero goes dim rather than disappearing so the column stays
+// aligned down the list.
+func projectCounts(open, done int) string {
+	openText := projectOpenCountStyle.Render(fmt.Sprintf("○%d", open))
+	if open == 0 {
+		openText = dimStyle.Render(fmt.Sprintf("○%d", open))
+	}
+	doneText := projectDoneCountStyle.Render(fmt.Sprintf("✓%d", done))
+	if done == 0 {
+		doneText = dimStyle.Render(fmt.Sprintf("✓%d", done))
+	}
+	return openText + " " + doneText
+}
+
+// projectCountsWidth is the printable width of what projectCounts renders,
+// measured off the unstyled text because lipgloss.Width would have to strip the
+// color codes back out again.
+func projectCountsWidth(open, done int) int {
+	return lipgloss.Width(fmt.Sprintf("○%d ✓%d", open, done))
+}
+
+// projectRowLabel is the text half of a project row. The width calculation and
+// the render both go through it, so a label the pane is not wide enough for
+// cannot happen the way the status suffix once did.
+func (m *App) projectRowLabel(p model.ProjectWithItemCount) string {
+	label := p.Name
+	if m.selectedProjects[p.ID] {
+		label = "● " + label
+	}
+	// Only while closed projects are on show: every row reads "active"
+	// otherwise, which spends width to say nothing.
+	if m.showClosed && model.IsTerminalStatus(p.Status) {
+		label = fmt.Sprintf("%s [%s]", label, p.Status)
+	}
+	return label
+}
+
 func (m *App) projectPaneWidth() int {
 	const minWidth = 20
 	// Account for "All" entry
-	totalItems := 0
+	totalItems, totalDone := 0, 0
 	for _, p := range m.projects {
 		totalItems += p.ItemCount
+		totalDone += p.CompletedCount
 	}
-	maxName := lipgloss.Width(fmt.Sprintf("> All (%d)", totalItems))
+	maxName := lipgloss.Width("> All ") + projectCountsWidth(totalItems-totalDone, totalDone)
 	for _, p := range m.projects {
-		// "> name (count)" — 2 prefix + space + parens + digits
-		w := lipgloss.Width(fmt.Sprintf("> %s (%d)", p.Name, p.ItemCount))
+		// "> name ○open ✓done" — 2 prefix + name + space + counts
+		w := lipgloss.Width("> "+m.projectRowLabel(p)+" ") + projectCountsWidth(p.OpenCount(), p.CompletedCount)
 		if w > maxName {
 			maxName = w
 		}
@@ -3155,6 +3236,15 @@ func (m *App) renderProjectPane(width, height int) string {
 
 	// Build a virtual list: All entry at index 0, real projects at 1..N
 	totalEntries := len(m.projects) + 1
+	// The scroll indicator is a line the list does not get. Appending it after
+	// filling the viewport is what pushed the pane past the height it was handed.
+	showIndicator := totalEntries > viewHeight
+	if showIndicator {
+		viewHeight--
+	}
+	if viewHeight < 1 {
+		viewHeight = 1
+	}
 	virtualCursor := m.projectCursor + 1 // offset for All entry
 	if m.showingAll {
 		virtualCursor = 0
@@ -3166,39 +3256,44 @@ func (m *App) renderProjectPane(width, height int) string {
 		end = totalEntries
 	}
 
+	// Only the name is truncated. Slicing the finished line by byte, which is
+	// what this did, cuts a multi-byte rune in half as soon as a name is long
+	// enough to reach the ● or the count glyphs.
+	row := func(prefix, name string, open, done int, style lipgloss.Style) string {
+		avail := width - lipgloss.Width(prefix) - style.GetPaddingLeft() - projectCountsWidth(open, done) - 1
+		if avail < 1 {
+			avail = 1
+		}
+		return style.Render(prefix+truncate(name, avail)) + " " + projectCounts(open, done)
+	}
+
 	hasSelections := len(m.selectedProjects) > 0
 	for vi := m.projectScroll; vi < end; vi++ {
 		if vi == 0 {
 			// "All" entry
-			totalItems := 0
+			totalItems, totalDone := 0, 0
 			for _, p := range m.projects {
 				totalItems += p.ItemCount
+				totalDone += p.CompletedCount
 			}
 			isCursor := m.showingAll
 			allSelected := hasSelections && len(m.selectedProjects) == len(m.projects)
-			var prefix string
+			prefix := "  "
 			if isCursor {
 				prefix = "> "
-			} else {
-				prefix = "  "
 			}
 			label := "All"
 			if allSelected {
 				label = "● All"
 			}
-			line := fmt.Sprintf("%s%s (%d)", prefix, label, totalItems)
-			if len(line) > width {
-				line = line[:width]
-			}
+			style := projectNormalStyle
 			switch {
 			case isCursor:
-				line = allProjectStyle.Render(line)
+				style = allProjectStyle
 			case allSelected:
-				line = projectMultiSelectedStyle.Render(line)
-			default:
-				line = projectNormalStyle.Render(line)
+				style = projectMultiSelectedStyle
 			}
-			lines = append(lines, line)
+			lines = append(lines, row(prefix, label, totalItems-totalDone, totalDone, style))
 		} else {
 			// Real project at index vi-1
 			pi := vi - 1
@@ -3206,46 +3301,30 @@ func (m *App) renderProjectPane(width, height int) string {
 			isCursor := !m.showingAll && pi == m.projectCursor
 			isSelected := m.selectedProjects[p.ID]
 			isMoving := m.appMode == modeMoveProject && pi == m.moveProjectPos
-			name := p.Name
-			if isSelected {
-				name = "● " + name
-			}
-			body := fmt.Sprintf("%s (%d)", name, p.ItemCount)
-			// Only while closed projects are on show: every row reads "active"
-			// otherwise, which spends width to say nothing.
-			if m.showClosed && model.IsTerminalStatus(p.Status) {
-				body = fmt.Sprintf("%s [%s] (%d)", name, p.Status, p.ItemCount)
-			}
+			name := m.projectRowLabel(p)
 
-			var line string
 			if isMoving {
-				line = moveIndicatorStyle.Render("▶ " + body + " ◀ MOVING")
-			} else {
-				prefix := "  "
-				if isCursor {
-					prefix = "> "
-				}
-				line = prefix + body
-				if len(line) > width {
-					line = line[:width]
-				}
-				switch {
-				case isCursor:
-					line = projectSelectedStyle.Render(line)
-				case isSelected:
-					line = projectMultiSelectedStyle.Render(line)
-				default:
-					line = projectNormalStyle.Render(line)
-				}
+				lines = append(lines, moveIndicatorStyle.Render("▶ "+name+" ◀ MOVING"))
+				continue
 			}
-			lines = append(lines, line)
+			prefix := "  "
+			if isCursor {
+				prefix = "> "
+			}
+			style := projectNormalStyle
+			switch {
+			case isCursor:
+				style = projectSelectedStyle
+			case isSelected:
+				style = projectMultiSelectedStyle
+			}
+			lines = append(lines, row(prefix, name, p.OpenCount(), p.CompletedCount, style))
 		}
 	}
 
-	if totalEntries > viewHeight {
+	if showIndicator {
 		pos := virtualCursor + 1
-		scrollInfo := dimStyle.Render(fmt.Sprintf(" %d/%d", pos, totalEntries))
-		lines = append(lines, scrollInfo)
+		lines = append(lines, dimStyle.Render(fmt.Sprintf(" %d/%d", pos, totalEntries)))
 	}
 
 	return strings.Join(lines, "\n")
@@ -3264,14 +3343,19 @@ func (m *App) renderItemPane(width, height int) string {
 		titleText = "Items"
 	}
 
-	if m.filter != filterNone {
-		var filterLabel string
-		switch m.filter {
-		case filterBlocked:
-			filterLabel = " [BLOCKED]"
-		case filterAll:
-			filterLabel = " [ALL]"
-		}
+	var filterLabel string
+	switch m.filter {
+	case filterBlocked:
+		filterLabel = " [BLOCKED]"
+	case filterAll:
+		filterLabel = " [ALL]"
+	}
+
+	// A project name is free text and routinely longer than the pane. Left
+	// whole it wraps at the border and costs the list a line the scroll never
+	// counted, which is the same failure as an over-long row.
+	titleText = truncate(titleText, max(width-1-lipgloss.Width(filterLabel), 1))
+	if filterLabel != "" {
 		titleText += filterIndicatorStyle.Render(filterLabel)
 	}
 
@@ -3288,143 +3372,275 @@ func (m *App) renderItemPane(width, height int) string {
 		return strings.Join(lines, "\n")
 	}
 
+	layout := m.itemPaneLayout(width)
+
 	viewHeight := height - 1 // subtract title
-	m.rowScroll = syncScroll(m.rowCursor, m.rowScroll, viewHeight)
-
-	end := m.rowScroll + viewHeight
-	if end > len(m.rows) {
-		end = len(m.rows)
+	// The scroll indicator is a line the list does not get. Appending it after
+	// filling the viewport is what pushed the pane past the height it was handed.
+	showIndicator := layout.total > viewHeight
+	if showIndicator {
+		viewHeight--
+	}
+	if viewHeight < 1 {
+		viewHeight = 1
 	}
 
-	linesUsed := 0
-	for i := m.rowScroll; i < end; i++ {
-		if linesUsed >= viewHeight {
-			break
-		}
-		row := m.rows[i]
-		item := m.items[row.itemIdx]
-
-		switch row.kind {
-		case rowItem:
-			// Group headers live on item rows only.
-			if m.isGroupedView() {
-				if groupName := m.groupHeaderAt(row.itemIdx); groupName != "" {
-					if row.itemIdx > 0 && linesUsed < viewHeight {
-						lines = append(lines, "")
-						linesUsed++
-					}
-					if linesUsed < viewHeight {
-						header := groupHeaderStyle.Render(fmt.Sprintf("── %s ──", groupName))
-						lines = append(lines, header)
-						linesUsed++
-					}
-					if linesUsed >= viewHeight {
-						break
-					}
-				}
-			}
-			isMoving := m.appMode == modeMove && row.itemIdx == m.moveItemPos
-			lines = append(lines, m.renderItemLine(item, i == m.rowCursor, width, isMoving))
-			linesUsed++
-
-		case rowTask:
-			tasks := m.itemTasks[item.ID]
-			t := tasks[row.taskIdx]
-			check := "○"
-			title := t.Title
-			if t.Completed {
-				check = "✓"
-				title = taskCompletedStyle.Render(title)
-			}
-			taskLine := fmt.Sprintf("%s %s", check, title)
-			if i == m.rowCursor {
-				lines = append(lines, taskSelectedStyle.Render("> "+taskLine))
-			} else {
-				lines = append(lines, taskNormalStyle.Render(taskLine))
-			}
-			linesUsed++
-		}
-
-		// Emit per-item trailers (add-task input, blockers, notes) after
-		// the *last* row for this item. A row is the last of its item
-		// when the next row belongs to a different item or we're at the
-		// end of the rows slice.
-		lastRowOfItem := i == len(m.rows)-1 || m.rows[i+1].itemIdx != row.itemIdx
-		if !lastRowOfItem {
-			continue
-		}
-		if linesUsed >= viewHeight {
-			break
-		}
-
-		if blockers, ok := m.itemBlockers[item.ID]; ok && len(blockers) > 0 {
-			currentProject := ""
-			if !m.isGroupedView() && m.projectCursor < len(m.projects) {
-				currentProject = m.projects[m.projectCursor].Name
-			}
-			for _, b := range blockers {
-				if linesUsed >= viewHeight {
-					break
-				}
-				prefix := ""
-				if names, ok := m.itemProjectNames[b.ID]; ok {
-					inCurrent := false
-					for _, n := range names {
-						if n == currentProject {
-							inCurrent = true
-							break
-						}
-					}
-					if !inCurrent && len(names) > 0 {
-						prefix = blockerProjectStyle.Render(names[0] + ": ")
-					}
-				}
-				lines = append(lines, blockerStyle.Render(
-					fmt.Sprintf("└─ blocked by: %s%s (%s)", prefix, b.Title, itemHandle(b)),
-				))
-				linesUsed++
-			}
-		}
-
-		if item.Notes != nil && *item.Notes != "" && linesUsed < viewHeight {
-			prefix := "     " + notesConnectorStyle.Render("└─ notes ▸ ")
-			wrapWidth := width - 16
-			if wrapWidth < 10 {
-				wrapWidth = 10
-			}
-			noteLines := strings.Split(*item.Notes, "\n")
-			first := true
-			for _, noteLine := range noteLines {
-				if linesUsed >= viewHeight {
-					break
-				}
-				wrapped := wrapLine(noteLine, wrapWidth)
-				for _, wl := range wrapped {
-					if linesUsed >= viewHeight {
-						break
-					}
-					if first {
-						lines = append(lines, prefix+wl)
-						first = false
-					} else {
-						lines = append(lines, notesPreviewStyle.Render(wl))
-					}
-					linesUsed++
-				}
-			}
-		}
-
-		if linesUsed >= viewHeight {
-			break
-		}
+	if c := m.rowCursor; c >= 0 && c < len(m.rows) {
+		blockEnd := layout.blockStart[c] + layout.height[c]
+		m.rowScroll = scrollToBlock(layout.anchor[c], blockEnd-layout.anchor[c], m.rowScroll, viewHeight)
+	}
+	if maxScroll := layout.total - viewHeight; m.rowScroll > maxScroll {
+		m.rowScroll = max(0, maxScroll)
 	}
 
-	if len(m.rows) > viewHeight {
-		scrollInfo := dimStyle.Render(fmt.Sprintf(" %d/%d", m.rowCursor+1, len(m.rows)))
-		lines = append(lines, scrollInfo)
+	lines = append(lines, m.renderItemWindow(width, layout, m.rowScroll, viewHeight)...)
+
+	if showIndicator {
+		lines = append(lines, dimStyle.Render(fmt.Sprintf(" %d/%d", m.rowCursor+1, len(m.rows))))
 	}
 
 	return strings.Join(lines, "\n")
+}
+
+// paneLayout is where every row of the item pane lands in line space. The pane
+// used to scroll by row index while rendering by line, so the two disagreed the
+// moment a row was worth more than one line — a group header, a blocker, a
+// wrapped note: the scroll offset believed the cursor was on screen while the
+// render ran out of lines before reaching it, and the pane stopped following
+// the cursor at all.
+type paneLayout struct {
+	// blockStart is the row's first line, counting any blank separator above a
+	// group header. anchor is the first line that has to stay on screen, which
+	// skips that blank — scrolling to a header should not spend the top line on
+	// nothing.
+	blockStart []int
+	anchor     []int
+	height     []int
+	total      int
+}
+
+// rowAt returns the row whose block contains the given line.
+func (l paneLayout) rowAt(line int) int {
+	lo, hi := 0, len(l.blockStart)-1
+	for lo < hi {
+		mid := (lo + hi + 1) / 2
+		if l.blockStart[mid] <= line {
+			lo = mid
+		} else {
+			hi = mid - 1
+		}
+	}
+	return lo
+}
+
+// itemPaneLayout measures every row without drawing it. Measuring and drawing
+// are separate passes because the viewport needs every height to place itself
+// while only the rows it lands on need their strings built — styling all 250
+// items of a real database to show twenty of them cost 50ms on every keystroke.
+func (m *App) itemPaneLayout(width int) paneLayout {
+	l := paneLayout{
+		blockStart: make([]int, len(m.rows)),
+		anchor:     make([]int, len(m.rows)),
+		height:     make([]int, len(m.rows)),
+	}
+	for i := range m.rows {
+		lead := 0
+		if m.rowHasLeadingBlank(i) {
+			lead = 1
+		}
+		body := 1 // the item or task line
+		if m.rowGroupHeader(i) != "" {
+			body++
+		}
+		if m.rowIsLastOfItem(i) {
+			body += m.itemTrailerHeight(m.items[m.rows[i].itemIdx], width)
+		}
+		l.blockStart[i] = l.total
+		l.anchor[i] = l.total + lead
+		l.height[i] = lead + body
+		l.total += l.height[i]
+	}
+	return l
+}
+
+// renderItemWindow draws only the rows the viewport lands on.
+func (m *App) renderItemWindow(width int, layout paneLayout, from, count int) []string {
+	if count <= 0 || from >= layout.total || len(m.rows) == 0 {
+		return nil
+	}
+	i := layout.rowAt(from)
+	skip := from - layout.blockStart[i]
+
+	var built []string
+	for ; i < len(m.rows) && len(built) < skip+count; i++ {
+		built = append(built, m.renderRowBlock(i, width)...)
+	}
+	if skip >= len(built) {
+		return nil
+	}
+	built = built[skip:]
+	if len(built) > count {
+		built = built[:count]
+	}
+	return built
+}
+
+// rowGroupHeader is the group heading a row opens, or "" for a row inside one.
+// Headers hang off item rows only.
+func (m *App) rowGroupHeader(i int) string {
+	if m.rows[i].kind != rowItem || !m.isGroupedView() {
+		return ""
+	}
+	return m.groupHeaderAt(m.rows[i].itemIdx)
+}
+
+func (m *App) rowHasLeadingBlank(i int) bool {
+	return m.rowGroupHeader(i) != "" && m.rows[i].itemIdx > 0
+}
+
+// rowIsLastOfItem reports whether an item's trailers hang off this row.
+func (m *App) rowIsLastOfItem(i int) bool {
+	return i == len(m.rows)-1 || m.rows[i+1].itemIdx != m.rows[i].itemIdx
+}
+
+// renderRowBlock draws one row: its group heading if it opens one, the row
+// itself, and the item's trailers if it is the last row of that item. Its line
+// count must match what itemPaneLayout measured, which TestLayoutMatchesRender
+// holds it to.
+func (m *App) renderRowBlock(i, width int) []string {
+	row := m.rows[i]
+	item := m.items[row.itemIdx]
+
+	var lines []string
+	if m.rowHasLeadingBlank(i) {
+		lines = append(lines, "")
+	}
+	if groupName := m.rowGroupHeader(i); groupName != "" {
+		lines = append(lines, groupHeaderStyle.Render(
+			fmt.Sprintf("── %s ──", truncate(groupName, max(width-7, 1))),
+		))
+	}
+
+	switch row.kind {
+	case rowItem:
+		isMoving := m.appMode == modeMove && row.itemIdx == m.moveItemPos
+		lines = append(lines, m.renderItemLine(item, i == m.rowCursor, width, isMoving))
+	case rowTask:
+		t := m.itemTasks[item.ID][row.taskIdx]
+		check := "○"
+		// The deepest indent in the pane, measured on the cursor row, which is
+		// the wider of the two: 4 columns of padding, the "> " marker, the
+		// glyph and its space.
+		title := truncate(t.Title, max(width-8, 1))
+		if t.Completed {
+			check = "✓"
+			title = taskCompletedStyle.Render(title)
+		}
+		taskLine := fmt.Sprintf("%s %s", check, title)
+		if i == m.rowCursor {
+			lines = append(lines, taskSelectedStyle.Render("> "+taskLine))
+		} else {
+			lines = append(lines, taskNormalStyle.Render(taskLine))
+		}
+	}
+
+	if m.rowIsLastOfItem(i) {
+		lines = append(lines, m.itemTrailerLines(item, width)...)
+	}
+	return lines
+}
+
+// itemTrailerHeight counts what itemTrailerLines would draw. It walks the same
+// wrapping rather than estimating it: a height that disagrees with the render
+// by one line is the scroll bug all over again.
+func (m *App) itemTrailerHeight(item model.ProjectItemInProject, width int) int {
+	height := len(m.itemBlockers[item.ID])
+	if item.Notes == nil || *item.Notes == "" {
+		return height
+	}
+	wrapWidth := max(width-16, 1)
+	for _, noteLine := range strings.Split(*item.Notes, "\n") {
+		height += wrapCount(noteLine, wrapWidth)
+	}
+	return height
+}
+
+// itemTrailerLines renders what hangs below an item: what blocks it, and a
+// preview of its notes.
+func (m *App) itemTrailerLines(item model.ProjectItemInProject, width int) []string {
+	var lines []string
+
+	if blockers := m.itemBlockers[item.ID]; len(blockers) > 0 {
+		currentProject := ""
+		if !m.isGroupedView() && m.projectCursor < len(m.projects) {
+			currentProject = m.projects[m.projectCursor].Name
+		}
+		for _, b := range blockers {
+			// A blocker filed elsewhere is named by its project; one in the
+			// project already on screen would only repeat the pane title.
+			prefixText := ""
+			if names, ok := m.itemProjectNames[b.ID]; ok && len(names) > 0 {
+				inCurrent := false
+				for _, n := range names {
+					if n == currentProject {
+						inCurrent = true
+						break
+					}
+				}
+				if !inCurrent {
+					// Capped rather than given the whole line: a project name
+					// can be longer than the pane on its own, and the blocker's
+					// own title is the part worth reading.
+					prefixText = truncate(names[0], max(width/4, 4)) + ": "
+				}
+			}
+			prefix := ""
+			if prefixText != "" {
+				prefix = blockerProjectStyle.Render(prefixText)
+			}
+			handle := itemHandle(b)
+			skeleton := func(p string) int {
+				return lipgloss.Width(fmt.Sprintf("     └─ blocked by: %s (%s)", p, handle))
+			}
+			// A narrow pane gives up the owning project before it gives up the
+			// blocker's own title, and if even that will not fit the whole line
+			// is cut as one — a budget of "at least one character" still
+			// overflows when the scaffolding alone is wider than the pane.
+			if skeleton(prefixText) >= width {
+				prefixText, prefix = "", ""
+			}
+			if budget := width - skeleton(prefixText); budget >= 1 {
+				lines = append(lines, blockerStyle.Render(
+					fmt.Sprintf("└─ blocked by: %s%s (%s)", prefix, truncate(b.Title, budget), handle),
+				))
+			} else {
+				lines = append(lines, blockerStyle.Render(truncate(
+					fmt.Sprintf("└─ blocked by: %s (%s)", b.Title, handle), max(width-5, 1),
+				)))
+			}
+		}
+	}
+
+	if item.Notes == nil || *item.Notes == "" {
+		return lines
+	}
+
+	notePrefix := "     " + notesConnectorStyle.Render("└─ notes ▸ ")
+	// 16 is what the connector and the continuation indent both cost. A floor
+	// above that would put the note past the pane border in a narrow window.
+	wrapWidth := max(width-16, 1)
+	first := true
+	for _, noteLine := range strings.Split(*item.Notes, "\n") {
+		for _, wrapped := range wrapLine(noteLine, wrapWidth) {
+			if first {
+				lines = append(lines, notePrefix+wrapped)
+				first = false
+			} else {
+				lines = append(lines, notesPreviewStyle.Render(wrapped))
+			}
+		}
+	}
+	return lines
 }
 
 func (m *App) renderItemLine(item model.ProjectItemInProject, selected bool, width int, moving bool) string {
@@ -3450,10 +3666,21 @@ func (m *App) renderItemLine(item model.ProjectItemInProject, selected bool, wid
 
 	idText := itemHandle(item.ProjectItem)
 
+	// Everything but the title is fixed width, so the title is what gives when
+	// the row will not fit. An over-long row is not merely untidy: lipgloss
+	// wraps it at the pane border, spending a line the scroll never counted and
+	// pushing the pane past the height it was handed. Padding is charged at the
+	// widest of the three styles so the budget holds for all of them.
+	fixed := lipgloss.Width(fmt.Sprintf("   %s %s%s%s  %s", status, multiProject, hasNotes, taskIndicator, idText))
+	if moving {
+		fixed += lipgloss.Width("▶  ◀ MOVING")
+	}
+	title := truncate(item.Title, max(width-fixed, 1))
+
 	var content string
 	if item.Completed {
 		content = itemCompletedStyle.Render(
-			fmt.Sprintf("%s %s%s%s%s  %s", status, item.Title, multiProject, hasNotes, taskIndicator, idText),
+			fmt.Sprintf("%s %s%s%s%s  %s", status, title, multiProject, hasNotes, taskIndicator, idText),
 		)
 	} else {
 		id := itemIDStyle.Render(idText)
@@ -3469,7 +3696,7 @@ func (m *App) renderItemLine(item model.ProjectItemInProject, selected bool, wid
 		if taskIndicator != "" {
 			tasks = dimStyle.Render(taskIndicator)
 		}
-		content = fmt.Sprintf("%s %s%s%s%s  %s", status, item.Title, mp, notes, tasks, id)
+		content = fmt.Sprintf("%s %s%s%s%s  %s", status, title, mp, notes, tasks, id)
 	}
 
 	if moving {

@@ -80,7 +80,8 @@ func toModelProjectWithItemCount(row generated.ListProjectsWithItemCountRow) mod
 			Status: row.Status, StatusReason: row.StatusReason, ClosedAt: row.ClosedAt,
 			Position: row.Position, CreatedAt: row.CreatedAt,
 		}),
-		ItemCount: int(row.ItemCount),
+		ItemCount:      int(row.ItemCount),
+		CompletedCount: int(row.CompletedCount),
 	}
 }
 
@@ -91,7 +92,8 @@ func toModelProjectWithItemCountFromGet(row generated.GetProjectWithItemCountRow
 			Status: row.Status, StatusReason: row.StatusReason, ClosedAt: row.ClosedAt,
 			Position: row.Position, CreatedAt: row.CreatedAt,
 		}),
-		ItemCount: int(row.ItemCount),
+		ItemCount:      int(row.ItemCount),
+		CompletedCount: int(row.CompletedCount),
 	}
 }
 

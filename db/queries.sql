@@ -2,8 +2,16 @@
 -- it out of the list, so an unfiltered default would make completing one do
 -- nothing visible. Named parameter so the filter reads as a status rather than
 -- a bare `?`, and so sqlfluff sees a bind rather than an unqualified column.
+--
+-- The completed split rides along with the total rather than being a second
+-- query: the pane draws both numbers on every row, so asking twice would mean a
+-- query per project.
 -- name: ListProjectsWithItemCount :many
-SELECT p.*, COUNT(pi.id) AS item_count
+SELECT
+    p.*,
+    CAST(COALESCE(SUM(CASE WHEN pi.completed = 1 THEN 1 ELSE 0 END), 0) AS INTEGER)
+        AS completed_count,
+    COUNT(pi.id) AS item_count
 FROM projects p
 LEFT JOIN project_item_memberships m ON p.id = m.project_id
 LEFT JOIN project_items pi ON m.item_id = pi.id AND pi.archived = 0
@@ -15,7 +23,11 @@ ORDER BY p.closed_at IS NULL DESC, p.closed_at DESC, p.position ASC, p.name ASC;
 SELECT * FROM projects WHERE id = ?;
 
 -- name: GetProjectWithItemCount :one
-SELECT p.*, COUNT(pi.id) AS item_count
+SELECT
+    p.*,
+    CAST(COALESCE(SUM(CASE WHEN pi.completed = 1 THEN 1 ELSE 0 END), 0) AS INTEGER)
+        AS completed_count,
+    COUNT(pi.id) AS item_count
 FROM projects p
 LEFT JOIN project_item_memberships m ON p.id = m.project_id
 LEFT JOIN project_items pi ON m.item_id = pi.id AND pi.archived = 0

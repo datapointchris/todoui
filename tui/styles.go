@@ -26,6 +26,14 @@ var (
 					PaddingLeft(1).
 					Foreground(lipgloss.Color("5"))
 
+	// Project item counts. Color carries the whole signal: a zero is dim
+	// because "nothing done yet" and "nothing left open" are both states you
+	// want to read off the pane without doing arithmetic on a total.
+	projectOpenCountStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("3"))
+	projectDoneCountStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("2"))
+
 	// All pseudo-project
 	allProjectStyle = lipgloss.NewStyle().
 			PaddingLeft(0).
