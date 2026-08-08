@@ -950,3 +950,76 @@ func TestPush_AQueuedCreateIsPushedExactlyOnce(t *testing.T) {
 		t.Errorf("POST /project-items/ called %d times, want exactly 1", creates)
 	}
 }
+
+// The server assembles /projects/ and each item's embedded Projects list
+// separately, and nothing makes the two agree — the real API returned items
+// belonging to projects the projects endpoint omitted. With foreign keys off
+// that wrote an orphan membership, and 46 accumulated until the projects
+// migration refused to run past them. With foreign keys on it would fail the
+// pull outright, which would be worse: one inconsistent link would cost every
+// other change in the reconcile. The link is dropped and the pull carries on.
+func TestPull_DropsLinksToEntitiesTheServerDidNotSend(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/projects/":
+			_ = json.NewEncoder(w).Encode([]model.Project{
+				{ID: "proj-1", Name: "Real", Position: 0, CreatedAt: time.Now()},
+			})
+		case "/project-items/":
+			_ = json.NewEncoder(w).Encode([]model.ProjectItemDetail{{
+				ProjectItem: model.ProjectItem{ID: "item-1", Title: "Kept", CreatedAt: time.Now(), UpdatedAt: time.Now()},
+				Projects: []model.Project{
+					{ID: "proj-1", Name: "Real"},
+					{ID: "proj-missing", Name: "Never sent by /projects/"},
+				},
+				DependencyIDs: []string{"item-missing"},
+				Tasks: []model.ProjectItemTask{
+					{ID: "task-1", ItemID: "item-1", Title: "Kept task", CreatedAt: time.Now()},
+				},
+			}})
+		default:
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("{}"))
+		}
+	})
+
+	database, err := db.Open(":memory:")
+	if err != nil {
+		t.Fatalf("opening database: %v", err)
+	}
+	defer func() { _ = database.Close() }()
+
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	engine := sync.New(database, ts.URL, "")
+	if err := engine.Pull(t.Context()); err != nil {
+		t.Fatalf("one unlinkable membership failed the whole pull: %v", err)
+	}
+
+	local := backend.NewLocalBackend(database)
+	projects, err := local.GetItemProjects("item-1")
+	if err != nil {
+		t.Fatalf("GetItemProjects: %v", err)
+	}
+	if len(projects) != 1 || projects[0].ID != "proj-1" {
+		t.Errorf("expected only the membership that has a project, got %v", projects)
+	}
+
+	var violations int
+	if err := database.QueryRow("SELECT COUNT(*) FROM pragma_foreign_key_check").Scan(&violations); err != nil {
+		t.Fatalf("checking foreign keys: %v", err)
+	}
+	if violations != 0 {
+		t.Errorf("the pull left %d dangling rows behind", violations)
+	}
+
+	tasks, err := local.ListTasks("item-1")
+	if err != nil {
+		t.Fatalf("ListTasks: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Errorf("the good task went with the bad link: %v", tasks)
+	}
+}

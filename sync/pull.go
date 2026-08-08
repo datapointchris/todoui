@@ -182,12 +182,20 @@ func (e *Engine) pull(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("listing local projects: %w", err)
 	}
+	// Which projects a membership may legally point at once this loop is done:
+	// what the server sent, plus anything created locally that the sweep spares.
+	projectExists := make(map[string]bool, len(serverProjectIDs))
+	for id := range serverProjectIDs {
+		projectExists[id] = true
+	}
 	for _, lp := range localProjects {
 		if !serverProjectIDs[lp.ID] && !queuedLocally[lp.ID] {
 			if err := qtx.DeleteProject(ctx, lp.ID); err != nil {
 				return fmt.Errorf("deleting stale project %s: %w", lp.ID, err)
 			}
+			continue
 		}
+		projectExists[lp.ID] = true
 	}
 
 	// Upsert items
@@ -214,12 +222,18 @@ func (e *Engine) pull(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("listing local items: %w", err)
 	}
+	itemExists := make(map[string]bool, len(serverItemIDs))
+	for id := range serverItemIDs {
+		itemExists[id] = true
+	}
 	for _, li := range localItems {
 		if !serverItemIDs[li.ID] && !queuedLocally[li.ID] {
 			if err := qtx.DeleteItem(ctx, li.ID); err != nil {
 				return fmt.Errorf("deleting stale item %s: %w", li.ID, err)
 			}
+			continue
 		}
+		itemExists[li.ID] = true
 	}
 
 	// Replace all memberships with server state
@@ -231,6 +245,16 @@ func (e *Engine) pull(ctx context.Context) error {
 			continue
 		}
 		for _, proj := range extra.detail.Projects {
+			// An item detail can name a project the projects endpoint did not
+			// return — the two answers are assembled separately server-side and
+			// nothing makes them agree. The link is dropped rather than
+			// inserted: it has no project to point at, and failing the pull over
+			// it would take the whole reconcile down with it, which is the
+			// opposite of local-first. Before foreign keys were enforced this
+			// wrote an orphan row instead, and 46 of them accumulated.
+			if !projectExists[proj.ID] || !itemExists[extra.detail.ID] {
+				continue
+			}
 			if err := qtx.UpsertMembership(ctx, generated.UpsertMembershipParams{
 				ItemID:    extra.detail.ID,
 				ProjectID: proj.ID,
@@ -250,6 +274,11 @@ func (e *Engine) pull(ctx context.Context) error {
 			continue
 		}
 		for _, depID := range extra.detail.DependencyIDs {
+			// Same reasoning as memberships: a blocker the server no longer
+			// lists has no row to reference.
+			if !itemExists[depID] || !itemExists[extra.detail.ID] {
+				continue
+			}
 			if err := qtx.UpsertDependency(ctx, generated.UpsertDependencyParams{
 				ItemID:      extra.detail.ID,
 				DependsOnID: depID,
@@ -263,6 +292,9 @@ func (e *Engine) pull(ctx context.Context) error {
 	serverTaskIDs := make(map[string]bool)
 	for _, extra := range extras {
 		for _, task := range extra.tasks {
+			if !itemExists[task.ItemID] {
+				continue
+			}
 			serverTaskIDs[task.ID] = true
 			if err := qtx.UpsertTask(ctx, generated.UpsertTaskParams{
 				ID:        task.ID,
