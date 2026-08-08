@@ -45,3 +45,25 @@ jobs:
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
           govulncheck ./...
+
+      # > custom:after:go - sqlc drift and the Taskfile build path
+      #
+      # The generated checkout is depth 1 with no tags, so the Taskfile's
+      # `git describe --tags --always` would silently fall back to a bare
+      # commit hash and the step would stop resembling a real build.
+      - name: Fetch tags
+        run: git fetch --prune --tags --unshallow || git fetch --prune --tags
+
+      # Pinned to the version generating the committed code — a newer sqlc can
+      # emit different output and fail here while passing locally.
+      - name: Check sqlc generated code is current
+        run: |
+          go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0
+          cd db && sqlc diff
+
+      # Executes the Taskfile so its build paths cannot silently rot again, as
+      # they did for 109 days after the package layout flatten.
+      - name: Build via Taskfile
+        run: |
+          go install github.com/go-task/task/v3/cmd/task@v3.52.0
+          task build
