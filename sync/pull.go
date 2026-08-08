@@ -198,13 +198,19 @@ func (e *Engine) pull(ctx context.Context) error {
 		projectExists[lp.ID] = true
 	}
 
-	// Upsert items
+	// Upsert items, numbers last.
+	//
+	// idx_items_number is unique and the upsert writes row by row, so an item
+	// taking a number another row has not given up yet fails the whole pull —
+	// which is what any renumbering upstream looks like from here. Clearing the
+	// server's items to unnumbered first makes the pass order-independent; the
+	// index is partial over non-null numbers, so any number of rows may sit
+	// unnumbered in between.
 	serverItemIDs := make(map[string]bool, len(items))
 	for _, item := range items {
 		serverItemIDs[item.ID] = true
 		if err := qtx.UpsertItem(ctx, generated.UpsertItemParams{
 			ID:        item.ID,
-			Number:    nullInt(item.Number),
 			Title:     item.Title,
 			Notes:     nullStr(item.Notes),
 			Repo:      nullStr(item.Repo),
@@ -214,6 +220,17 @@ func (e *Engine) pull(ctx context.Context) error {
 			UpdatedAt: item.UpdatedAt.Format(time.RFC3339Nano),
 		}); err != nil {
 			return fmt.Errorf("upserting item %s: %w", item.ID, err)
+		}
+	}
+	for _, item := range items {
+		if item.Number == nil {
+			continue
+		}
+		if err := qtx.SetItemNumber(ctx, generated.SetItemNumberParams{
+			ID:     item.ID,
+			Number: nullInt(item.Number),
+		}); err != nil {
+			return fmt.Errorf("numbering item %s: %w", item.ID, err)
 		}
 	}
 

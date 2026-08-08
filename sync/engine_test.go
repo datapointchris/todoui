@@ -1023,3 +1023,61 @@ func TestPull_DropsLinksToEntitiesTheServerDidNotSend(t *testing.T) {
 		t.Errorf("the good task went with the bad link: %v", tasks)
 	}
 }
+
+// idx_items_number is unique and the upsert writes row by row, so two items
+// swapping numbers upstream means one of them briefly needs a number the other
+// still holds. Writing the numbers after every row has been cleared makes the
+// pass order-independent — otherwise any renumbering upstream fails the entire
+// pull and todoui never syncs again.
+func TestPull_SurvivesItemsSwappingNumbers(t *testing.T) {
+	numbers := map[string]int{"item-a": 1, "item-b": 2}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path != "/project-items/" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("[]"))
+			return
+		}
+		out := make([]model.ProjectItemDetail, 0, 2)
+		for _, id := range []string{"item-a", "item-b"} {
+			n := numbers[id]
+			out = append(out, model.ProjectItemDetail{
+				ProjectItem: model.ProjectItem{
+					ID: id, Number: &n, Title: id,
+					CreatedAt: time.Now(), UpdatedAt: time.Now(),
+				},
+				DependencyIDs: []string{},
+				Tasks:         []model.ProjectItemTask{},
+			})
+		}
+		_ = json.NewEncoder(w).Encode(out)
+	})
+
+	database, err := db.Open(":memory:")
+	if err != nil {
+		t.Fatalf("opening database: %v", err)
+	}
+	defer func() { _ = database.Close() }()
+
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	engine := sync.New(database, ts.URL, "")
+	if err := engine.Pull(t.Context()); err != nil {
+		t.Fatalf("first pull: %v", err)
+	}
+
+	numbers["item-a"], numbers["item-b"] = 2, 1
+	if err := engine.Pull(t.Context()); err != nil {
+		t.Fatalf("a swap upstream failed the pull: %v", err)
+	}
+
+	local := backend.NewLocalBackend(database)
+	item, err := local.GetItem("item-a")
+	if err != nil {
+		t.Fatalf("GetItem: %v", err)
+	}
+	if item.Number == nil || *item.Number != 2 {
+		t.Errorf("item-a number = %v, want 2", item.Number)
+	}
+}
