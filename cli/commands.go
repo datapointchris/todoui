@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/datapointchris/goselfupdate/cobracmd"
 	"github.com/spf13/cobra"
 
 	"github.com/datapointchris/todoui/backend"
@@ -75,7 +76,7 @@ func (c *commands) addCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(projects) == 0 {
-				return fmt.Errorf("-p/--project is required")
+				return cobracmd.UsageError(fmt.Errorf("-p/--project is required"))
 			}
 			// Flags are checked before the lookups: validating what was typed is
 			// free, and reporting the project miss first would hide a second
@@ -254,10 +255,10 @@ func (c *commands) reorderCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if project == "" {
-				return fmt.Errorf("--project is required")
+				return cobracmd.UsageError(fmt.Errorf("--project is required"))
 			}
 			if !cmd.Flags().Changed("position") {
-				return fmt.Errorf("--position is required")
+				return cobracmd.UsageError(fmt.Errorf("--position is required"))
 			}
 			b := c.backend()
 			itemID, err := resolveItemID(b, args[0])
