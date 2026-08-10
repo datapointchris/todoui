@@ -8,8 +8,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/datapointchris/todoui/v2/backend"
-	"github.com/datapointchris/todoui/v2/db"
+	"github.com/datapointchris/todoui/backend"
+	"github.com/datapointchris/todoui/db"
 )
 
 // The layout bugs that reached a human all needed content no fixture had:

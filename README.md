@@ -25,7 +25,7 @@ Personal project organization tool. Local-first SQLite with optional background 
 ## Install
 
 ```bash
-go install github.com/datapointchris/todoui/v2@latest
+go install github.com/datapointchris/todoui@latest
 ```
 
 Or build from source:

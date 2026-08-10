@@ -5,8 +5,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/datapointchris/todoui/v2/backend"
-	"github.com/datapointchris/todoui/v2/model"
+	"github.com/datapointchris/todoui/backend"
+	"github.com/datapointchris/todoui/model"
 )
 
 // An item is named by its number, which is what every command prints. The two

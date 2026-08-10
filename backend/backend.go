@@ -1,6 +1,6 @@
 package backend
 
-import "github.com/datapointchris/todoui/v2/model"
+import "github.com/datapointchris/todoui/model"
 
 // Backend defines the interface for all data operations.
 // LocalBackend provides direct SQLite access; SyncBackend wraps it with background push/pull.

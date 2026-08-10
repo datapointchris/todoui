@@ -8,7 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/datapointchris/todoui/v2/model"
+	"github.com/datapointchris/todoui/model"
 )
 
 // printJSON writes v to stdout for the machine-readable path. Ids are emitted

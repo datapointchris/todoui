@@ -5,8 +5,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/datapointchris/todoui/v2/backend"
-	"github.com/datapointchris/todoui/v2/model"
+	"github.com/datapointchris/todoui/backend"
+	"github.com/datapointchris/todoui/model"
 )
 
 func (c *commands) tasksCmd() *cobra.Command {

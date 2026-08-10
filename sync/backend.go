@@ -3,8 +3,8 @@ package sync
 import (
 	"fmt"
 
-	"github.com/datapointchris/todoui/v2/backend"
-	"github.com/datapointchris/todoui/v2/model"
+	"github.com/datapointchris/todoui/backend"
+	"github.com/datapointchris/todoui/model"
 )
 
 // SyncBackend wraps LocalBackend and queues sync operations after mutations.

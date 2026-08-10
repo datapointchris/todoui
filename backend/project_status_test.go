@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/datapointchris/todoui/v2/db"
-	"github.com/datapointchris/todoui/v2/model"
+	"github.com/datapointchris/todoui/db"
+	"github.com/datapointchris/todoui/model"
 )
 
 func mustSetStatus(t *testing.T, b *LocalBackend, id, status string, reason *string) *model.Project {

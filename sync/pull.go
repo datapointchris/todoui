@@ -10,8 +10,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/datapointchris/todoui/v2/db/generated"
-	"github.com/datapointchris/todoui/v2/model"
+	"github.com/datapointchris/todoui/db/generated"
+	"github.com/datapointchris/todoui/model"
 )
 
 // LastPullAt reports when the local database last reconciled with the server,
