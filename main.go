@@ -14,13 +14,13 @@ import (
 	"github.com/datapointchris/goselfupdate/cobracmd"
 	"github.com/spf13/cobra"
 
-	"github.com/datapointchris/todoui/backend"
-	"github.com/datapointchris/todoui/cli"
-	"github.com/datapointchris/todoui/config"
-	"github.com/datapointchris/todoui/db"
-	"github.com/datapointchris/todoui/repos"
-	"github.com/datapointchris/todoui/sync"
-	"github.com/datapointchris/todoui/tui"
+	"github.com/datapointchris/todoui/v2/backend"
+	"github.com/datapointchris/todoui/v2/cli"
+	"github.com/datapointchris/todoui/v2/config"
+	"github.com/datapointchris/todoui/v2/db"
+	"github.com/datapointchris/todoui/v2/repos"
+	"github.com/datapointchris/todoui/v2/sync"
+	"github.com/datapointchris/todoui/v2/tui"
 )
 
 func main() {

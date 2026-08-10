@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/datapointchris/todoui/model"
+	"github.com/datapointchris/todoui/v2/model"
 )
 
 type pickerProject struct {

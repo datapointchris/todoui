@@ -9,10 +9,10 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/datapointchris/todoui/db/generated"
-	"github.com/datapointchris/todoui/graph"
-	"github.com/datapointchris/todoui/model"
-	"github.com/datapointchris/todoui/repos"
+	"github.com/datapointchris/todoui/v2/db/generated"
+	"github.com/datapointchris/todoui/v2/graph"
+	"github.com/datapointchris/todoui/v2/model"
+	"github.com/datapointchris/todoui/v2/repos"
 )
 
 // LocalBackend provides direct SQLite access for local mode.

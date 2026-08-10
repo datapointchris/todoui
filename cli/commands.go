@@ -8,9 +8,9 @@ import (
 	"github.com/datapointchris/goselfupdate/cobracmd"
 	"github.com/spf13/cobra"
 
-	"github.com/datapointchris/todoui/backend"
-	"github.com/datapointchris/todoui/model"
-	"github.com/datapointchris/todoui/repos"
+	"github.com/datapointchris/todoui/v2/backend"
+	"github.com/datapointchris/todoui/v2/model"
+	"github.com/datapointchris/todoui/v2/repos"
 )
 
 // commands takes a pointer to the Backend interface so that commands can be

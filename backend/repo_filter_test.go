@@ -4,7 +4,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/datapointchris/todoui/model"
+	"github.com/datapointchris/todoui/v2/model"
 )
 
 func strptr(s string) *string { return &s }

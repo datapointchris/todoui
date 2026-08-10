@@ -18,7 +18,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/datapointchris/todoui/config"
+	"github.com/datapointchris/todoui/v2/config"
 )
 
 type registryFile struct {

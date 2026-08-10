@@ -9,7 +9,7 @@ layout`. Siblings to the root `main.go` are `tui/`, `backend/`, `cli/`,
 
 Any path referencing `./cmd/todoui` or `./todoui` as a build target is stale
 — the module builds from the repo root: `go build .` /
-`go install github.com/datapointchris/todoui@latest`.
+`go install github.com/datapointchris/todoui/v2@latest`.
 
 ## How to run and test
 

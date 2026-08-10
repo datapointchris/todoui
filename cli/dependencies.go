@@ -5,7 +5,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/datapointchris/todoui/backend"
+	"github.com/datapointchris/todoui/v2/backend"
 )
 
 func (c *commands) addDependencyCmd() *cobra.Command {

@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/datapointchris/todoui/backend"
-	"github.com/datapointchris/todoui/model"
+	"github.com/datapointchris/todoui/v2/backend"
+	"github.com/datapointchris/todoui/v2/model"
 )
 
 func mustProject(t *testing.T, b backend.Backend, name string) *model.Project {

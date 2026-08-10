@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/datapointchris/todoui/backend"
-	"github.com/datapointchris/todoui/db"
-	"github.com/datapointchris/todoui/model"
-	"github.com/datapointchris/todoui/sync"
+	"github.com/datapointchris/todoui/v2/backend"
+	"github.com/datapointchris/todoui/v2/db"
+	"github.com/datapointchris/todoui/v2/model"
+	"github.com/datapointchris/todoui/v2/sync"
 )
 
 // apiWith serves a fixed set of projects and items, which is all a pull reads.
