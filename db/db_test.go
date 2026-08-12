@@ -526,7 +526,7 @@ func TestMigrate_ReplacesTheGlobalNameConstraint(t *testing.T) {
 		t.Fatalf("creating the partial index: %v", err)
 	}
 	if _, err := database.Exec(
-		"INSERT INTO projects (id, name, status) VALUES ('p2', 'clisteno', 'done')",
+		"INSERT INTO projects (id, name, status) VALUES ('p2', 'clisteno', 'completed')",
 	); err != nil {
 		t.Errorf("a closed project must be allowed to share a name: %v", err)
 	}

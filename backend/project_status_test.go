@@ -44,7 +44,7 @@ func TestCompletingHidesTheProject(t *testing.T) {
 	b := newTestBackend(t)
 	p := mustCreateProject(t, b, "finite effort")
 
-	mustSetStatus(t, b, p.ID, model.StatusDone, nil)
+	mustSetStatus(t, b, p.ID, model.StatusCompleted, nil)
 
 	active, err := b.ListProjects()
 	if err != nil {
@@ -58,7 +58,7 @@ func TestCompletingHidesTheProject(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listing all projects: %v", err)
 	}
-	if len(all) != 1 || all[0].Status != model.StatusDone {
+	if len(all) != 1 || all[0].Status != model.StatusCompleted {
 		t.Errorf("--status all must still show it, got %v", all)
 	}
 }
@@ -67,7 +67,7 @@ func TestCompletingStampsTheClosingDate(t *testing.T) {
 	b := newTestBackend(t)
 	p := mustCreateProject(t, b, "finite effort")
 
-	done := mustSetStatus(t, b, p.ID, model.StatusDone, nil)
+	done := mustSetStatus(t, b, p.ID, model.StatusCompleted, nil)
 
 	if done.ClosedAt == nil {
 		t.Error("closed_at must be stamped: created_at orders by when work started, not when it ended")
@@ -173,7 +173,7 @@ func TestClosingAProjectLeavesItsItemsAlone(t *testing.T) {
 func TestAFinishedProjectGivesItsNameBack(t *testing.T) {
 	b := newTestBackend(t)
 	first := mustCreateProject(t, b, "clisteno")
-	mustSetStatus(t, b, first.ID, model.StatusDone, nil)
+	mustSetStatus(t, b, first.ID, model.StatusCompleted, nil)
 
 	second, err := b.CreateProject(model.CreateProject{Name: "clisteno"})
 	if err != nil {
@@ -196,7 +196,7 @@ func TestTwoActiveProjectsCannotShareAName(t *testing.T) {
 func TestReopeningIntoATakenNameIsRefused(t *testing.T) {
 	b := newTestBackend(t)
 	closed := mustCreateProject(t, b, "clisteno")
-	mustSetStatus(t, b, closed.ID, model.StatusDone, nil)
+	mustSetStatus(t, b, closed.ID, model.StatusCompleted, nil)
 	mustCreateProject(t, b, "clisteno")
 
 	if _, err := b.SetProjectStatus(closed.ID, model.StatusActive, nil); !errors.Is(err, model.ErrDuplicateName) {
@@ -229,7 +229,7 @@ func TestListPutsActiveProjectsAheadOfClosedOnes(t *testing.T) {
 	b := newTestBackend(t)
 	closed := mustCreateProject(t, b, "finished")
 	mustCreateProject(t, b, "live")
-	mustSetStatus(t, b, closed.ID, model.StatusDone, nil)
+	mustSetStatus(t, b, closed.ID, model.StatusCompleted, nil)
 
 	all, err := b.ListProjectsByStatus(model.StatusAll)
 	if err != nil {

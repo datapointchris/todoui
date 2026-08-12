@@ -515,7 +515,7 @@ func (c *commands) projectsCompleteCmd() *cobra.Command {
 			"item still open when the project finished was still open.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
-			return c.setProjectStatus(args[0], model.StatusDone, nil, "Completed")
+			return c.setProjectStatus(args[0], model.StatusCompleted, nil, "Completed")
 		},
 	}
 }

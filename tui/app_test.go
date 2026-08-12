@@ -420,10 +420,10 @@ func TestShowClosedTogglesTheClosedProjectsBackIn(t *testing.T) {
 	if len(app.projects) != 1 {
 		t.Fatalf("C must bring closed projects back, got %d", len(app.projects))
 	}
-	if app.projects[0].Status != model.StatusDone {
+	if app.projects[0].Status != model.StatusCompleted {
 		t.Errorf("status = %q, want done", app.projects[0].Status)
 	}
-	if !strings.Contains(app.View(), "done") {
+	if !strings.Contains(app.View(), "completed") {
 		t.Errorf("the row must be labeled with its status:\n%s", app.View())
 	}
 

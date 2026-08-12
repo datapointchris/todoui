@@ -2121,7 +2121,7 @@ func (m *App) handleProjectDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			flashCmd := m.flash("Already closed — r reopens it")
 			return m, flashCmd
 		}
-		return m, setProjectStatusCmd(m.backend, m.projectDetail.ID, model.StatusDone, nil)
+		return m, setProjectStatusCmd(m.backend, m.projectDetail.ID, model.StatusCompleted, nil)
 
 	case "x":
 		if model.IsTerminalStatus(m.projectDetail.Status) {

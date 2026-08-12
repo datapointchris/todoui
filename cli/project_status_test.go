@@ -19,7 +19,7 @@ func mustProject(t *testing.T, b backend.Backend, name string) *model.Project {
 
 func mustClose(t *testing.T, b backend.Backend, id string) {
 	t.Helper()
-	if _, err := b.SetProjectStatus(id, model.StatusDone, nil); err != nil {
+	if _, err := b.SetProjectStatus(id, model.StatusCompleted, nil); err != nil {
 		t.Fatalf("completing project: %v", err)
 	}
 }
