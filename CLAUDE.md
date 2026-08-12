@@ -165,7 +165,7 @@ items, and the command printed `Synced.`
 **To run against production data, run from outside this repo**, where direnv has
 loaded nothing. Un-setting your way out is how the accident happened: `env -u`
 on the variable you remembered still leaves the two you did not. The fleet-wide
-form of this rule is `~/dev/standards/infrastructure.md` § "A dev environment
+form of this rule is `standards/infrastructure.md` § "A dev environment
 override is all-or-nothing".
 
 `sync_origin` is the enforcement, because a rule only prose enforces is
