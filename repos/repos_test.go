@@ -79,12 +79,25 @@ func TestMalformedRegistryIsAnError(t *testing.T) {
 	}
 }
 
-// The tool asks for the registry inside its own XDG data directory and knows
-// nothing about where the file is really maintained — a symlink points it at a
-// shared one, so no repo carries a fleet-specific path.
+// The compiled default names nothing outside the tool's own XDG data directory,
+// which is what keeps a generic tool generic. $REPOS_JSON is cleared explicitly:
+// it is set on any machine that maintains a registry, so without this the test
+// reads that machine's real path and fails for a reason unrelated to the code.
 func TestDefaultPathIsTheToolsOwnDataDirectory(t *testing.T) {
+	t.Setenv("REPOS_JSON", "")
 	t.Setenv("XDG_DATA_HOME", "/tmp/xdg")
 	if got, want := DefaultPath(), "/tmp/xdg/todoui/repos.json"; got != want {
+		t.Errorf("DefaultPath() = %q, want %q", got, want)
+	}
+}
+
+// A machine that maintains its registry elsewhere says so once, and every tool
+// reading that registry consults the same name. This replaced a hand-made
+// symlink from the tool's data directory, which was declared nowhere.
+func TestTheDeclaredPathBeatsTheToolsOwnDirectory(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", "/tmp/xdg")
+	t.Setenv("REPOS_JSON", "/declared/repos.json")
+	if got, want := DefaultPath(), "/declared/repos.json"; got != want {
 		t.Errorf("DefaultPath() = %q, want %q", got, want)
 	}
 }

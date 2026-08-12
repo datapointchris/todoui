@@ -33,10 +33,27 @@ type Registry struct {
 	path  string
 }
 
-// DefaultPath is todoui's own data directory, per the XDG split — the tool asks
-// for the registry where its own data lives and knows nothing about where the
-// file is actually maintained. Point it at a shared registry with a symlink.
+// DefaultPath is where this machine keeps the registry: $REPOS_JSON, else
+// todoui's own data directory per the XDG split.
+//
+// The second half is the compiled default and names nothing outside this tool's
+// own directories, which is what keeps a generic tool generic. The first half is
+// how a machine says the file is maintained elsewhere.
+//
+// It used to be the data directory alone, and this comment said "point it at a
+// shared registry with a symlink". That instruction is what produced one: a
+// hand-made link from todoui's data directory to the real file, on every
+// machine, declared nowhere and reported by nothing. Worse here than most,
+// because the link pointed at another link — so a single clobbered symlink two
+// hops away forked the registry silently, with both copies still parsing.
+//
+// $REPOS_JSON is that arrangement written down instead. dotfiles declares it in
+// install/flags.yml under `required:`, so `dotfiles check` fails while it is
+// unset rather than letting todoui quietly accept any repo name.
 func DefaultPath() string {
+	if p := os.Getenv("REPOS_JSON"); p != "" {
+		return p
+	}
 	return filepath.Join(config.UserDataDir(), "todoui", "repos.json")
 }
 
