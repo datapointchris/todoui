@@ -72,9 +72,9 @@ func TestSkipsPullLeavesDataCommandsAlone(t *testing.T) {
 
 	for _, path := range [][]string{
 		{"list"},
-		{"add"},
+		{"create"},
 		{"search"},
-		{"view"},
+		{"show"},
 		{"blocked"},
 		{"projects"},
 	} {

@@ -38,11 +38,11 @@ func (c *commands) flush() {
 // may be nil.
 func RegisterAll(parent *cobra.Command, b *backend.Backend, flushSync func()) {
 	c := &commands{b: b, flushSync: flushSync}
-	parent.AddCommand(c.addCmd())
-	parent.AddCommand(c.doneCmd())
+	parent.AddCommand(c.createCmd())
+	parent.AddCommand(c.completeCmd())
 	parent.AddCommand(c.reopenCmd())
 	parent.AddCommand(c.listCmd())
-	parent.AddCommand(c.viewCmd())
+	parent.AddCommand(c.showCmd())
 	parent.AddCommand(c.editCmd())
 	parent.AddCommand(c.searchCmd())
 	parent.AddCommand(c.deleteCmd())
@@ -64,16 +64,22 @@ func RegisterAll(parent *cobra.Command, b *backend.Backend, flushSync func()) {
 	parent.AddCommand(versionCmd())
 }
 
-func (c *commands) addCmd() *cobra.Command {
+func (c *commands) createCmd() *cobra.Command {
 	var (
 		projects []string
 		repo     string
 		notes    string
 	)
 	cmd := &cobra.Command{
-		Use:   "add <title>",
-		Short: "Add a new item",
-		Args:  cobra.ExactArgs(1),
+		Use:   "create <title>",
+		Short: "Create a new item",
+		// `add` was the spelling here until 2026-08-12. It is the fleet's word
+		// for attaching something to a parent that already exists, and this
+		// brings an item into existence, so it was the clearest misuse of `add`
+		// on the fleet. SuggestFor routes the muscle memory without making a
+		// second spelling runnable.
+		SuggestFor: []string{"add", "new"},
+		Args:       cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(projects) == 0 {
 				return cobracmd.UsageError(fmt.Errorf("-p/--project is required"))
@@ -123,8 +129,13 @@ func (c *commands) addCmd() *cobra.Command {
 	return cmd
 }
 
-func (c *commands) doneCmd() *cobra.Command {
-	return c.completionCmd("done", "Mark an item as done", true, "Done")
+func (c *commands) completeCmd() *cobra.Command {
+	cmd := c.completionCmd("complete", "Mark an item completed", true, "Completed")
+	// `done` until 2026-08-12. icb spells the same act on the same rows
+	// `complete`, and `done` is the fleet's word for a recurring thing finished
+	// for this cycle, which an item is not.
+	cmd.SuggestFor = []string{"done", "finish"}
+	return cmd
 }
 
 func (c *commands) reopenCmd() *cobra.Command {
@@ -297,12 +308,15 @@ func (c *commands) undoCmd() *cobra.Command {
 	}
 }
 
-func (c *commands) viewCmd() *cobra.Command {
+func (c *commands) showCmd() *cobra.Command {
 	var asJSON bool
 	cmd := &cobra.Command{
-		Use:   "view <id>",
+		Use:   "show <id>",
 		Short: "Show an item with its projects, tasks, and blockers",
-		Args:  cobra.ExactArgs(1),
+		// `view` until 2026-08-12. `show` is the fleet's word for displaying one
+		// record, and it is the only candidate that survives a singleton.
+		SuggestFor: []string{"view", "info", "get"},
+		Args:       cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			b := c.backend()
 			item, err := resolveItem(b, args[0])
