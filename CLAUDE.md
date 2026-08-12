@@ -5,7 +5,7 @@
 The main package lives at the module root. There is no `cmd/` or `internal/`
 subdirectory — they were removed in commit `e3f71c1 refactor: flatten package
 layout`. Siblings to the root `main.go` are `tui/`, `backend/`, `cli/`,
-`config/`, `db/`, `graph/`, `model/`, `sync/`.
+`config/`, `db/`, `graph/`, `model/`, `repos/`, `sync/`.
 
 Any path referencing `./cmd/todoui` or `./todoui` as a build target is stale
 — the module builds from the repo root: `go build .` /
@@ -18,14 +18,20 @@ and do not seed synthetic databases.**
 
 `.envrc` (loaded by direnv on `cd`) exports `TODOUI_DB` pointing at
 `~/.local/share/todoui/dev.db` — a dedicated dev database separate from any
-production data. The dev DB already has real projects, items, tasks,
-dependencies, and notes, which makes it a far better manual-test target than
-an empty scratch DB.
+production data. The dev DB carries real projects, items, tasks, dependencies
+and notes, which makes it a far better manual-test target than an empty scratch
+DB.
+
+⚠️ **`.envrc` is machine-local and is not in this repo. Check it exists before
+running anything here.** Without it nothing is overridden, so `go run .` opens
+the production database against the production API — which is the accident the
+three-coupled-variables rule below exists to prevent, arrived at from the other
+direction. `env | rg '^TODOUI'` returning nothing means you do not have it.
 
 ```bash
 go run .            # launch TUI against dev.db
 go run . list       # run CLI subcommands against dev.db
-go run . add "title" -p test
+go run . create "title" -p test
 ```
 
 For any TUI change, the verification path is:
@@ -51,7 +57,7 @@ It does not replace step 2.
 ## Sub-tasks, projects, dependencies
 
 The CLI covers sub-tasks, dependencies, reordering, and archival both ways —
-see the README for the verb list. `todoui add "title" -p foo` still errors if
+see the README for the verb list. `todoui create "title" -p foo` still errors if
 project `foo` doesn't exist, so create it first with `todoui projects create
 foo` or in the TUI project pane with `a`. It also errors if `foo` is closed:
 `resolveProjects` reads the active list, and filing new work into a finished
@@ -71,7 +77,7 @@ sync key and stops there; it is in `--json` and nowhere a person reads.
 
 The number is assigned by whichever database is the authority. With sync on
 that is the ichrisbirch API, and `pushCreatedItem` writes the number out of the
-create response into the local row, so `todoui add` prints the handle in the
+create response into the local row, so `todoui create` prints the handle in the
 same invocation. With sync off — the work machine, which can never reach the
 API — `AssigningItemNumbers` makes todoui allocate `max+1` itself, which cannot
 collide because that database is a disjoint universe.
@@ -118,11 +124,11 @@ the TUI creates projects too and a rule only one surface enforces is decoration.
 
 ## A project has a status, and it is not an `archived` flag
 
-`projects.status` is `active`/`done`/`dropped`. For an item, complete and
+`projects.status` is `active`/`completed`/`dropped`. For an item, complete and
 archive are orthogonal and both make sense; for a project they collapse, because
 a project is a finite effort with a definition of done — so completion *is* the
-hide signal and there is no second flag. `dropped` exists beside `done` because
-`done` alone would force you to lie about anything you merely stopped caring
+hide signal and there is no second flag. `dropped` exists beside `completed` because
+`completed` alone would force you to lie about anything you merely stopped caring
 about, and it requires a reason: "deferred" invites re-proposal, "dropped, and
 here is why" closes the question.
 
