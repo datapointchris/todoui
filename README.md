@@ -43,9 +43,9 @@ go build -o todoui .
 todoui
 
 # Create
-todoui add "Fix the auth bug" -p work
-todoui add "Setup monitoring" -p work -p homelab
-todoui add "Bump the CI matrix" -p work -r todoui -n "Node 20 is EOL"
+todoui create "Fix the auth bug" -p work
+todoui create "Setup monitoring" -p work -p homelab
+todoui create "Bump the CI matrix" -p work -r todoui -n "Node 20 is EOL"
 
 # Read
 todoui list
