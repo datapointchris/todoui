@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/spf13/viper"
@@ -13,6 +14,15 @@ import (
 type Config struct {
 	Local LocalConfig `mapstructure:"local"`
 	Sync  SyncConfig  `mapstructure:"sync"`
+
+	// ReposRegistry names a registry maintained outside todoui's data directory,
+	// which is how a machine sharing one between tools declares it. Empty, or no
+	// config file at all, leaves todoui's own data directory as the answer.
+	//
+	// The field is the config layer alone. $TODOUI_REPOS_REGISTRY above it and
+	// the data directory below it are composed by repos.DefaultPath, so the whole
+	// resolution order reads in one place rather than half here and half there.
+	ReposRegistry string `mapstructure:"repos_registry"`
 }
 
 // SyncConfig holds settings for background sync with the remote API.
@@ -34,20 +44,13 @@ type LocalConfig struct {
 // Load reads configuration from the TOML config file and environment variables.
 // Priority (highest to lowest): env vars → config file → defaults.
 func Load() (*Config, error) {
-	v := viper.New()
+	v := newViper()
 
 	// Defaults. A full pull costs 2+2N requests, so the interval trades API load
 	// against staleness; two minutes keeps an unattended TUI current without
 	// making a burst of agent CLI calls pull more than once.
 	v.SetDefault("local.db_path", defaultDBPath())
 	v.SetDefault("sync.interval", 2*time.Minute)
-
-	// Config file: $XDG_CONFIG_HOME/todoui/config.toml or ~/.config/todoui/config.toml
-	// Use XDG explicitly rather than Go's UserConfigDir, which returns
-	// ~/Library/Application Support on macOS — not where CLI tools put config.
-	v.AddConfigPath(filepath.Join(userConfigDir(), "todoui"))
-	v.SetConfigName("config")
-	v.SetConfigType("toml")
 
 	if err := v.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
@@ -84,6 +87,57 @@ func Load() (*Config, error) {
 // minSyncInterval floors the reconcile period. A full pull is 2+2N requests, so
 // anything shorter is a self-inflicted denial of service on the API.
 const minSyncInterval = 15 * time.Second
+
+// newViper points a fresh viper at todoui's config file. Shared by both readers
+// here so they cannot drift on where that file is.
+//
+// Config file: $XDG_CONFIG_HOME/todoui/config.toml or ~/.config/todoui/config.toml.
+// Use XDG explicitly rather than Go's UserConfigDir, which returns
+// ~/Library/Application Support on macOS — not where CLI tools put config.
+func newViper() *viper.Viper {
+	v := viper.New()
+	v.AddConfigPath(filepath.Join(userConfigDir(), "todoui"))
+	v.SetConfigName("config")
+	v.SetConfigType("toml")
+	return v
+}
+
+// ConfiguredReposRegistry is the repos_registry key with a leading ~ expanded,
+// and "" for every way reading it can fail. Absent config is one of those ways
+// and is not an error: a machine keeping its registry where todoui expects it
+// should not have to hold a file saying so.
+//
+// A read of its own rather than a field off Load's result, because Load
+// validates. Sync enabled without an api_url is an error there and has nothing
+// to do with where the registry lives, so resolving through it would turn that
+// unrelated failure into an empty registry — which bans nothing and reports
+// nothing.
+func ConfiguredReposRegistry() string {
+	v := newViper()
+	if err := v.ReadInConfig(); err != nil {
+		return ""
+	}
+	var cfg Config
+	if err := v.Unmarshal(&cfg); err != nil {
+		return ""
+	}
+	return expandTilde(cfg.ReposRegistry)
+}
+
+// expandTilde resolves a leading ~, which a hand-edited config will carry. Left
+// literal it names a directory that does not exist, and a registry that is not
+// there is not an error here — it reads as an empty registry rather than a bad
+// path, so the mistake surfaces as `--repo` silently accepting anything.
+func expandTilde(path string) string {
+	if !strings.HasPrefix(path, "~/") {
+		return path
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return path
+	}
+	return filepath.Join(home, path[2:])
+}
 
 func defaultDBPath() string {
 	return filepath.Join(userDataDir(), "todoui", "todoui.db")

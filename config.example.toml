@@ -2,6 +2,13 @@
 # Place at ~/.config/todoui/config.toml
 # All values can be overridden with environment variables.
 
+# Repo registry validating --repo, and the names `projects create` refuses.
+# Set this when the registry is maintained outside todoui's data directory and
+# shared with other tools. A bare key, so it must stay above the first [section].
+# Env: TODOUI_REPOS_REGISTRY
+# Default: ~/.local/share/todoui/repos.json
+# repos_registry = "~/dev/repos.json"
+
 [sync]
 # Enable background sync with ichrisbirch API
 # Env: TODOUI_SYNC

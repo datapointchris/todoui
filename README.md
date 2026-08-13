@@ -12,8 +12,9 @@ Personal project organization tool. Local-first SQLite with optional background 
 - **Sub-tasks** — checklist tasks on each item
 - **Notes** — multiline notes on items
 - **Repo links** — items can name the repo they are work on, and `--repo` filters
-  every read by it. Validated against an optional registry at
-  `$XDG_DATA_HOME/todoui/repos.json`; without one, any name is accepted
+  every read by it. Validated against an optional registry — `repos_registry` in
+  the config, else `$XDG_DATA_HOME/todoui/repos.json`; without one, any name is
+  accepted
 - **Project descriptions** — long-form notes/decisions per project, viewable and editable in project detail
 - **Project status** — a project is finished (`done`) or abandoned with a reason
   (`dropped`), and either one hides it. A name is held only by the active project
@@ -216,6 +217,8 @@ Neither flag is reachable from the background timers.
 Config file: `~/.config/todoui/config.toml`
 
 ```toml
+# repos_registry = "~/dev/repos.json"  # default: ~/.local/share/todoui/repos.json
+
 [local]
 # db_path = "/custom/path/todoui.db"  # default: ~/.local/share/todoui/todoui.db
 
@@ -240,6 +243,7 @@ Environment variable overrides:
 | `TODOUI_SYNC_URL` | API URL for sync |
 | `TODOUI_SYNC_KEY` | Personal API key for sync auth |
 | `TODOUI_SYNC_INTERVAL` | Reconcile interval (e.g. `30s`, `5m`) |
+| `TODOUI_REPOS_REGISTRY` | Repo registry path |
 
 ## Architecture
 

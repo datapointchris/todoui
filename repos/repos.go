@@ -33,26 +33,40 @@ type Registry struct {
 	path  string
 }
 
-// DefaultPath is where this machine keeps the registry: $REPOS_JSON, else
-// todoui's own data directory per the XDG split.
+// DefaultPath is where this machine keeps the registry: $TODOUI_REPOS_REGISTRY,
+// then repos_registry in todoui's config, then todoui's own data directory per
+// the XDG split.
 //
-// The second half is the compiled default and names nothing outside this tool's
-// own directories, which is what keeps a generic tool generic. The first half is
-// how a machine says the file is maintained elsewhere.
+// The last rung is the compiled default and names nothing outside this tool's
+// own directories, which is what keeps a generic tool generic. The two above it
+// are how a machine says the file is maintained elsewhere.
 //
 // It used to be the data directory alone, and this comment said "point it at a
 // shared registry with a symlink". That instruction is what produced one: a
 // hand-made link from todoui's data directory to the real file, on every
 // machine, declared nowhere and reported by nothing. Worse here than most,
 // because the link pointed at another link — so a single clobbered symlink two
-// hops away forked the registry silently, with both copies still parsing.
+// hops away forked the registry silently, with both copies still parsing. The
+// config key is that arrangement written down instead.
 //
-// $REPOS_JSON is that arrangement written down instead. dotfiles declares it in
-// install/flags.yml under `required:`, so `dotfiles check` fails while it is
-// unset rather than letting todoui quietly accept any repo name.
+// What first replaced the symlink was $REPOS_JSON, shared between tools and
+// prefixed with none of their names. It came out because it is exported from
+// ~/.env, and a process that sources no profile never sees it — run the way a
+// systemd timer runs it, a reader of this registry resolved a data directory
+// that does not exist, reported the miss, and exited 0. So the rung was empty
+// in exactly the unattended runs it existed to serve, while the config file is
+// already the machine layer and reaches every process. A tool reads no variable
+// that is not prefixed with its own name; that is what stops one fleet's
+// vocabulary being compiled into a generic tool.
+//
+// See standards/data.md § "A shared file is named in config; only the tool's
+// own default is compiled in".
 func DefaultPath() string {
-	if p := os.Getenv("REPOS_JSON"); p != "" {
+	if p := os.Getenv("TODOUI_REPOS_REGISTRY"); p != "" {
 		return p
+	}
+	if declared := config.ConfiguredReposRegistry(); declared != "" {
+		return declared
 	}
 	return filepath.Join(config.UserDataDir(), "todoui", "repos.json")
 }

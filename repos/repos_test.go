@@ -79,26 +79,89 @@ func TestMalformedRegistryIsAnError(t *testing.T) {
 	}
 }
 
+// withConfig points $XDG_CONFIG_HOME at a directory holding body as todoui's
+// config, or at an empty one when body is "". Every DefaultPath test needs it:
+// the machine running the test maintains a real config, and without the
+// redirect the middle rung answers from that instead of from the case at hand.
+func withConfig(t *testing.T, body string) {
+	t.Helper()
+	dir := t.TempDir()
+	if body != "" {
+		if err := os.MkdirAll(filepath.Join(dir, "todoui"), 0o755); err != nil {
+			t.Fatalf("creating config directory: %v", err)
+		}
+		path := filepath.Join(dir, "todoui", "config.toml")
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatalf("writing config: %v", err)
+		}
+	}
+	t.Setenv("XDG_CONFIG_HOME", dir)
+}
+
 // The compiled default names nothing outside the tool's own XDG data directory,
-// which is what keeps a generic tool generic. $REPOS_JSON is cleared explicitly:
-// it is set on any machine that maintains a registry, so without this the test
-// reads that machine's real path and fails for a reason unrelated to the code.
+// which is what keeps a generic tool generic.
 func TestDefaultPathIsTheToolsOwnDataDirectory(t *testing.T) {
-	t.Setenv("REPOS_JSON", "")
+	t.Setenv("TODOUI_REPOS_REGISTRY", "")
+	withConfig(t, "")
 	t.Setenv("XDG_DATA_HOME", "/tmp/xdg")
 	if got, want := DefaultPath(), "/tmp/xdg/todoui/repos.json"; got != want {
 		t.Errorf("DefaultPath() = %q, want %q", got, want)
 	}
 }
 
-// A machine that maintains its registry elsewhere says so once, and every tool
-// reading that registry consults the same name. This replaced a hand-made
-// symlink from the tool's data directory, which was declared nowhere.
-func TestTheDeclaredPathBeatsTheToolsOwnDirectory(t *testing.T) {
+// The three rungs in order: the tool's own variable, then its own config key,
+// then its own data directory. A machine that maintains its registry elsewhere
+// says so in the config, which replaced a hand-made symlink from the data
+// directory that was declared nowhere.
+func TestDefaultPathResolvesInThreeRungs(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", "/tmp/xdg")
-	t.Setenv("REPOS_JSON", "/declared/repos.json")
+	withConfig(t, "repos_registry = \"/declared/repos.json\"\n")
+
+	t.Setenv("TODOUI_REPOS_REGISTRY", "")
 	if got, want := DefaultPath(), "/declared/repos.json"; got != want {
+		t.Errorf("the config key must beat the data directory: got %q, want %q", got, want)
+	}
+
+	t.Setenv("TODOUI_REPOS_REGISTRY", "/from/env.json")
+	if got, want := DefaultPath(), "/from/env.json"; got != want {
+		t.Errorf("the variable must beat the config key: got %q, want %q", got, want)
+	}
+}
+
+// A hand-edited config carries a ~, and left literal it names a directory that
+// does not exist — which reads here as an empty registry that bans nothing
+// rather than as a bad path.
+func TestTheConfiguredPathExpandsALeadingTilde(t *testing.T) {
+	t.Setenv("TODOUI_REPOS_REGISTRY", "")
+	withConfig(t, "repos_registry = \"~/dev/repos.json\"\n")
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("UserHomeDir: %v", err)
+	}
+	if got, want := DefaultPath(), filepath.Join(home, "dev", "repos.json"); got != want {
 		t.Errorf("DefaultPath() = %q, want %q", got, want)
+	}
+}
+
+// $REPOS_JSON is never read. It was a rung here once, below no config key at
+// all, and it came out: the variable is exported from ~/.env, so a process that
+// sources no profile never sees it, and the rung was empty in exactly the
+// unattended runs it existed to serve. The invariant is broader than that one
+// variable — a tool consults nothing that is not prefixed with its own name.
+func TestTheUnprefixedVariableIsNeverConsulted(t *testing.T) {
+	t.Setenv("REPOS_JSON", "/unprefixed/repos.json")
+	t.Setenv("TODOUI_REPOS_REGISTRY", "")
+	t.Setenv("XDG_DATA_HOME", "/tmp/xdg")
+
+	withConfig(t, "")
+	if got, want := DefaultPath(), "/tmp/xdg/todoui/repos.json"; got != want {
+		t.Errorf("the unprefixed variable displaced the default: got %q, want %q", got, want)
+	}
+
+	withConfig(t, "repos_registry = \"/declared/repos.json\"\n")
+	if got, want := DefaultPath(), "/declared/repos.json"; got != want {
+		t.Errorf("the unprefixed variable displaced the config key: got %q, want %q", got, want)
 	}
 }
 
