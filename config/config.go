@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-viper/mapstructure/v2"
 	"github.com/spf13/viper"
 )
 
@@ -66,8 +67,20 @@ func Load() (*Config, error) {
 	_ = v.BindEnv("sync.api_key", "TODOUI_SYNC_KEY")
 	_ = v.BindEnv("sync.interval", "TODOUI_SYNC_INTERVAL")
 
+	// ErrorUnused, so a key todoui does not read is refused rather than dropped.
+	// viper decodes the merged settings map, and every default set above maps to a
+	// field below, so the only keys this can reject are ones the file supplied and
+	// the struct has no home for.
+	//
+	// The two are the same answer without it, and that is how a rename hides.
+	// Measured 2026-08-13 across this fleet: repos_file became repos_registry, and
+	// every reader that merely dropped the old spelling reported a machine that had
+	// declared nothing — indistinguishable from one whose registry is genuinely
+	// empty.
 	var cfg Config
-	if err := v.Unmarshal(&cfg); err != nil {
+	if err := v.Unmarshal(&cfg, viper.DecodeHook(mapstructure.StringToTimeDurationHookFunc()), func(dc *mapstructure.DecoderConfig) {
+		dc.ErrorUnused = true
+	}); err != nil {
 		return nil, fmt.Errorf("parsing config: %w", err)
 	}
 
