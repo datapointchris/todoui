@@ -121,14 +121,14 @@ func ConfiguredReposRegistry() string {
 	if err := v.Unmarshal(&cfg); err != nil {
 		return ""
 	}
-	return expandTilde(cfg.ReposRegistry)
+	return ExpandTilde(cfg.ReposRegistry)
 }
 
 // expandTilde resolves a leading ~, which a hand-edited config will carry. Left
 // literal it names a directory that does not exist, and a registry that is not
 // there is not an error here — it reads as an empty registry rather than a bad
 // path, so the mistake surfaces as `--repo` silently accepting anything.
-func expandTilde(path string) string {
+func ExpandTilde(path string) string {
 	if !strings.HasPrefix(path, "~/") {
 		return path
 	}

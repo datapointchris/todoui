@@ -63,7 +63,7 @@ type Registry struct {
 // own default is compiled in".
 func DefaultPath() string {
 	if p := os.Getenv("TODOUI_REPOS_REGISTRY"); p != "" {
-		return p
+		return config.ExpandTilde(p)
 	}
 	if declared := config.ConfiguredReposRegistry(); declared != "" {
 		return declared
