@@ -1086,8 +1086,8 @@ func TestPull_SurvivesItemsSwappingNumbers(t *testing.T) {
 // local row the server did not return. An unqualified fetch is therefore not a
 // narrower read — it is a delete. /project-items/ defaults to open, so the
 // unqualified version emptied the local store of finished work: measured
-// 2026-08-14 against the production database, 229 items locally with none
-// completed, against 210 completed on the server.
+// 2026-08-14 against production, the response fell from 277 rows to 239 when the
+// default changed, and the local store held 229 items with none completed.
 func TestPull_RequestsEveryStatusFromBothListEndpoints(t *testing.T) {
 	var mu goSync.Mutex
 	asked := map[string]string{}

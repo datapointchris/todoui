@@ -131,8 +131,10 @@ func (e *Engine) pull(ctx context.Context, opts PullOptions) error {
 	// status=all for the same reason as projects, and this one is not
 	// hypothetical: /project-items/ already defaults to open, so every completed
 	// item was absent from the response and the sweep below deleted it. Measured
-	// 2026-08-14 against the production store — 229 local items, none completed,
-	// against 210 completed on the server.
+	// 2026-08-14 against production — the response fell from 277 rows to 239 when
+	// the default changed, and the local store held 229 items with none completed.
+	// Only completed-and-not-archived was lost, because the old default excluded
+	// archived rows too.
 	items, err := fetchJSON[[]model.ProjectItemDetail](ctx, e.client, e.apiURL, "/project-items/?status=all")
 	if err != nil {
 		return fmt.Errorf("pulling items: %w", err)
