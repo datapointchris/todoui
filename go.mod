@@ -1,6 +1,8 @@
 module github.com/datapointchris/todoui
 
-go 1.26.6
+go 1.26.5
+
+toolchain go1.26.6
 
 require (
 	github.com/charmbracelet/bubbles v1.0.0
