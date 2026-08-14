@@ -128,7 +128,12 @@ func (e *Engine) pull(ctx context.Context, opts PullOptions) error {
 		return fmt.Errorf("pulling projects: %w", err)
 	}
 
-	items, err := fetchJSON[[]model.ProjectItemDetail](ctx, e.client, e.apiURL, "/project-items/")
+	// status=all for the same reason as projects, and this one is not
+	// hypothetical: /project-items/ already defaults to open, so every completed
+	// item was absent from the response and the sweep below deleted it. Measured
+	// 2026-08-14 against the production store — 229 local items, none completed,
+	// against 210 completed on the server.
+	items, err := fetchJSON[[]model.ProjectItemDetail](ctx, e.client, e.apiURL, "/project-items/?status=all")
 	if err != nil {
 		return fmt.Errorf("pulling items: %w", err)
 	}

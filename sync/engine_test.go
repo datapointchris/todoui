@@ -1081,3 +1081,56 @@ func TestPull_SurvivesItemsSwappingNumbers(t *testing.T) {
 		t.Errorf("item-a number = %v, want 2", item.Number)
 	}
 }
+
+// Both list fetches ask for every status, because the sweep in Pull deletes any
+// local row the server did not return. An unqualified fetch is therefore not a
+// narrower read — it is a delete. /project-items/ defaults to open, so the
+// unqualified version emptied the local store of finished work: measured
+// 2026-08-14 against the production database, 229 items locally with none
+// completed, against 210 completed on the server.
+func TestPull_RequestsEveryStatusFromBothListEndpoints(t *testing.T) {
+	var mu goSync.Mutex
+	asked := map[string]string{}
+	record := func(r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		asked[r.URL.Path] = r.URL.Query().Get("status")
+	}
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/projects/":
+			record(r)
+			_ = json.NewEncoder(w).Encode([]model.Project{})
+		case "/project-items/":
+			record(r)
+			_ = json.NewEncoder(w).Encode([]model.ProjectItemDetail{})
+		default:
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("{}"))
+		}
+	})
+
+	database, err := db.Open(":memory:")
+	if err != nil {
+		t.Fatalf("opening database: %v", err)
+	}
+	defer func() { _ = database.Close() }()
+
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	engine := sync.New(database, ts.URL, "")
+	if err := engine.Pull(t.Context()); err != nil {
+		t.Fatalf("pull: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	for _, path := range []string{"/projects/", "/project-items/"} {
+		if asked[path] != "all" {
+			t.Errorf("%s fetched with status=%q, want all — the sweep deletes whatever the server omits", path, asked[path])
+		}
+	}
+}
