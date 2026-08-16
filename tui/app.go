@@ -3773,7 +3773,7 @@ func (m *App) statusBarHints() string {
 	if row := m.currentRow(); row != nil && row.kind == rowTask {
 		return "[space]toggle [d]elete [t]ask [J/K]next/prev item [/]search [?]help"
 	}
-	hints := "[Enter]detail [space]done [a]dd [x]archive [e]dit [n]otes [t]ask [J/K]item [m]ove [b]lock [B]unblock [/]search [?]help"
+	hints := "[Enter]detail [space]done [a]dd [x]archive [e]dit [n]otes [t]ask [J/K]item [m]ove [b]lock [B]unblock [T]ree [/]search [?]help"
 	if m.filter != filterNone {
 		hints += " [0]reset"
 	}

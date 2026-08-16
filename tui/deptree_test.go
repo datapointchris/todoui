@@ -177,6 +177,19 @@ func TestDepTree_EnterOpensTheDetailForTheRowUnderTheCursor(t *testing.T) {
 	}
 }
 
+// A key nothing advertises does not exist. The tree was reachable from the
+// help overlay and the item detail, and the status bar — the one hint line
+// always on screen — did not mention it.
+func TestDepTree_TheStatusBarAdvertisesTheKey(t *testing.T) {
+	app := newTestApp(t, 140, 30, "serve")
+
+	hints := app.statusBarHints()
+
+	if !strings.Contains(hints, "[T]ree") {
+		t.Errorf("item-row hints = %q, want the tree key beside the dependency keys", hints)
+	}
+}
+
 // Peeking at one item along the chain must not end the walk.
 func TestDepTree_ClosingADetailOpenedFromTheTreeReturnsToTheTree(t *testing.T) {
 	app := newTestApp(t, 100, 30, "serve", "schema", "bootstrap")
