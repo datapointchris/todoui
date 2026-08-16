@@ -9,6 +9,9 @@ Personal project organization tool. Local-first SQLite with optional background 
 - **All Items / multi-select** — view all items at once or toggle specific projects to compare
 - **Multi-project items** — items can belong to multiple projects
 - **Dependencies** — items can block other items, with cycle detection
+- **Dependency tree** — `T` in the TUI opens the chain around an item and walks
+  it, drilling into a row to re-root and backing out again; `todoui tree` draws
+  the same thing, and `--json` emits nodes and edges
 - **Sub-tasks** — checklist tasks on each item
 - **Notes** — multiline notes on items
 - **Repo links** — items can name the repo they are work on, and `--repo` filters
@@ -52,7 +55,7 @@ todoui create "Bump the CI matrix" -p work -r todoui -n "Node 20 is EOL"
 todoui list
 todoui list -p work
 todoui list -p work --archived
-todoui view <id>
+todoui show <id>
 todoui search "auth"
 todoui blocked                        # items waiting on something
 
@@ -60,7 +63,7 @@ todoui blocked                        # items waiting on something
 todoui edit <id> --title "New title"
 todoui edit <id> --notes "Updated notes"
 todoui edit <id> --repo ""            # unlink from its repo
-todoui done <id>
+todoui complete <id>
 todoui reopen <id>
 todoui archive <id>
 todoui unarchive <id>
@@ -83,6 +86,10 @@ todoui remove-task <id> <task-id>
 todoui add-dependency <id> <depends-on-id>
 todoui remove-dependency <id> <depends-on-id>
 todoui blockers <id>
+todoui tree                           # every tree with open work
+todoui tree <id>                      # the tree that item sits in, as its root
+todoui tree <id> --invert             # what finishing it unblocks
+todoui tree --all --json              # nodes and edges, finished trees included
 
 # Projects
 todoui projects list
@@ -129,8 +136,11 @@ printed can be pasted into the next one. Matching is on the suffix, not a
 prefix, because UUIDv7 front-loads its timestamp and every item created in the
 same minute shares a prefix. An ambiguous id is reported rather than guessed at.
 
-**`--json`** is available on `list`, `view`, `search`, `tasks`, `blockers`, and
-`blocked`, and emits full ids.
+**`--json`** is available on `list`, `show`, `search`, `tasks`, `blockers`,
+`blocked`, and `tree`, and emits full ids. `tree --json` emits nodes and edges
+rather than the drawing, so a consumer derives its own shape instead of parsing
+box-drawing characters; edges always run from the item to what it depends on,
+and only the roots follow `--invert`.
 
 **Freshness**: when sync is enabled, todoui reconciles on its own and running
 `todoui sync` by hand is never required. `sync.interval` (default two minutes)
@@ -197,7 +207,15 @@ Neither flag is reachable from the background timers.
 | `x` | Archive |
 | `m` | Reorder (move mode) |
 | `b/B` | Link/unlink dependency |
+| `T` | Dependency tree, rooted at this item |
 | `p` | Manage project membership |
+| **In the dependency tree** | |
+| `j/k` | Move |
+| `l` | Drill in — the row under the cursor becomes the root |
+| `h` | Back to the previous root, or out of the overlay |
+| `i` | Flip between what it waits on and what it unblocks |
+| `a` | Every tree with open work |
+| `Enter` | Item detail for the row under the cursor |
 | **On a task row** | |
 | `space` | Toggle task done |
 | `d` | Delete task |

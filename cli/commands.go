@@ -58,6 +58,7 @@ func RegisterAll(parent *cobra.Command, b *backend.Backend, flushSync func()) {
 	parent.AddCommand(c.removeDependencyCmd())
 	parent.AddCommand(c.blockersCmd())
 	parent.AddCommand(c.blockedCmd())
+	parent.AddCommand(c.treeCmd())
 	parent.AddCommand(c.undoCmd())
 	parent.AddCommand(c.projectsCmd())
 	parent.AddCommand(updateCmd())

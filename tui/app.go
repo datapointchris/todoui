@@ -74,6 +74,9 @@ type App struct {
 	// Project detail view
 	projectDetail *model.ProjectWithItemCount
 
+	// Dependency tree overlay
+	depTree depTreeState
+
 	// Filters
 	filter filterMode
 
@@ -1105,6 +1108,16 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.appMode = modeItemDetail
 		return m, nil
 
+	case depTreeMsg:
+		m.depTree.tree = msg.tree
+		m.depTree.lookup = msg.lookup
+		m.depTree.roots = []string{msg.rootID}
+		m.depTree.cursor = 0
+		m.depTree.scroll = 0
+		m.depTree.rebuild()
+		m.appMode = modeDepTree
+		return m, nil
+
 	case itemProjectsMsg:
 		if item := m.currentItem(); item != nil {
 			m.picker = newPickerForManage(m.projects, msg, *item)
@@ -1278,6 +1291,8 @@ func (m *App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleMoveProjectKey(msg)
 	case modeDepLink, modeDepUnlink:
 		return m.handleDepLinkKey(msg)
+	case modeDepTree:
+		return m.handleDepTreeKey(msg)
 	}
 	return m, nil
 }
@@ -1715,6 +1730,13 @@ func (m *App) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, fetchDepBlockersCmd(m.backend, item.ID)
 		}
 		return m, nil
+
+	case "T":
+		if m.activePane == itemPane && row != nil {
+			treeCmd := m.openDepTree(m.currentItem().ID)
+			return m, treeCmd
+		}
+		return m, nil
 	}
 
 	return m, nil
@@ -2037,6 +2059,13 @@ func (m *App) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.depItemName = m.itemDetail.Title
 		m.depItemHandle = itemHandle(m.itemDetail.ProjectItem)
 		return m, fetchDepBlockersCmd(m.backend, m.itemDetail.ID)
+
+	case "T":
+		// The blockers listed above are one level deep and lead nowhere. This
+		// is the same relation with the rest of the chain attached, and it can
+		// be walked.
+		treeCmd := m.openDepTree(m.itemDetail.ID)
+		return m, treeCmd
 
 	case "t":
 		// Always creates a task under the overlay's item, regardless of
@@ -2612,6 +2641,9 @@ func (m *App) View() string {
 	case modeDepLink, modeDepUnlink:
 		overlay := m.renderDepLinkOverlay()
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, overlay)
+	case modeDepTree:
+		overlay := m.renderDepTreeOverlay()
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, overlay)
 	}
 
 	// Normal two-pane view
@@ -2807,7 +2839,7 @@ func (m *App) renderDetailOverlay() string {
 	case onTask:
 		hints = "  [space]toggle  [d]elete  [t]add task  [Tab]item  [j/k]navigate  [Esc]close"
 	default:
-		hints = "  [e]dit  [n]otes  [p]rojects  [t]ask  [b]lock  [B]unblock  [space]done  [x]archive  [Tab/j]tasks  [Esc]close"
+		hints = "  [e]dit  [n]otes  [p]rojects  [t]ask  [b]lock  [B]unblock  [T]ree  [space]done  [x]archive  [Tab/j]tasks  [Esc]close"
 	}
 	lines = append(lines, dimStyle.Render(hints))
 
@@ -2964,6 +2996,7 @@ func (m *App) renderHelpOverlay() string {
   p              Manage project membership
   b              Link dependency (blocked by)
   B              Unlink dependency
+  T              Dependency tree (walk it)
   m              Move/reorder item
 
   On a task row

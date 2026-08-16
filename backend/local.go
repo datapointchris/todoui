@@ -658,6 +658,30 @@ func (b *LocalBackend) GetBlockers(itemID string) ([]model.ProjectItem, error) {
 	return toModelProjectItems(items), nil
 }
 
+func (b *LocalBackend) ListDependencies() ([]model.Dependency, error) {
+	rows, err := b.q.GetAllDependencies(b.ctx())
+	if err != nil {
+		return nil, fmt.Errorf("listing dependencies: %w", err)
+	}
+	out := make([]model.Dependency, len(rows))
+	for i, r := range rows {
+		out[i] = model.Dependency{ItemID: r.ItemID, DependsOnID: r.DependsOnID}
+	}
+	return out, nil
+}
+
+func (b *LocalBackend) ListMemberships() ([]model.Membership, error) {
+	rows, err := b.q.ListAllMemberships(b.ctx())
+	if err != nil {
+		return nil, fmt.Errorf("listing memberships: %w", err)
+	}
+	out := make([]model.Membership, len(rows))
+	for i, r := range rows {
+		out[i] = model.Membership{ItemID: r.ItemID, ProjectID: r.ProjectID, Position: int(r.Position)}
+	}
+	return out, nil
+}
+
 // --- Tasks ---
 
 func (b *LocalBackend) ListTasks(itemID string) ([]model.ProjectItemTask, error) {

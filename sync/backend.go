@@ -64,6 +64,14 @@ func (s *SyncBackend) GetBlockers(itemID string) ([]model.ProjectItem, error) {
 	return s.local.GetBlockers(itemID)
 }
 
+func (s *SyncBackend) ListDependencies() ([]model.Dependency, error) {
+	return s.local.ListDependencies()
+}
+
+func (s *SyncBackend) ListMemberships() ([]model.Membership, error) {
+	return s.local.ListMemberships()
+}
+
 func (s *SyncBackend) ListTasks(itemID string) ([]model.ProjectItemTask, error) {
 	return s.local.ListTasks(itemID)
 }

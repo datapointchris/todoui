@@ -29,6 +29,7 @@ const (
 	modeEditProjectName         // text input: edit project name
 	modeEditProjectDesc         // multiline textarea for project description editing
 	modeDropProject             // text input: the reason a project is dropped rather than deferred
+	modeDepTree                 // dependency tree, walked by drilling into a row
 )
 
 // rowKind identifies what a navigable row in the item pane represents.
