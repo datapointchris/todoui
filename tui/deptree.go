@@ -208,6 +208,9 @@ func (m *App) handleDepTreeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if id == "" {
 			return m, nil
 		}
+		// Closing that detail comes back here rather than to the main pane.
+		// Peeking at one item along the chain should not end the walk.
+		m.detailFromTree = true
 		return m, fetchItemDetailCmd(m.backend, id, m.blockedSet[id])
 
 	case "u":
@@ -229,6 +232,7 @@ func (m *App) depTreeDeadEnd() string {
 func (m *App) closeDepTree() {
 	m.appMode = modeNormal
 	m.depTree = depTreeState{}
+	m.detailFromTree = false
 }
 
 // openDepTree enters the overlay on one item, which becomes the root.

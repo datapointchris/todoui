@@ -177,6 +177,48 @@ func TestDepTree_EnterOpensTheDetailForTheRowUnderTheCursor(t *testing.T) {
 	}
 }
 
+// Peeking at one item along the chain must not end the walk.
+func TestDepTree_ClosingADetailOpenedFromTheTreeReturnsToTheTree(t *testing.T) {
+	app := newTestApp(t, 100, 30, "serve", "schema", "bootstrap")
+	dependsOn(t, app, "serve", "schema")
+	dependsOn(t, app, "schema", "bootstrap")
+
+	openTreeOn(t, app, "serve")
+	pressKey(t, app, "j")
+	send(t, app, tea.KeyMsg{Type: tea.KeyEnter})
+	send(t, app, tea.KeyMsg{Type: tea.KeyEsc})
+
+	if app.appMode != modeDepTree {
+		t.Fatalf("mode = %v, want modeDepTree — esc returns to where the detail was opened from", app.appMode)
+	}
+	if app.depTree.cursor != 1 {
+		t.Errorf("cursor = %d, want 1 — the walk resumes on the row it left", app.depTree.cursor)
+	}
+	send(t, app, tea.KeyMsg{Type: tea.KeyEsc})
+	if app.appMode != modeNormal {
+		t.Errorf("mode = %v, want modeNormal — a second esc leaves the tree too", app.appMode)
+	}
+}
+
+// A detail opened from the main pane still closes to the main pane, and takes
+// the tree's whole-store snapshot with it.
+func TestDetail_ClosingADetailOpenedFromThePaneDropsTheTreeSnapshot(t *testing.T) {
+	app := newTestApp(t, 100, 30, "serve", "schema")
+	dependsOn(t, app, "serve", "schema")
+
+	openTreeOn(t, app, "serve")
+	send(t, app, tea.KeyMsg{Type: tea.KeyEsc}) // out of the tree
+	send(t, app, tea.KeyMsg{Type: tea.KeyEnter})
+	send(t, app, tea.KeyMsg{Type: tea.KeyEsc}) // out of the detail
+
+	if app.appMode != modeNormal {
+		t.Fatalf("mode = %v, want modeNormal", app.appMode)
+	}
+	if app.depTree.tree != nil {
+		t.Error("the tree snapshot outlived its overlay")
+	}
+}
+
 // A shared dependency is drawn once and marked, rather than repeating its
 // whole subtree under every parent.
 func TestDepTree_SharedDependencyIsMarkedRatherThanRepeated(t *testing.T) {

@@ -76,6 +76,10 @@ type App struct {
 
 	// Dependency tree overlay
 	depTree depTreeState
+	// detailFromTree routes the item detail back to the tree it was opened
+	// from. Not returnMode, which the input overlays claim while the detail is
+	// still on screen and would overwrite this.
+	detailFromTree bool
 
 	// Filters
 	filter filterMode
@@ -1920,10 +1924,19 @@ func (m *App) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.String() {
 	case "esc", "q":
-		m.appMode = modeNormal
 		m.itemDetail = nil
 		m.detailBlockers = nil
 		m.detailTasks = nil
+		if m.detailFromTree && m.depTree.tree != nil {
+			m.detailFromTree = false
+			m.appMode = modeDepTree
+			return m, nil
+		}
+		m.appMode = modeNormal
+		// The tree holds a snapshot of every item; drop it with the overlay
+		// rather than carrying it for the rest of the session.
+		m.depTree = depTreeState{}
+		m.detailFromTree = false
 		return m, nil
 
 	case "j", "down":
