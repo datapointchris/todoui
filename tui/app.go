@@ -3772,7 +3772,7 @@ func (m *App) statusBarHints() string {
 	case m.appMode == modeMoveProject:
 		return moveIndicatorStyle.Render("[j/k] Move project  [g/G] Top/Bottom  [Enter] Confirm  [Esc] Cancel")
 	case m.activePane == projectPane:
-		hints := "[a]dd project [Enter]select [m]ove [Tab]items [/]search [?]help"
+		hints := "[a]dd project [Enter]select [m]ove [Tab]items [T]ree [/]search"
 		if m.filter != filterNone {
 			hints += " [0]reset filter"
 		}
@@ -3780,28 +3780,48 @@ func (m *App) statusBarHints() string {
 	}
 	// Hints depend on whether the cursor is on an item or a task row.
 	if row := m.currentRow(); row != nil && row.kind == rowTask {
-		return "[space]toggle [d]elete [t]ask [J/K]next/prev item [/]search [?]help"
+		return "[space]toggle [d]elete [t]ask [J/K]next/prev item [T]ree [/]search"
 	}
-	hints := "[Enter]detail [space]done [a]dd [x]archive [e]dit [n]otes [t]ask [J/K]item [m]ove [b]lock [B]unblock [T]ree [/]search [?]help"
+	hints := "[Enter]detail [space]done [T]ree [a]dd [x]archive [e]dit [n]otes [t]ask [J/K]item [m]ove [b]lock [B]unblock [/]search"
 	if m.filter != filterNone {
 		hints += " [0]reset"
 	}
 	return hints
 }
 
-func (m *App) renderStatusBar() string {
-	var left string
-	switch {
-	case m.errorMsg != "":
-		left = errorMsgStyle.Render("Error: " + m.errorMsg)
-	case m.loading:
-		left = dimStyle.Render("Loading...")
-	case m.statusMsg != "":
-		left = statusMsgStyle.Render(m.statusMsg)
-	default:
-		left = m.statusBarHints()
+// clipHints narrows a hint line to fit, dropping whole hints rather than
+// cutting one in half: a trailing "[T]re…" reads as a rendering fault, where a
+// dropped hint reads as a list that continues. Hints are split on the bracket
+// that opens each one, since several carry a space of their own.
+func clipHints(hints string, maxWidth int) string {
+	if lipgloss.Width(hints) <= maxWidth {
+		return hints
 	}
+	if maxWidth < 4 {
+		return ""
+	}
+	parts := strings.Split(hints, " [")
+	kept, width := []string{}, 0
+	for i, part := range parts {
+		if i > 0 {
+			part = "[" + part
+		}
+		next := width + lipgloss.Width(part)
+		if i > 0 {
+			next++
+		}
+		if next+2 > maxWidth {
+			break
+		}
+		width, kept = next, append(kept, part)
+	}
+	if len(kept) == 0 {
+		return ""
+	}
+	return strings.Join(kept, " ") + " …"
+}
 
+func (m *App) renderStatusBar() string {
 	var modeStr string
 	if m.syncEngine != nil {
 		target := dimStyle.Render(" " + m.syncEngine.APIURL())
@@ -3820,8 +3840,33 @@ func (m *App) renderStatusBar() string {
 		modeStr = modeLocalStyle.Render("LOCAL") + dimStyle.Render(" "+m.dbPath)
 	}
 
-	leftWidth := lipgloss.Width(left)
+	// [?]help sits on the right, with the things that are always true, rather
+	// than at the end of the contextual list where clipping reaches it first.
+	// It is the one key that leads to every other key, so it is the last one
+	// that should disappear on a narrow window.
+	modeStr = "[?]help  " + modeStr
 	modeWidth := lipgloss.Width(modeStr)
+
+	var left string
+	switch {
+	case m.errorMsg != "":
+		left = errorMsgStyle.Render("Error: " + m.errorMsg)
+	case m.loading:
+		left = dimStyle.Render("Loading...")
+	case m.statusMsg != "":
+		left = statusMsgStyle.Render(m.statusMsg)
+	default:
+		// The hint line is the one thing here that outgrows the window — it
+		// reached 144 columns, so every key past the middle was off screen and
+		// the bar wrapped into a second row that pushed the panes up. Clipped
+		// rather than wrapped, and truncated before styling so no escape
+		// sequence is cut in half. The 5 is the two spaces this function adds,
+		// the style's own left and right padding, and the one column of gap
+		// that always separates the hints from the sync status.
+		left = clipHints(m.statusBarHints(), m.width-modeWidth-5)
+	}
+
+	leftWidth := lipgloss.Width(left)
 	padding := m.width - leftWidth - modeWidth - 4
 	if padding < 1 {
 		padding = 1

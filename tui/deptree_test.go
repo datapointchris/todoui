@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/datapointchris/todoui/model"
 )
@@ -419,13 +420,66 @@ func TestDepTree_SharedDependencyIsMarkedRatherThanRepeated(t *testing.T) {
 	}
 }
 
-func TestDepTree_TheStatusBarAdvertisesTheKey(t *testing.T) {
+// T works from every row and from the project pane, so every hint line has to
+// name it. Advertising it on one of three was why it read as missing.
+func TestDepTree_EveryHintLineAdvertisesTheKey(t *testing.T) {
 	app := newTestApp(t, 140, 30, "serve")
+	if _, err := app.backend.CreateTask(itemIDByTitle(t, app, "serve"), model.CreateProjectItemTask{Title: "a sub-task"}); err != nil {
+		t.Fatalf("creating task: %v", err)
+	}
+	send(t, app, app.fetchItems()())
 
-	hints := app.statusBarHints()
+	if hints := app.statusBarHints(); !strings.Contains(hints, "[T]ree") {
+		t.Errorf("item-row hints = %q, want the tree key", hints)
+	}
 
-	if !strings.Contains(hints, "[T]ree") {
-		t.Errorf("item-row hints = %q, want the tree key beside the dependency keys", hints)
+	app.activePane = projectPane
+	if hints := app.statusBarHints(); !strings.Contains(hints, "[T]ree") {
+		t.Errorf("project-pane hints = %q, want the tree key — T works there too", hints)
+	}
+
+	app.activePane = itemPane
+	pressKey(t, app, "j") // onto the sub-task row
+	if row := app.currentRow(); row == nil || row.kind != rowTask {
+		t.Fatal("precondition: cursor is not on a task row")
+	}
+	if hints := app.statusBarHints(); !strings.Contains(hints, "[T]ree") {
+		t.Errorf("task-row hints = %q, want the tree key — T opens the owning item's tree", hints)
+	}
+}
+
+// The hint line reached 144 columns, so every key past the middle was off
+// screen and the bar wrapped into a second row that pushed the panes up.
+func TestStatusBar_NeverWiderThanTheWindow(t *testing.T) {
+	for _, width := range []int{60, 80, 100, 120, 160} {
+		app := newTestApp(t, width, 30, "serve", "schema")
+		dependsOn(t, app, "serve", "schema")
+
+		bar := app.renderStatusBar()
+		if got := lipgloss.Width(bar); got > width {
+			t.Errorf("main bar is %d columns in a %d-column window", got, width)
+		}
+		// Clipping must not reach the one key that leads to every other key.
+		if !strings.Contains(bar, "[?]help") {
+			t.Errorf("help key clipped off at %d columns: %s", width, bar)
+		}
+		// A hint is shown whole or dropped, never cut in half.
+		for _, fragment := range []string{"[T]re", "[Ente", "[spac"} {
+			if strings.Contains(bar, fragment) && !strings.Contains(bar, fragment+"…") {
+				continue
+			}
+			if strings.Contains(bar, fragment+"…") {
+				t.Errorf("hint cut mid-token at %d columns: %s", width, bar)
+			}
+		}
+		if width >= 80 && !strings.Contains(bar, "[T]ree") {
+			t.Errorf("tree key clipped off at %d columns: %s", width, bar)
+		}
+
+		openTree(t, app)
+		if got := lipgloss.Width(app.renderDepTreeStatusBar()); got > width {
+			t.Errorf("browser bar is %d columns in a %d-column window", got, width)
+		}
 	}
 }
 

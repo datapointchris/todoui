@@ -682,6 +682,14 @@ func (m *App) depTreeRow(row graph.Row, selected, markPinned bool, width int) st
 
 func (m *App) renderDepTreeStatusBar() string {
 	s := &m.depTree
+	right := dimStyle.Render(fmt.Sprintf("%d trees", m.depTreeCount()))
+	rightWidth := lipgloss.Width(right)
+	// Clipped rather than wrapped, for the reason renderStatusBar gives: a
+	// second row here pushes the panes off the top of the window. Only the
+	// plain hint lines are truncated — cutting a styled message by rune would
+	// slice an escape sequence in half.
+	avail := m.width - rightWidth - 5
+
 	var left string
 	switch {
 	case m.errorMsg != "":
@@ -689,15 +697,14 @@ func (m *App) renderDepTreeStatusBar() string {
 	case m.statusMsg != "":
 		left = statusMsgStyle.Render(m.statusMsg)
 	case s.searching:
-		left = "[Enter]apply [Esc]clear"
+		left = truncate("[Enter]apply [Esc]clear", avail)
 	case s.active == forestPane:
-		left = "[j/k]move [l]focus [/]search [a]finished [Enter]detail [Esc]back"
+		left = truncate("[j/k]move [l]focus [/]search [a]finished [Enter]detail [Esc]back", avail)
 	default:
-		left = "[j/k]move [l]drill [h]back [i]flip [Enter]detail [Esc]back"
+		left = truncate("[j/k]move [l]drill [h]back [i]flip [Enter]detail [Esc]back", avail)
 	}
 
-	right := dimStyle.Render(fmt.Sprintf("%d trees", m.depTreeCount()))
-	padding := m.width - lipgloss.Width(left) - lipgloss.Width(right) - 4
+	padding := m.width - lipgloss.Width(left) - rightWidth - 4
 	if padding < 1 {
 		padding = 1
 	}
