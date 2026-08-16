@@ -1115,12 +1115,16 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case depTreeMsg:
 		m.depTree.tree = msg.tree
 		m.depTree.lookup = msg.lookup
-		m.depTree.roots = []string{msg.rootID}
-		m.depTree.cursor = 0
-		m.depTree.scroll = 0
-		m.depTree.rebuild()
+		m.depTree.rebuildForest()
+		// Opening on an item puts the forest cursor there, so the browser lands
+		// on what you were looking at. Opening cold starts at the top.
+		var missCmd tea.Cmd
+		if msg.focusID != "" && !m.depTree.standOn(msg.focusID) {
+			missCmd = m.flash(m.depTreeMiss(msg.focusID))
+		}
+		m.depTree.focusOn(m.depTree.forestID())
 		m.appMode = modeDepTree
-		return m, nil
+		return m, missCmd
 
 	case itemProjectsMsg:
 		if item := m.currentItem(); item != nil {
@@ -1736,11 +1740,15 @@ func (m *App) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "T":
+		// Works from either pane. On an item it opens the browser standing on
+		// that item; anywhere else it opens at the top of the forest, so
+		// browsing the dependencies never requires finding an item first.
+		focus := ""
 		if m.activePane == itemPane && row != nil {
-			treeCmd := m.openDepTree(m.currentItem().ID)
-			return m, treeCmd
+			focus = m.currentItem().ID
 		}
-		return m, nil
+		treeCmd := m.openDepTree(focus)
+		return m, treeCmd
 	}
 
 	return m, nil
@@ -2655,8 +2663,9 @@ func (m *App) View() string {
 		overlay := m.renderDepLinkOverlay()
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, overlay)
 	case modeDepTree:
-		overlay := m.renderDepTreeOverlay()
-		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, overlay)
+		// A full screen rather than an overlay: the map and the tree you are
+		// standing in are two panes, the same shape as projects and items.
+		return m.renderDepTreeView()
 	}
 
 	// Normal two-pane view
@@ -3009,7 +3018,7 @@ func (m *App) renderHelpOverlay() string {
   p              Manage project membership
   b              Link dependency (blocked by)
   B              Unlink dependency
-  T              Dependency tree (walk it)
+  T              Dependency browser (map + tree)
   m              Move/reorder item
 
   On a task row

@@ -167,6 +167,78 @@ func TestRows_ACycleTerminatesInsteadOfRecursingForever(t *testing.T) {
 	}
 }
 
+func TestFilterRows_KeepsTheMatchAndThePathBackToItsRoot(t *testing.T) {
+	tree := diamond()
+	rows := tree.Rows([]string{"a"}, false, Unlimited)
+
+	kept := FilterRows(rows, func(id string) bool { return id == "e" })
+
+	got := rowIDs(kept)
+	if got != "a b d e" {
+		t.Errorf("filtered = %q, want %q — the match plus every row above it", got, "a b d e")
+	}
+}
+
+func TestFilterRows_DropsABranchWithNoMatchUnderIt(t *testing.T) {
+	tree := BuildTree([]Node{
+		{ID: "root", Order: 1, Deps: []string{"hit", "miss"}},
+		{ID: "hit", Order: 2},
+		{ID: "miss", Order: 3},
+	})
+	rows := tree.Rows([]string{"root"}, false, Unlimited)
+
+	kept := FilterRows(rows, func(id string) bool { return id == "hit" })
+
+	if got := rowIDs(kept); got != "root hit" {
+		t.Errorf("filtered = %q, want %q", got, "root hit")
+	}
+}
+
+// Dropping a row changes which of its siblings is last. Carrying the original
+// flags over draws a branch hanging off nothing.
+func TestFilterRows_RecomputesTheCornerOnASurvivingSibling(t *testing.T) {
+	tree := BuildTree([]Node{
+		{ID: "root", Order: 1, Deps: []string{"hit", "miss"}},
+		{ID: "hit", Order: 2},
+		{ID: "miss", Order: 3},
+	})
+	rows := tree.Rows([]string{"root"}, false, Unlimited)
+	if Prefix(rows[1]) != "├── " {
+		t.Fatalf("precondition: hit starts as a mid-list branch, got %q", Prefix(rows[1]))
+	}
+
+	kept := FilterRows(rows, func(id string) bool { return id == "hit" })
+
+	if got := Prefix(kept[1]); got != "└── " {
+		t.Errorf("prefix = %q, want a last-child corner — hit is the only child left", got)
+	}
+}
+
+func TestFilterRows_NoMatchLeavesNothing(t *testing.T) {
+	tree := diamond()
+	rows := tree.Rows([]string{"a"}, false, Unlimited)
+
+	if kept := FilterRows(rows, func(string) bool { return false }); len(kept) != 0 {
+		t.Errorf("filtered = %s, want nothing", rowIDs(kept))
+	}
+}
+
+func TestFilterRows_DeepAncestryKeepsEveryLevelBetween(t *testing.T) {
+	tree := diamond()
+	rows := tree.Rows([]string{"a"}, false, Unlimited)
+
+	kept := FilterRows(rows, func(id string) bool { return id == "e" })
+
+	for i, row := range kept {
+		if row.Depth != i {
+			t.Fatalf("row %d has depth %d, want a single unbroken chain: %s", i, row.Depth, rowIDs(kept))
+		}
+	}
+	if got := Prefix(kept[3]); got != "        └── " {
+		t.Errorf("deepest prefix = %q, want three cleared levels then a corner", got)
+	}
+}
+
 func TestPrefix_ContinuationBarOnlyOnLevelsThatKeepGoing(t *testing.T) {
 	if got := Prefix(Row{Last: []bool{false, true}}); got != "│   └── " {
 		t.Errorf("prefix = %q, want the ancestor level to keep its bar", got)

@@ -236,6 +236,74 @@ func (t *Tree) Rows(roots []string, invert bool, maxDepth int) []Row {
 	return rows
 }
 
+// FilterRows narrows a drawn forest to the rows on a path to a match, keeping
+// a row when it matches or anything under it does.
+//
+// The corner flags are recomputed rather than carried over: dropping a row
+// changes which of its siblings is last, so reusing the originals draws a
+// branch hanging off nothing. The kept set stays ancestor-closed and in walk
+// order, which is what makes one forward pass enough.
+func FilterRows(rows []Row, matches func(id string) bool) []Row {
+	keep := make([]bool, len(rows))
+	for i, row := range rows {
+		if !matches(row.ID) {
+			continue
+		}
+		keep[i] = true
+		// Mark the path back to the root: the nearest earlier row at each
+		// shallower depth is this row's ancestor.
+		depth := row.Depth
+		for j := i - 1; j >= 0 && depth > 0; j-- {
+			if rows[j].Depth < depth {
+				keep[j] = true
+				depth = rows[j].Depth
+			}
+		}
+	}
+
+	kept := make([]Row, 0, len(rows))
+	for i, row := range rows {
+		if keep[i] {
+			kept = append(kept, row)
+		}
+	}
+	return recomputeCorners(kept)
+}
+
+// recomputeCorners rebuilds each row's Last flags from the rows that survived.
+func recomputeCorners(rows []Row) []Row {
+	isLast := make([]bool, len(rows))
+	for i, row := range rows {
+		isLast[i] = true
+		for j := i + 1; j < len(rows); j++ {
+			if rows[j].Depth < row.Depth {
+				break
+			}
+			if rows[j].Depth == row.Depth {
+				isLast[i] = false
+				break
+			}
+		}
+	}
+
+	var flags []bool
+	out := make([]Row, len(rows))
+	for i, row := range rows {
+		out[i] = row
+		if row.Depth == 0 {
+			flags = flags[:0]
+			out[i].Last = nil
+			continue
+		}
+		if len(flags) > row.Depth-1 {
+			flags = flags[:row.Depth-1]
+		}
+		flags = append(flags, isLast[i])
+		out[i].Last = append([]bool(nil), flags...)
+	}
+	return out
+}
+
 // Prefix renders a row's box-drawing indent.
 func Prefix(row Row) string {
 	var b []rune

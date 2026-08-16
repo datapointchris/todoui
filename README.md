@@ -9,9 +9,10 @@ Personal project organization tool. Local-first SQLite with optional background 
 - **All Items / multi-select** — view all items at once or toggle specific projects to compare
 - **Multi-project items** — items can belong to multiple projects
 - **Dependencies** — items can block other items, with cycle detection
-- **Dependency tree** — `T` in the TUI opens the chain around an item and walks
-  it, drilling into a row to re-root and backing out again; `todoui tree` draws
-  the same thing, and `--json` emits nodes and edges
+- **Dependency browser** — `T` opens a two-pane view: every tree on the left,
+  searchable, and the tree you are standing in on the right, where you drill,
+  flip direction, and open items. `todoui tree` draws the same thing on the
+  command line, and `--json` emits nodes and edges
 - **Sub-tasks** — checklist tasks on each item
 - **Notes** — multiline notes on items
 - **Repo links** — items can name the repo they are work on, and `--repo` filters
@@ -207,15 +208,19 @@ Neither flag is reachable from the background timers.
 | `x` | Archive |
 | `m` | Reorder (move mode) |
 | `b/B` | Link/unlink dependency |
-| `T` | Dependency tree, rooted at this item |
+| `T` | Dependency browser (works from either pane) |
 | `p` | Manage project membership |
-| **In the dependency tree** | |
-| `j/k` | Move |
+| **Dependency browser — left pane, the map** | |
+| `j/k` | Move; the right pane follows |
+| `l` | Into the focused tree |
+| `/` | Filter to matching items, keeping the path to each |
+| `a` | Show finished trees too |
+| **Dependency browser — right pane, the tree** | |
 | `l` | Drill in — the row under the cursor becomes the root |
-| `h` | Back to the previous root, or out of the overlay |
+| `h` | Back one drill, then back to the map |
 | `i` | Flip between what it waits on and what it unblocks |
-| `a` | Every tree with open work |
-| `Enter` | Item detail for the row under the cursor |
+| `Enter` | Item detail; `Esc` returns to the row you left |
+| `Esc` | Leave the browser |
 | **On a task row** | |
 | `space` | Toggle task done |
 | `d` | Delete task |
