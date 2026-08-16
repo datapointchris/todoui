@@ -82,7 +82,8 @@ func TestTreeLine_DrawsTheCornerTheMarkAndTheHandle(t *testing.T) {
 	}
 }
 
-// The 7 edges of 121 that no single project's list can show.
+// The edges no single project's list can show, because neither end of them is
+// visible from the other's project.
 func TestTreeLine_TagsADependencyThatLeavesItsParentsProject(t *testing.T) {
 	_, tree, lookup, ids := treeFixture(t)
 
