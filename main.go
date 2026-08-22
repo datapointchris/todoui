@@ -83,6 +83,30 @@ func refreshForCLI(cmd *cobra.Command, engine *sync.Engine, noSync bool, freshne
 	}
 }
 
+// needsBackend reports whether a command reads or writes todoui's own data.
+//
+// PersistentPreRunE opens the database and runs migrations, and cobra runs it
+// for the shell-completion callback like any other command — so every TAB press
+// opened the database, and on a new machine created it. `version` is what a
+// script calls to find out what is installed, `help` answers from the command
+// tree, and `update` replaces the binary. None of them has anything to read.
+//
+// The ancestry is walked rather than only the leaf, because `completion` owns a
+// subcommand per shell: `todoui completion zsh` has leaf name "zsh".
+//
+// `--help` never reaches here at all — cobra answers the flag before running
+// this — which is why the list names the command and not the flag.
+func needsBackend(cmd *cobra.Command) bool {
+	for current := cmd; current != nil; current = current.Parent() {
+		switch current.Name() {
+		case "help", "version", "update", "completion",
+			cobra.ShellCompRequestCmd, cobra.ShellCompNoDescRequestCmd:
+			return false
+		}
+	}
+	return true
+}
+
 func rootCmd() *cobra.Command {
 	var b backend.Backend
 	var database *sql.DB
@@ -95,6 +119,9 @@ func rootCmd() *cobra.Command {
 		Short:   "Personal project organization",
 		Version: cli.Version(),
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+			if !needsBackend(cmd) {
+				return nil
+			}
 			var err error
 			cfg, err = config.Load()
 			if err != nil {
