@@ -86,8 +86,8 @@ An item created while the API is unreachable has no number until its push
 lands, and shows its UUID tail until then (`itemHandle`). That is the only
 reason suffix resolution survives: a handle a command printed has to keep
 resolving after the number arrives. Do not switch the fallback to prefix
-matching — UUIDv7 front-loads its millisecond timestamp, so prefixes collide
-for everything created in the same window.
+matching — `standards/cli-design.md` § "A UUID-keyed resource needs a short
+handle of its own" is why a UUIDv7 prefix cannot work.
 
 ## A project name is bounded work, never a repo
 
@@ -165,14 +165,13 @@ a live one sharing its name.
 environment that does not exist, and for this tool that is destructive rather
 than merely wrong: a pull deletes every local row the server did not return, so
 a production database reconciled against the dev API is emptied of everything
-dev has never heard of. That is not hypothetical — it cost 42 projects and 286
-items, and the command printed `Synced.`
+dev has never heard of. `standards/infrastructure.md` § "A dev environment
+override is all-or-nothing" carries what that cost, and this repo is where it
+happened.
 
 **To run against production data, run from outside this repo**, where direnv has
 loaded nothing. Un-setting your way out is how the accident happened: `env -u`
-on the variable you remembered still leaves the two you did not. The fleet-wide
-form of this rule is `standards/infrastructure.md` § "A dev environment
-override is all-or-nothing".
+on the variable you remembered still leaves the two you did not.
 
 `sync_origin` is the enforcement, because a rule only prose enforces is
 decoration. The first pull records which API the database belongs to, and every
@@ -241,10 +240,11 @@ between the two repos irrelevant for projects too.
 
 ## Planning docs
 
-Planning documents live in `.planning/` (gitignored). `.planning/status.md`
-follows the convention documented in `~/.claude/CLAUDE.md` — update it
-alongside any substantive change, and record architectural decisions in the
-**Decisions Made** section so they aren't re-litigated.
+`.planning/` is a gitignored symlink into `~/dev/repos/todoui/planning/`
+(`standards/repo-structure.md`). The `status.md` convention is
+`~/.claude/CLAUDE.md` § "`.planning/status.md` Convention" — note that finishing
+a piece of work is not by itself a status.md edit; it changes when the *state*
+changes, and closing the `icb` item is the step that always happens.
 
 ## Never write the breaking-change trailer in a commit message
 
