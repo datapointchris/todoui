@@ -10,8 +10,8 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/datapointchris/goclikit"
 	"github.com/datapointchris/goselfupdate/autoupdate"
-	"github.com/datapointchris/goselfupdate/cobracmd"
 	"github.com/spf13/cobra"
 
 	"github.com/datapointchris/todoui/backend"
@@ -25,13 +25,13 @@ import (
 
 func main() {
 	autoConfig := autoupdate.Config{Update: cli.UpdateConfig()}
-	if err := cobracmd.Execute(context.Background(), rootCmd(), autoConfig); err != nil {
-		if !errors.Is(err, cobracmd.ErrReported) {
+	if err := goclikit.Execute(context.Background(), rootCmd(), autoConfig); err != nil {
+		if !errors.Is(err, goclikit.ErrReported) {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		}
 		// 2 says the command line was wrong rather than the run, which is the
 		// only failure a caller should retry with different arguments.
-		if errors.Is(err, cobracmd.ErrUsage) {
+		if errors.Is(err, goclikit.ErrUsage) {
 			os.Exit(2)
 		}
 		os.Exit(1)

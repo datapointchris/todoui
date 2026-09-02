@@ -3,8 +3,8 @@ package cli
 import (
 	"runtime/debug"
 
+	"github.com/datapointchris/goclikit"
 	"github.com/datapointchris/goselfupdate"
-	"github.com/datapointchris/goselfupdate/cobracmd"
 	"github.com/spf13/cobra"
 )
 
@@ -37,7 +37,7 @@ func UpdateConfig() goselfupdate.Config {
 }
 
 func updateCmd() *cobra.Command {
-	return cobracmd.New(UpdateConfig())
+	return goclikit.UpdateCommand(UpdateConfig())
 }
 
 func versionCmd() *cobra.Command {
