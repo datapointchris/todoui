@@ -2,6 +2,7 @@ package backend
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/datapointchris/todoui/db"
@@ -377,7 +378,7 @@ func TestUndoCreateItem(t *testing.T) {
 	}
 
 	_, err = b.GetItem(item.ID)
-	if err != model.ErrNotFound {
+	if !errors.Is(err, model.ErrNotFound) {
 		t.Errorf("expected ErrNotFound after undo, got %v", err)
 	}
 }
@@ -401,7 +402,7 @@ func TestUndoCoversProjectCreates(t *testing.T) {
 	if _, err := b.GetItem(unrelated.ID); err != nil {
 		t.Errorf("undo reached past the project create and destroyed an unrelated item: %v", err)
 	}
-	if _, err := b.GetProject(newer.ID); err != model.ErrNotFound {
+	if _, err := b.GetProject(newer.ID); !errors.Is(err, model.ErrNotFound) {
 		t.Errorf("expected the project create to be reversed, got %v", err)
 	}
 }
@@ -536,7 +537,7 @@ func TestDeleteItem(t *testing.T) {
 	}
 
 	_, err := b.GetItem(item.ID)
-	if err != model.ErrNotFound {
+	if !errors.Is(err, model.ErrNotFound) {
 		t.Errorf("expected ErrNotFound after delete, got %v", err)
 	}
 

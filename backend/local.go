@@ -119,7 +119,7 @@ func (b *LocalBackend) GetProject(id string) (*model.ProjectWithItemCount, error
 	row, err := b.q.GetProjectWithItemCount(b.ctx(), id)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return nil, model.ErrNotFound
+			return nil, fmt.Errorf("project %q: %w", id, model.ErrNotFound)
 		}
 		return nil, fmt.Errorf("getting project: %w", err)
 	}
@@ -166,7 +166,7 @@ func (b *LocalBackend) UpdateProject(id string, input model.UpdateProject) (*mod
 	current, err := b.q.GetProject(ctx, id)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return nil, model.ErrNotFound
+			return nil, fmt.Errorf("project %q: %w", id, model.ErrNotFound)
 		}
 		return nil, fmt.Errorf("getting project for update: %w", err)
 	}
@@ -225,7 +225,7 @@ func (b *LocalBackend) SetProjectStatus(id, status string, reason *string) (*mod
 	current, err := b.q.GetProject(ctx, id)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return nil, model.ErrNotFound
+			return nil, fmt.Errorf("project %q: %w", id, model.ErrNotFound)
 		}
 		return nil, fmt.Errorf("getting project for status change: %w", err)
 	}
@@ -291,7 +291,7 @@ func (b *LocalBackend) ReorderProject(projectID string, newPosition int) error {
 	current, err := b.q.GetProject(ctx, projectID)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return model.ErrNotFound
+			return fmt.Errorf("project %q: %w", projectID, model.ErrNotFound)
 		}
 		return fmt.Errorf("getting project for reorder: %w", err)
 	}
@@ -359,7 +359,7 @@ func (b *LocalBackend) GetItem(id string) (*model.ProjectItemDetail, error) {
 	pi, err := b.q.GetItem(b.ctx(), id)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return nil, model.ErrNotFound
+			return nil, fmt.Errorf("item %q: %w", id, model.ErrNotFound)
 		}
 		return nil, fmt.Errorf("getting item: %w", err)
 	}
@@ -447,7 +447,7 @@ func (b *LocalBackend) UpdateItem(id string, input model.UpdateProjectItem) (*mo
 	current, err := b.q.GetItem(ctx, id)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return nil, model.ErrNotFound
+			return nil, fmt.Errorf("item %q: %w", id, model.ErrNotFound)
 		}
 		return nil, fmt.Errorf("getting item for update: %w", err)
 	}
@@ -535,7 +535,9 @@ func (b *LocalBackend) ReorderItem(itemID, projectID string, newPosition int) er
 	})
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return model.ErrNotFound
+			// The pairing is what is absent, not either id on its own: both can
+			// exist while the item is not in that project.
+			return fmt.Errorf("item %q is not in project %q: %w", itemID, projectID, model.ErrNotFound)
 		}
 		return fmt.Errorf("getting membership for reorder: %w", err)
 	}
@@ -587,7 +589,7 @@ func (b *LocalBackend) RemoveFromProject(itemID, projectID string) error {
 	})
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return model.ErrNotFound
+			return fmt.Errorf("item %q is not in project %q: %w", itemID, projectID, model.ErrNotFound)
 		}
 		return fmt.Errorf("getting membership for remove: %w", err)
 	}
@@ -730,7 +732,7 @@ func (b *LocalBackend) UpdateTask(itemID, taskID string, input model.UpdateProje
 	current, err := b.q.GetTask(ctx, taskID)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return nil, model.ErrNotFound
+			return nil, fmt.Errorf("task %q: %w", taskID, model.ErrNotFound)
 		}
 		return nil, fmt.Errorf("getting task for update: %w", err)
 	}
@@ -773,7 +775,7 @@ func (b *LocalBackend) DeleteTask(itemID, taskID string) error {
 	current, err := b.q.GetTask(ctx, taskID)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return model.ErrNotFound
+			return fmt.Errorf("task %q: %w", taskID, model.ErrNotFound)
 		}
 		return fmt.Errorf("getting task for delete: %w", err)
 	}
@@ -792,7 +794,7 @@ func (b *LocalBackend) CompleteTask(itemID, taskID string) error {
 	current, err := b.q.GetTask(ctx, taskID)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return model.ErrNotFound
+			return fmt.Errorf("task %q: %w", taskID, model.ErrNotFound)
 		}
 		return fmt.Errorf("getting task for complete: %w", err)
 	}
@@ -1204,7 +1206,7 @@ func captureItem(ctx context.Context, q *generated.Queries, id string) (*itemSna
 	item, err := q.GetItem(ctx, id)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return nil, model.ErrNotFound
+			return nil, fmt.Errorf("item %q: %w", id, model.ErrNotFound)
 		}
 		return nil, fmt.Errorf("getting item for delete: %w", err)
 	}
@@ -1235,7 +1237,7 @@ func captureProject(ctx context.Context, q *generated.Queries, id string) (*proj
 	project, err := q.GetProject(ctx, id)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return nil, model.ErrNotFound
+			return nil, fmt.Errorf("project %q: %w", id, model.ErrNotFound)
 		}
 		return nil, fmt.Errorf("getting project for delete: %w", err)
 	}

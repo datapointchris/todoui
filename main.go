@@ -25,7 +25,7 @@ import (
 
 func main() {
 	autoConfig := autoupdate.Config{Update: cli.UpdateConfig()}
-	if err := goclikit.Execute(context.Background(), rootCmd(), autoConfig); err != nil {
+	if err := goclikit.Execute(context.Background(), rootCmd(), autoConfig, goclikit.WithNotFound(cli.NotFound)); err != nil {
 		if !errors.Is(err, goclikit.ErrReported) {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		}
@@ -225,6 +225,7 @@ func rootCmd() *cobra.Command {
 			syncEngine.Flush()
 		}
 	})
+	cli.RegisterRecoveryHints(root)
 
 	return root
 }
