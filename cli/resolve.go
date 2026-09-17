@@ -78,7 +78,11 @@ func resolveID(ref string, candidates []string, kind string) (string, error) {
 	case 1:
 		return matches[0], nil
 	case 0:
-		return "", fmt.Errorf("no %s matching %q", kind, ref)
+		// Wrapped so this reads as the same failure the backend reports, and so
+		// the recovery hints reach it. This is the one a CLI caller actually
+		// hits: every id-taking verb resolves here first, and the backend's own
+		// not-found is reached only by the TUI and by a caller holding a full id.
+		return "", fmt.Errorf("%s %q: %w", kind, ref, model.ErrNotFound)
 	default:
 		return "", fmt.Errorf("%q matches %d %ss: %s — use more characters",
 			ref, len(matches), kind, strings.Join(shortIDs(matches), ", "))

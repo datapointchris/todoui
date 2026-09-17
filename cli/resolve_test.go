@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -85,8 +86,27 @@ func TestResolveIDReportsNoMatch(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected an unmatched id to error")
 	}
-	if !strings.Contains(err.Error(), "no item matching") {
-		t.Errorf("unexpected error: %q", err)
+	// The classification is what callers branch on and what puts the recovery
+	// hints on the screen; the sentence is not.
+	if !errors.Is(err, model.ErrNotFound) {
+		t.Errorf("error is not a not-found: %q", err)
+	}
+	// It still has to name what was typed, or the reader cannot tell which of
+	// two ids on one command line was refused.
+	if !strings.Contains(err.Error(), "deadbeef") {
+		t.Errorf("error does not name the ref: %q", err)
+	}
+}
+
+func TestAnAmbiguousRefIsNotANotFound(t *testing.T) {
+	// Two candidates is a different failure with a different remedy -- type
+	// more characters, not go and find a real id.
+	_, err := resolveID("1111", []string{"aaaa-11111111", "bbbb-11111111"}, "item")
+	if err == nil {
+		t.Fatal("expected an ambiguous id to error")
+	}
+	if errors.Is(err, model.ErrNotFound) {
+		t.Errorf("an ambiguous ref classified as not-found: %q", err)
 	}
 }
 
