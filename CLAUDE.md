@@ -1,15 +1,7 @@
 # todoui — Claude Code instructions
 
-## Package layout
-
-The main package lives at the module root. There is no `cmd/` or `internal/`
-subdirectory — they were removed in commit `e3f71c1 refactor: flatten package
-layout`. Siblings to the root `main.go` are `tui/`, `backend/`, `cli/`,
-`config/`, `db/`, `graph/`, `model/`, `repos/`, `sync/`.
-
-Any path referencing `./cmd/todoui` or `./todoui` as a build target is stale
-— the module builds from the repo root: `go build .` /
-`go install github.com/datapointchris/todoui@latest`.
+The main package is at the module root — `go build .`, `go install github.com/datapointchris/todoui@latest`.
+Any path naming `./cmd/todoui` is stale.
 
 ## How to run and test
 
@@ -31,63 +23,45 @@ direction. `env | rg '^TODOUI'` returning nothing means you do not have it.
 ```bash
 go run .            # launch TUI against dev.db
 go run . list       # run CLI subcommands against dev.db
-go run . create "title" -p test
 ```
 
-For any TUI change, the verification path is:
+Build, vet and test check code correctness, not TUI correctness. Do not claim a TUI change
+verified without driving it with `go run .`; if you cannot, say so and hand the manual steps to
+the user rather than substituting a synthetic smoke test.
 
-1. `go build ./... && go vet ./... && go test ./...` — must all pass.
-2. `go run .` — drive the feature interactively against the dev DB.
-
-Do not claim a TUI change is "verified" on build/vet/test alone. Those check
-code correctness, not feature correctness. If you cannot run the TUI
-interactively (no human in the loop), say so explicitly and hand the manual
-test steps to the user — do not substitute a synthetic smoke test for a real
-one.
-
-`tui/app_test.go` drives the model directly: build an app over an in-memory
-DB with `newTestApp`, feed it `tea.KeyMsg` values, and assert on state or on
-`View()` output. `send` follows the whole command chain so a create and its
-refresh have both landed before the assertion, and abandons `tea.Tick`
-commands (flash timers) rather than sleeping out their duration. This is the
-right place for a rendering regression — a layout bug that only appears at a
-particular window size is reproducible here and invisible in a manual pass.
-It does not replace step 2.
+`tui/app_test.go` drives the model directly: `newTestApp` builds an app over an in-memory DB, and a
+test feeds it `tea.KeyMsg` values and asserts on state or on `View()`. `send` follows the whole
+command chain, so a create and its refresh have both landed before the assertion, and it abandons
+`tea.Tick` commands rather than sleeping out their duration. A layout bug that appears only at one
+window size is reproducible here and invisible in a manual pass. It does not replace driving the TUI.
 
 ## Sub-tasks, projects, dependencies
 
-The CLI covers sub-tasks, dependencies, reordering, and archival both ways —
-see the README for the verb list. `todoui create "title" -p foo` still errors if
-project `foo` doesn't exist, so create it first with `todoui projects create
-foo` or in the TUI project pane with `a`. It also errors if `foo` is closed:
-`resolveProjects` reads the active list, and filing new work into a finished
-project is not something to make easy.
+`todoui create "title" -p foo` errors if project `foo` doesn't exist, so create it first with
+`todoui projects create foo` or in the TUI project pane with `a`. It also errors if `foo` is closed:
+`resolveProjects` reads the active list, and filing new work into a finished project is not
+something to make easy.
 
-**The CLI exists for Claude Code and automation, not for Chris** — he drives
-todoui through the TUI. That is why the verb set mirrors `icb projects items`
-name for name: an agent uses one grammar whether it reaches the data through
-the ichrisbirch API or through a local SQLite file. The work machine is never
-allowed to reach the API, so on that machine this CLI is the *only* way an
-agent can touch todoui, and any verb missing here is a capability that simply
-does not exist there.
+**The CLI exists for Claude Code and automation, not for Chris** — he drives todoui through the
+TUI. That is why the verb set mirrors `icb projects items` name for name: an agent uses one grammar
+whether it reaches the data through the ichrisbirch API or through a local SQLite file. On a machine
+that cannot reach the API, this CLI is the *only* way an agent can touch todoui, so a verb missing
+here is a capability that does not exist there.
 
-An item is named by its **number** — short, unique, and what every command
-prints and takes back (`resolveItemID` in `cli/resolve.go`). The UUID is the
-sync key and stops there; it is in `--json` and nowhere a person reads.
+An item is named by its **number** — short, unique, and what every command prints and takes back
+(`resolveItemID` in `cli/resolve.go`). The UUID is the sync key and stops there; it is in `--json`
+and nowhere a person reads.
 
-The number is assigned by whichever database is the authority. With sync on
-that is the ichrisbirch API, and `pushCreatedItem` writes the number out of the
-create response into the local row, so `todoui create` prints the handle in the
-same invocation. With sync off — the work machine, which can never reach the
-API — `AssigningItemNumbers` makes todoui allocate `max+1` itself, which cannot
-collide because that database is a disjoint universe.
+The number is assigned by whichever database is the authority. With sync on that is the API, and
+`pushCreatedItem` writes the number from the create response into the local row, so `todoui create`
+prints the handle in the same invocation. With sync off, `AssigningItemNumbers` makes todoui
+allocate `max+1` itself, which cannot collide because that database is a disjoint universe.
 
-An item created while the API is unreachable has no number until its push
-lands, and shows its UUID tail until then (`itemHandle`). That is the only
-reason suffix resolution survives: a handle a command printed has to keep
-resolving after the number arrives. Do not switch the fallback to prefix
-matching — `standards/cli-design.md` § "A UUID-keyed resource needs a short
-handle of its own" is why a UUIDv7 prefix cannot work.
+An item created while the API is unreachable has no number until its push lands, and shows its UUID
+tail until then (`itemHandle`). That is the only reason suffix resolution survives: a handle a
+command printed has to keep resolving after the number arrives. Do not switch the fallback to prefix
+matching — `standards/cli-design.md` § "A UUID-keyed resource needs a short handle of its own" is why
+a UUIDv7 prefix cannot work.
 
 ## A project name is bounded work, never a repo
 
@@ -104,7 +78,7 @@ The failure it prevents: a repo gets a project while it is being BUILT, which is
 finite and does complete. The repo then keeps existing, the next papercut has
 nowhere else to go, and the finished effort silently becomes the eternal bucket.
 The tell was dotfiles' own description, which had grown a hand-written BOUNDARY
-paragraph explaining which work belonged to it — a modelling gap patched with
+paragraph explaining which work belonged to it — a modeling gap patched with
 prose.
 
 The repo association is the item's `--repo` tag, which already crosses project
@@ -124,23 +98,18 @@ the TUI creates projects too and a rule only one surface enforces is decoration.
 
 ## A project has a status, and it is not an `archived` flag
 
-`projects.status` is `active`/`completed`/`dropped`. For an item, complete and
-archive are orthogonal and both make sense; for a project they collapse, because
-a project is a finite effort with a definition of done — so completion *is* the
-hide signal and there is no second flag. `dropped` exists beside `completed` because
-`completed` alone would force you to lie about anything you merely stopped caring
-about, and it requires a reason: "deferred" invites re-proposal, "dropped, and
-here is why" closes the question.
+`projects.status` is `active`/`completed`/`dropped`. For an item, complete and archive are
+orthogonal; for a project they collapse, because a project is a finite effort with a definition of
+done, so completion *is* the hide signal. `dropped` requires a reason: "deferred" invites
+re-proposal, "dropped, and here is why" closes the question.
 
-`SetProjectStatus` is the only write path, and `closed_at` and `status_reason`
-are derived inside its statement rather than accepted from a caller, so an
-active project can never carry either. `UpdateProject` deliberately does not
-touch status.
+`SetProjectStatus` is the only write path, and `closed_at` and `status_reason` are derived inside
+its statement rather than accepted from a caller, so an active project can never carry either.
+`UpdateProject` deliberately does not touch status.
 
-**Closing a project does not cascade to its items.** An item still open when the
-project was dropped WAS still open; "shipped 8 of 11, dropped with 3 open" is a
-real signal and eleven archived items is not. Visibility is derived from the
-project instead. This was tried by hand the other way once and reverted.
+**Closing a project does not cascade to its items.** An item still open when the project was
+dropped WAS still open; "shipped 8 of 11, dropped with 3 open" is a real signal and eleven archived
+items is not. Visibility is derived from the project instead.
 
 **A name is held only by the active project bearing it.** That is
 `idx_projects_name_active` in `indexes.sql`, a partial unique index, and it is
@@ -193,76 +162,44 @@ automatic can waive is not a guard.
 
 ## Sync is automatic; `todoui sync` is a convenience, not a requirement
 
-`sync.interval` (default 2m, floored at 15s) is the single knob for how stale
-todoui may ever be, and it drives three loops:
+`sync.interval` (default 2m, floored at 15s) is the single knob for how stale todoui may ever be,
+and it drives three loops:
 
-- **CLI** — `refreshForCLI` in `main.go` pulls before a command when the last
-  pull is older than the interval. A new command pulls by default;
-  `commandsThatSkipPull` is a denylist rather than an allowlist so that
-  forgetting to register one cannot silently serve stale data.
-- **TUI** — `syncPullTickMsg` re-arms itself every interval. It always
-  reschedules, even on the ticks it skips; a tick that returns no command kills
-  background sync for the rest of the session. `safeToAutoPull` gates the
-  reconcile to `modeNormal` because a pull rewrites items, memberships, and
-  ordering wholesale and would move the ground under a grab or a text entry.
-- **Push** — `pushLoop` carries a retry ticker alongside `Notify`. Notify only
-  fires on a local mutation, so without it a push that failed while the API was
-  down stayed queued until the user happened to edit something else.
+- **CLI** — `refreshForCLI` in `main.go` pulls before a command when the last pull is older than
+  the interval. `commandsThatSkipPull` is a denylist rather than an allowlist, so forgetting to
+  register a new command cannot silently serve stale data.
+- **TUI** — `syncPullTickMsg` re-arms itself every interval, and always reschedules, even on the
+  ticks it skips: a tick that returns no command kills background sync for the session.
+  `safeToAutoPull` gates the reconcile to `modeNormal`, because a pull rewrites items, memberships
+  and ordering wholesale and would move the ground under a grab or a text entry.
+- **Push** — `pushLoop` carries a retry ticker alongside `Notify`, which fires only on a local
+  mutation, so a push that failed while the API was down retries without another edit.
 
-Anything user-visible distinguishes automatic from manual: an automatic pull
-neither flashes on success nor claims the status bar on failure, because it
-runs every interval and would otherwise bury real messages under noise. Failure
-surfaces through the engine status (`SYNC ERR`) instead. A CLI pull failure
-warns and continues — local-first means an unreachable API degrades to local
-data, never an error.
+An automatic pull neither flashes on success nor claims the status bar on failure; failure surfaces
+through the engine status (`SYNC ERR`). A CLI pull failure warns and continues — local-first means
+an unreachable API degrades to local data, never an error.
 
-`Pull` records a pending-sync high-water mark before it fetches, then clears
-only the ops at or below it and spares entities queued above it from the
-"deleted upstream" sweeps. The user keeps working through a pull; without that
-mark, an item typed mid-pull is deleted by the same pull and its queued create
-is dropped with it. Do not restore `DeleteAllPendingSync` here.
+`Pull` records a pending-sync high-water mark before it fetches, then clears only the ops at or
+below it and spares entities queued above it from the "deleted upstream" sweeps. Without that mark,
+an item typed mid-pull is deleted by the same pull and its queued create dropped with it. Do not
+restore `DeleteAllPendingSync` here.
 
-The item list embeds memberships, dependencies, and tasks, so a pull is two
-requests. When the server omits `dependency_ids`/`tasks` the pull falls back to
-the per-item endpoints — decode into slices and branch on nil, never on empty.
-Absent and empty are different answers, and reading absent as empty would delete
-every task and dependency locally on the first pull against an older API. That
-fallback is what makes deploy order between this repo and ichrisbirch irrelevant;
-do not drop it just because the API has shipped.
-
-The project pull asks for `?status=all` for the same reason in reverse: the sweep
-below it deletes any local project the server did not return, so an active-only
-response would read "completed upstream" as "deleted upstream" and cascade
-through to the memberships. Terminal projects are filtered for display locally.
-A server predating the column sends no status at all, which the upsert reads as
-`active` — absent is not empty here either, and that is what keeps deploy order
-between the two repos irrelevant for projects too.
-
-## Planning docs
-
-`.planning/` is a gitignored symlink into `~/dev/repos/todoui/planning/`
-(`standards/repo-structure.md`). The `status.md` convention is
-`~/.claude/CLAUDE.md` § "`.planning/status.md` Convention" — note that finishing
-a piece of work is not by itself a status.md edit; it changes when the *state*
-changes, and closing the `icb` item is the step that always happens.
+**Absent is not empty, and that is what keeps deploy order between this repo and ichrisbirch
+irrelevant.** The item list embeds memberships, dependencies and tasks; when the server omits
+`dependency_ids`/`tasks`, the pull falls back to the per-item endpoints — decode into slices and
+branch on nil, never on empty, or the first pull against an older API deletes every local task and
+dependency. The project pull asks for `?status=all` because the sweep deletes any local project the
+server did not return, so an active-only response would read "completed" as "deleted" and cascade
+through the memberships. A server sending no project status is read as `active`. Do not drop either
+fallback just because the API has shipped.
 
 ## Never write the breaking-change trailer in a commit message
 
-The words `BREAKING CHANGE` — either number, colon or not, subject or body — cut a major release
-here, and a major on this repo is an outage rather than a version. `commit-analyzer-cz` matches
-them unanchored against the raw message and ORs the result with the configured major rules, so
-`.semrelrc` cannot stop it and it majors even a `fix:` commit.
-
-The module path carries no `/vN` suffix, so once a major exists `go install …@latest` cannot see it
-and silently resolves the highest v1 instead — `dotfiles check` reports the tool stale forever
-while `apply` exits 0 having installed nothing. Every already-installed binary is stranded too:
-`goselfupdate` refuses a lower version and reports "already up to date". Recovery is a reinstall on
-each machine, and it is not a rewrite — branch protection refuses one on `main`, and the offending
-commit re-cuts the major on every push until a tag above it takes it out of range.
-
-**The ban covers a commit that merely discusses the trailer.** One explaining this exact caveat cut
-a fresh major on push. Name it some other way — "that marker" — and never quote it.
-
-Deliberate majors use `chore(release-major)`, the one subject `.semrelrc` leaves as a major. Full
-reasoning and the reset procedure: `standards/release.md` § "Never write the breaking-change
-trailer in a Go repo's commit message".
+Those two words anywhere in a message cut a major here, and a major on a Go module
+with no `/vN` path is an outage: `go install …@latest` stops seeing the tag, every
+installed binary is stranded, and recovery is a reinstall on each machine. The
+analyzer matches unanchored and ORs past `.semrelrc`, so nothing switches it off.
+A commit that merely *discusses* the trailer cuts one too — say "that marker".
+Deliberate majors are `chore(release-major)`. Reset procedure and the measurement:
+`standards/release.md` § "Never write the breaking-change trailer in a Go repo's
+commit message".
