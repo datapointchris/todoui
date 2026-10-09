@@ -228,10 +228,11 @@ repos:
 # > custom:after:go - sqlc generated code freshness
   - repo: local
     hooks:
-      # Catches a schema or query edit committed without regenerating.
+      # Catches a schema or query edit committed without regenerating. The sqlc
+      # version is the tool directive pinned in go.mod, the same one CI runs.
       - id: sqlc-diff
         name: sqlc generated code is current
-        entry: bash -c 'cd db && sqlc diff'
+        entry: bash -c 'cd db && go tool sqlc diff'
         language: system
         files: ^db/.*\.(sql|yaml)$
         pass_filenames: false

@@ -70,12 +70,10 @@ jobs:
       - name: Fetch tags
         run: git fetch --prune --tags --unshallow || git fetch --prune --tags
 
-      # Pinned to the version generating the committed code — a newer sqlc can
-      # emit different output and fail here while passing locally.
+      # The sqlc version is the tool directive pinned in go.mod, the one that
+      # generated the committed code. A newer sqlc can emit different output.
       - name: Check sqlc generated code is current
-        run: |
-          go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0
-          cd db && sqlc diff
+        run: cd db && go tool sqlc diff
 
       # Executes the Taskfile so its build paths cannot silently rot again, as
       # they did for 109 days after the package layout flatten.
