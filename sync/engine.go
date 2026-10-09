@@ -102,8 +102,8 @@ func (e *Engine) Start() {
 
 // Stop cancels the background loop and waits for it to finish. Callers close the
 // database right after this returns, so returning early leaves the loop mid-query
-// against a closed handle — which is where "sql: database is closed" came from on
-// every CLI invocation. The timeout keeps an in-flight HTTP push from hanging exit.
+// against a closed handle, which fails with "sql: database is closed" on exit.
+// The timeout keeps an in-flight HTTP push from hanging exit.
 func (e *Engine) Stop() {
 	e.cancel()
 	select {
@@ -203,17 +203,6 @@ func (e *Engine) pushLoop() {
 			e.retryPendingOps()
 		}
 	}
-}
-
-// Flush drains the queue now instead of waiting for the push loop, and returns
-// once it is empty or the network refused it.
-//
-// The CLI calls it after a create so the command can print the number the
-// server just assigned. Nothing is lost when the API is unreachable: the op
-// stays queued exactly as it would have, and the item keeps its UUID tail as a
-// handle until a later push or pull earns it a number.
-func (e *Engine) Flush() {
-	e.retryPendingOps()
 }
 
 // retryPendingOps drains only when something is actually queued. An unconditional

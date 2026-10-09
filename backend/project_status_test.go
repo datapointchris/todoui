@@ -46,12 +46,12 @@ func TestCompletingHidesTheProject(t *testing.T) {
 
 	mustSetStatus(t, b, p.ID, model.StatusCompleted, nil)
 
-	active, err := b.ListProjects()
+	active, err := b.ListProjectsByStatus(model.StatusActive)
 	if err != nil {
 		t.Fatalf("listing projects: %v", err)
 	}
 	if len(active) != 0 {
-		t.Errorf("completed project still in the default list: %v", projectNames(active))
+		t.Errorf("completed project still in the active list: %v", projectNames(active))
 	}
 
 	all, err := b.ListProjectsByStatus(model.StatusAll)
@@ -301,8 +301,8 @@ func TestAProjectCannotBeRenamedToARepo(t *testing.T) {
 	}
 }
 
-// Same policy --repo validation follows: refusing to file work on a machine
-// without a registry is worse than the wrong name.
+// Refusing to create a project on a machine without a registry is worse than a
+// project named after a repo.
 func TestWithoutARegistryNothingIsBanned(t *testing.T) {
 	b := newTestBackend(t)
 

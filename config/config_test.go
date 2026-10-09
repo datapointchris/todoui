@@ -69,8 +69,8 @@ func TestDefaultDBPath_XDGOverride(t *testing.T) {
 	}
 }
 
-// The interval governs both the TUI's background pull and the age at which a
-// CLI read refreshes, so a missing default would mean no automatic sync at all.
+// The interval is the TUI's background pull period, so a missing default would
+// mean no automatic sync at all.
 func TestLoad_SyncIntervalDefault(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("TODOUI_SYNC_INTERVAL", "")

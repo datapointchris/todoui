@@ -33,7 +33,7 @@ type SyncConfig struct {
 	APIKey  string `mapstructure:"api_key"`
 
 	// Interval is the longest todoui will go without reconciling: the TUI's
-	// background pull period, and the age at which a CLI read refreshes first.
+	// background pull period.
 	Interval time.Duration `mapstructure:"interval"`
 }
 
@@ -47,9 +47,8 @@ type LocalConfig struct {
 func Load() (*Config, error) {
 	v := newViper()
 
-	// Defaults. A full pull costs 2+2N requests, so the interval trades API load
-	// against staleness; two minutes keeps an unattended TUI current without
-	// making a burst of agent CLI calls pull more than once.
+	// Defaults. Every pull is a full reconcile, so the interval trades API load
+	// against staleness. Two minutes keeps an unattended TUI current.
 	v.SetDefault("local.db_path", defaultDBPath())
 	v.SetDefault("sync.interval", 2*time.Minute)
 
@@ -140,7 +139,7 @@ func ConfiguredReposRegistry() string {
 // expandTilde resolves a leading ~, which a hand-edited config will carry. Left
 // literal it names a directory that does not exist, and a registry that is not
 // there is not an error here — it reads as an empty registry rather than a bad
-// path, so the mistake surfaces as `--repo` silently accepting anything.
+// path, so the mistake surfaces as a project-name ban that bans nothing.
 func ExpandTilde(path string) string {
 	if !strings.HasPrefix(path, "~/") {
 		return path

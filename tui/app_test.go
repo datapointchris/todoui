@@ -367,7 +367,7 @@ func TestItemRowShowsTheNumber(t *testing.T) {
 
 	view := app.View()
 
-	items, err := app.backend.ListAllItems()
+	items, err := app.backend.ListAllItemsIncludingArchived()
 	if err != nil {
 		t.Fatalf("listing items: %v", err)
 	}
@@ -651,7 +651,7 @@ func TestProjectPaneShowsOpenAndDoneCounts(t *testing.T) {
 
 	pressKey(t, app, " ")
 
-	projects, err := app.backend.ListProjects()
+	projects, err := app.backend.ListProjectsByStatus(model.StatusActive)
 	if err != nil {
 		t.Fatalf("listing projects: %v", err)
 	}

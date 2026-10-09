@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,38 +12,6 @@ import (
 	"github.com/datapointchris/todoui/db/generated"
 	"github.com/datapointchris/todoui/model"
 )
-
-// LastPullAt reports when the local database last reconciled with the server,
-// or the zero time if it never has.
-func (e *Engine) LastPullAt() (time.Time, error) {
-	state, err := e.q.GetSyncState(e.ctx, "item")
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return time.Time{}, nil
-		}
-		return time.Time{}, fmt.Errorf("reading sync state: %w", err)
-	}
-	stamp, err := time.Parse(time.RFC3339Nano, state.LastPullAt)
-	if err != nil {
-		return time.Time{}, fmt.Errorf("parsing last pull time %q: %w", state.LastPullAt, err)
-	}
-	return stamp, nil
-}
-
-// PullIfStale reconciles only when the last pull is older than maxAge, and
-// reports whether it pulled. Against a server that embeds item detail in the
-// list a pull is two requests; against one that does not it is 2+2N, so the
-// window still exists to keep a burst of CLI commands from paying that repeatedly.
-func (e *Engine) PullIfStale(ctx context.Context, maxAge time.Duration) (bool, error) {
-	last, err := e.LastPullAt()
-	if err != nil {
-		return false, err
-	}
-	if time.Since(last) < maxAge {
-		return false, nil
-	}
-	return true, e.Pull(ctx)
-}
 
 // Pull fetches all data from the remote API and reconciles it with the local database.
 // It attempts to push pending ops first (so the server has our changes), then does a
@@ -148,8 +115,8 @@ func (e *Engine) pull(ctx context.Context, opts PullOptions) error {
 
 	for _, item := range items {
 		// The list embeds memberships, dependencies, and tasks, so the whole
-		// reconcile is two requests. It used to be two more per item: 122 serial
-		// round trips and 6.15s at 60 items, paid before a CLI command printed.
+		// reconcile is two requests. The fallback below costs two more per item:
+		// 122 serial round trips and 6.15s at 60 items.
 		if item.DependencyIDs != nil && item.Tasks != nil {
 			extras[item.ID] = itemExtra{detail: &item, tasks: item.Tasks}
 			continue

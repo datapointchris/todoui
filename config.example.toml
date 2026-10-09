@@ -2,7 +2,7 @@
 # Place at ~/.config/todoui/config.toml
 # All values can be overridden with environment variables.
 
-# Repo registry validating --repo, and the names `projects create` refuses.
+# Repo registry, whose names a project may not take.
 # Set this when the registry is maintained outside todoui's data directory and
 # shared with other tools. A bare key, so it must stay above the first [section].
 # Env: TODOUI_REPOS_REGISTRY

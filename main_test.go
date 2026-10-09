@@ -27,11 +27,11 @@ func find(t *testing.T, root *cobra.Command, path ...string) *cobra.Command {
 	return cmd
 }
 
-// The shells source `todoui completion zsh` from their rc files, so a pull here
-// is paid by every shell that opens. Registering "completion" was not enough:
-// cobra gives that command a subcommand per shell and executes the leaf, so a
-// leaf-only check missed it and a stale pull blocked startup for the API timeout.
-func TestSkipsPullMatchesCompletionSubcommands(t *testing.T) {
+// The shells source `todoui completion zsh` from their rc files, so opening the
+// database here is paid by every shell that starts, and on a new machine it
+// creates one. cobra gives `completion` a subcommand per shell and executes the
+// leaf, so a check on the leaf's name alone misses it.
+func TestNeedsBackendSkipsCommandsWithNothingToRead(t *testing.T) {
 	root := testRoot(t)
 
 	for _, path := range [][]string{
@@ -41,45 +41,34 @@ func TestSkipsPullMatchesCompletionSubcommands(t *testing.T) {
 		{"help"},
 		{"version"},
 		{"update"},
-		{"sync"},
-		{"ui"},
 	} {
-		if !skipsPull(find(t, root, path...)) {
-			t.Errorf("%v should skip the pre-command pull, got a pull", path)
+		if needsBackend(find(t, root, path...)) {
+			t.Errorf("%v opened the database, want it skipped", path)
 		}
 	}
 }
 
 // cobra adds the completion-protocol commands from an unexported initialiser, so
-// mirror how it parents them. These run on every TAB press; pulling there hung
-// the keypress for as long as the API took to answer.
-func TestSkipsPullMatchesCompletionProtocolCommands(t *testing.T) {
+// mirror how it parents them. These run on every TAB press.
+func TestNeedsBackendSkipsCompletionProtocolCommands(t *testing.T) {
 	root := testRoot(t)
 
 	for _, name := range []string{cobra.ShellCompRequestCmd, cobra.ShellCompNoDescRequestCmd} {
 		cmd := &cobra.Command{Use: name}
 		root.AddCommand(cmd)
-		if !skipsPull(cmd) {
-			t.Errorf("%s should skip the pre-command pull, got a pull", name)
+		if needsBackend(cmd) {
+			t.Errorf("%s opened the database, want it skipped", name)
 		}
 	}
 }
 
-// The denylist only works if everything absent from it still pulls; a command
-// silently serving stale data is the bug refreshForCLI exists to prevent.
-func TestSkipsPullLeavesDataCommandsAlone(t *testing.T) {
+func TestNeedsBackendOpensTheDatabaseForTheTUIAndSync(t *testing.T) {
 	root := testRoot(t)
 
-	for _, path := range [][]string{
-		{"list"},
-		{"create"},
-		{"search"},
-		{"show"},
-		{"blocked"},
-		{"projects"},
-	} {
-		if skipsPull(find(t, root, path...)) {
-			t.Errorf("%v should pull before reading, got a skip", path)
-		}
+	if !needsBackend(root) {
+		t.Error("bare todoui skipped the database, want the TUI to have one")
+	}
+	if !needsBackend(find(t, root, "sync")) {
+		t.Error("sync skipped the database, want it opened")
 	}
 }

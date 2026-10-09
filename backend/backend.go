@@ -6,10 +6,6 @@ import "github.com/datapointchris/todoui/model"
 // LocalBackend provides direct SQLite access; SyncBackend wraps it with background push/pull.
 type Backend interface {
 	// Projects
-	// ListProjects is the active projects. Closing a project is what takes it
-	// out of the list, so the default has to hide the terminal ones or
-	// completing one would do nothing visible.
-	ListProjects() ([]model.ProjectWithItemCount, error)
 	// ListProjectsByStatus takes a status name or model.StatusAll.
 	ListProjectsByStatus(status string) ([]model.ProjectWithItemCount, error)
 	GetProject(id string) (*model.ProjectWithItemCount, error)
@@ -23,13 +19,6 @@ type Backend interface {
 	ReorderProject(projectID string, newPosition int) error
 
 	// Items
-	ListAllItems() ([]model.ProjectItem, error)
-	// ListItemsByRepo narrows to one repo's work. A nil repo is the untagged
-	// items — the ones that are not repo work at all — which is a different
-	// question from "everything" and is why this takes a pointer.
-	ListItemsByRepo(repo *string) ([]model.ProjectItem, error)
-	// ListAllItemsIncludingArchived is what resolves a short id: an archived
-	// item still has to be addressable, or nothing can unarchive it.
 	ListAllItemsIncludingArchived() ([]model.ProjectItem, error)
 	ListItemsByProject(projectID string) ([]model.ProjectItemInProject, error)
 	GetItem(id string) (*model.ProjectItemDetail, error)
@@ -61,11 +50,9 @@ type Backend interface {
 	CreateTask(itemID string, input model.CreateProjectItemTask) (*model.ProjectItemTask, error)
 	UpdateTask(itemID, taskID string, input model.UpdateProjectItemTask) (*model.ProjectItemTask, error)
 	DeleteTask(itemID, taskID string) error
-	CompleteTask(itemID, taskID string) error
 
 	// Search
 	Search(query string) ([]model.ProjectItem, error)
-	SearchByRepo(query string, repo *string) ([]model.ProjectItem, error)
 
 	// Filters
 	ListBlocked() ([]model.ProjectItem, error)

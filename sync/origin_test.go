@@ -120,9 +120,9 @@ func TestPullRefusesADifferentAPI(t *testing.T) {
 	}
 
 	local := backend.NewLocalBackend(database)
-	projects, err := local.ListProjects()
+	projects, err := local.ListProjectsByStatus(model.StatusActive)
 	if err != nil {
-		t.Fatalf("ListProjects: %v", err)
+		t.Fatalf("ListProjectsByStatus: %v", err)
 	}
 	if len(projects) != 20 {
 		t.Errorf("the refused pull still took data: %d projects left of 20", len(projects))
@@ -213,9 +213,9 @@ func TestPullRefusesToDeleteMostOfTheDatabase(t *testing.T) {
 	}
 
 	local := backend.NewLocalBackend(database)
-	projects, err := local.ListProjects()
+	projects, err := local.ListProjectsByStatus(model.StatusActive)
 	if err != nil {
-		t.Fatalf("ListProjects: %v", err)
+		t.Fatalf("ListProjectsByStatus: %v", err)
 	}
 	if len(projects) != 20 {
 		t.Errorf("the refused pull still deleted: %d projects left of 20", len(projects))
@@ -224,9 +224,9 @@ func TestPullRefusesToDeleteMostOfTheDatabase(t *testing.T) {
 	if err := engine.PullWith(t.Context(), sync.PullOptions{Adopt: true, AllowLargeSweep: true}); err != nil {
 		t.Fatalf("--force did not allow it: %v", err)
 	}
-	projects, err = local.ListProjects()
+	projects, err = local.ListProjectsByStatus(model.StatusActive)
 	if err != nil {
-		t.Fatalf("ListProjects: %v", err)
+		t.Fatalf("ListProjectsByStatus: %v", err)
 	}
 	if len(projects) != 1 {
 		t.Errorf("--force did not apply the sweep: %d projects left", len(projects))

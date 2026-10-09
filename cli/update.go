@@ -36,11 +36,11 @@ func UpdateConfig() goselfupdate.Config {
 	}
 }
 
-func updateCmd() *cobra.Command {
+func UpdateCmd() *cobra.Command {
 	return goclikit.UpdateCommand(UpdateConfig())
 }
 
-func versionCmd() *cobra.Command {
+func VersionCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "version",
 		Short: "Print the current version",

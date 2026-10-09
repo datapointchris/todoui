@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/datapointchris/goclikit"
@@ -25,7 +24,7 @@ import (
 
 func main() {
 	autoConfig := autoupdate.Config{Update: cli.UpdateConfig()}
-	if err := goclikit.Execute(context.Background(), rootCmd(), autoConfig, goclikit.WithNotFound(cli.NotFound)); err != nil {
+	if err := goclikit.Execute(context.Background(), rootCmd(), autoConfig); err != nil {
 		if !errors.Is(err, goclikit.ErrReported) {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		}
@@ -35,51 +34,6 @@ func main() {
 			os.Exit(2)
 		}
 		os.Exit(1)
-	}
-}
-
-// commandsThatSkipPull never read or write todoui data, so making them wait on
-// the network buys nothing. Everything else pulls by default — an allowlist
-// would mean a new command silently serves stale data, which is the bug this
-// exists to fix.
-var commandsThatSkipPull = map[string]bool{
-	"ui":                            true, // pulls on start, then on its own timer
-	"version":                       true,
-	"update":                        true,
-	"completion":                    true,
-	"help":                          true,
-	"sync":                          true, // forces a full pull regardless of freshness
-	cobra.ShellCompRequestCmd:       true, // cobra runs these on every TAB press
-	cobra.ShellCompNoDescRequestCmd: true,
-}
-
-// skipsPull matches the whole ancestry, not just the leaf. `completion` owns a
-// subcommand per shell, so `todoui completion zsh` executes `zsh` and a leaf-only
-// check missed it — every shell that sourced the completions paid a full pull,
-// and a stale one blocked startup for the API timeout.
-func skipsPull(cmd *cobra.Command) bool {
-	for c := cmd; c != nil; c = c.Parent() {
-		if commandsThatSkipPull[c.Name()] {
-			return true
-		}
-	}
-	return false
-}
-
-// refreshForCLI reconciles with the server before a CLI command reads local
-// data. The TUI pulls from App.Init and then holds a live session; a CLI
-// process exits immediately, so without this every CLI read served whatever
-// the TUI last pulled — days old on a machine where todoui is driven by agents
-// rather than opened.
-//
-// Failure is deliberately not fatal. todoui is local-first: an unreachable API
-// must degrade to local data, not break the command.
-func refreshForCLI(cmd *cobra.Command, engine *sync.Engine, noSync bool, freshness time.Duration) {
-	if engine == nil || noSync || skipsPull(cmd) {
-		return
-	}
-	if _, err := engine.PullIfStale(cmd.Context(), freshness); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not refresh from %s (%v) — showing local data\n", engine.APIURL(), err)
 	}
 }
 
@@ -112,7 +66,6 @@ func rootCmd() *cobra.Command {
 	var database *sql.DB
 	var syncEngine *sync.Engine
 	var cfg *config.Config
-	var noSync bool
 
 	root := &cobra.Command{
 		Use:     "todoui",
@@ -146,8 +99,6 @@ func rootCmd() *cobra.Command {
 			} else {
 				b = backend.NewLocalBackend(d, backend.AssigningItemNumbers(), banRepoNames)
 			}
-
-			refreshForCLI(cmd, syncEngine, noSync, cfg.Sync.Interval)
 			return nil
 		},
 		RunE: func(_ *cobra.Command, _ []string) error {
@@ -168,9 +119,6 @@ func rootCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
-
-	root.PersistentFlags().BoolVar(&noSync, "no-sync", false,
-		"skip the pre-command refresh and use local data as-is")
 
 	var adoptOrigin, forceSweep bool
 	syncCmd := &cobra.Command{
@@ -205,27 +153,7 @@ func rootCmd() *cobra.Command {
 		"bind this database to the configured API, replacing whatever it was bound to")
 	syncCmd.Flags().BoolVar(&forceSweep, "force", false,
 		"allow a pull that would delete most of the local projects or items")
-	root.AddCommand(syncCmd)
-
-	// Explicit "ui" alias for the TUI
-	root.AddCommand(&cobra.Command{
-		Use:   "ui",
-		Short: "Launch the TUI (default when no command given)",
-		Args:  cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error {
-			app := tui.NewApp(b, syncEngine, cfg.Local.DBPath, cfg.Sync.Interval)
-			p := tea.NewProgram(app, tea.WithAltScreen())
-			_, err := p.Run()
-			return err
-		},
-	})
-
-	cli.RegisterAll(root, &b, func() {
-		if syncEngine != nil {
-			syncEngine.Flush()
-		}
-	})
-	cli.RegisterRecoveryHints(root)
+	root.AddCommand(syncCmd, cli.UpdateCmd(), cli.VersionCmd())
 
 	return root
 }

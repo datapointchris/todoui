@@ -1,7 +1,6 @@
 package sync_test
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -76,9 +75,9 @@ func TestSyncBackend_ReadsDelegateToLocal(t *testing.T) {
 	}
 
 	// Read should come from local DB immediately
-	projects, err := sb.ListProjects()
+	projects, err := sb.ListProjectsByStatus(model.StatusActive)
 	if err != nil {
-		t.Fatalf("ListProjects: %v", err)
+		t.Fatalf("ListProjectsByStatus: %v", err)
 	}
 	if len(projects) != 1 {
 		t.Fatalf("got %d projects, want 1", len(projects))
@@ -217,8 +216,9 @@ func TestSyncBackend_TaskOperations(t *testing.T) {
 		t.Fatalf("CreateTask: %v", err)
 	}
 
-	if err := sb.CompleteTask(item.ID, task.ID); err != nil {
-		t.Fatalf("CompleteTask: %v", err)
+	done := true
+	if _, err := sb.UpdateTask(item.ID, task.ID, model.UpdateProjectItemTask{Completed: &done}); err != nil {
+		t.Fatalf("UpdateTask: %v", err)
 	}
 
 	if err := sb.DeleteTask(item.ID, task.ID); err != nil {
@@ -336,9 +336,9 @@ func TestPull_Reconciles(t *testing.T) {
 	// Verify data was pulled into local DB
 	local := backend.NewLocalBackend(database)
 
-	projects, err := local.ListProjects()
+	projects, err := local.ListProjectsByStatus(model.StatusActive)
 	if err != nil {
-		t.Fatalf("ListProjects: %v", err)
+		t.Fatalf("ListProjectsByStatus: %v", err)
 	}
 	if len(projects) != 1 || projects[0].Name != "Pulled" {
 		t.Errorf("expected 1 project 'Pulled', got %v", projects)
@@ -464,8 +464,9 @@ func TestSyncBackend_UndoOfTaskCompletionPushesTheReversal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
-	if err := sb.CompleteTask(item.ID, task.ID); err != nil {
-		t.Fatalf("CompleteTask: %v", err)
+	done := true
+	if _, err := sb.UpdateTask(item.ID, task.ID, model.UpdateProjectItemTask{Completed: &done}); err != nil {
+		t.Fatalf("UpdateTask: %v", err)
 	}
 
 	time.Sleep(400 * time.Millisecond)
@@ -484,87 +485,6 @@ func TestSyncBackend_UndoOfTaskCompletionPushesTheReversal(t *testing.T) {
 		}
 	}
 	t.Errorf("expected %q after undoing the completion, got %v", want, calls)
-}
-
-// The CLI is a short-lived process, so it has to reconcile before it reads.
-// Pull was reachable only from App.Init, which meant every CLI read served
-// whatever the last TUI session had pulled — days stale on a machine driven by
-// agents rather than opened.
-func TestPullIfStaleRefreshesWhenNeverPulled(t *testing.T) {
-	recorder := &callRecorder{}
-	mux := http.NewServeMux()
-	mux.HandleFunc("/projects/", func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode([]model.Project{
-			{ID: "proj-1", Name: "Pulled", CreatedAt: time.Now()},
-		})
-	})
-	mux.HandleFunc("/project-items/", func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode([]model.ProjectItem{})
-	})
-	_, engine := setupSync(t, logging(recorder, mux))
-
-	pulled, err := engine.PullIfStale(context.Background(), time.Minute)
-	if err != nil {
-		t.Fatalf("PullIfStale: %v", err)
-	}
-	if !pulled {
-		t.Fatal("a database that has never pulled must pull")
-	}
-
-	last, err := engine.LastPullAt()
-	if err != nil {
-		t.Fatalf("LastPullAt: %v", err)
-	}
-	if time.Since(last) > time.Minute {
-		t.Errorf("expected the pull to be stamped, got %v", last)
-	}
-}
-
-// A full pull is 2+2N requests, so a burst of CLI commands must not each pay
-// for one.
-func TestPullIfStaleSkipsWhenFresh(t *testing.T) {
-	recorder := &callRecorder{}
-	mux := http.NewServeMux()
-	mux.HandleFunc("/projects/", func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode([]model.Project{})
-	})
-	mux.HandleFunc("/project-items/", func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode([]model.ProjectItem{})
-	})
-	_, engine := setupSync(t, logging(recorder, mux))
-
-	if _, err := engine.PullIfStale(context.Background(), time.Minute); err != nil {
-		t.Fatalf("first PullIfStale: %v", err)
-	}
-	afterFirst := recorder.count()
-
-	pulled, err := engine.PullIfStale(context.Background(), time.Minute)
-	if err != nil {
-		t.Fatalf("second PullIfStale: %v", err)
-	}
-	if pulled {
-		t.Error("a pull inside the freshness window must be skipped")
-	}
-	if recorder.count() != afterFirst {
-		t.Errorf("skipped pull still made requests: %d → %d", afterFirst, recorder.count())
-	}
-}
-
-// todoui is local-first: an unreachable API degrades to local data. The caller
-// warns rather than failing, so the error only has to surface.
-func TestPullIfStaleReportsAnUnreachableAPI(t *testing.T) {
-	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-	})
-	_, engine := setupSync(t, handler)
-
-	pulled, err := engine.PullIfStale(context.Background(), time.Minute)
-	if !pulled {
-		t.Error("a stale database should attempt the pull")
-	}
-	if err == nil {
-		t.Error("expected the failure to surface so the caller can warn")
-	}
 }
 
 // logging wraps a handler so a test can count requests without reimplementing
@@ -838,9 +758,22 @@ func TestPull_FallsBackWhenTheServerOmitsEmbeddedFields(t *testing.T) {
 	}
 }
 
-// The number is what a caller prints and types, and the create response is the
+// pendingAfterPush waits for the push loop a mutation's Notify woke, and returns
+// how many ops are still queued once the queue empties or the wait runs out.
+func pendingAfterPush(engine *sync.Engine) int {
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		pending := engine.Status().PendingCount
+		if pending == 0 || time.Now().After(deadline) {
+			return pending
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// The number is the item's handle in the TUI, and the create response is the
 // first place it exists. Waiting for the next pull would leave the item unnamed
-// for up to a full sync interval after the command that made it returned.
+// for up to a full sync interval after it was made.
 func TestPush_RecordsTheNumberTheServerAssigned(t *testing.T) {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost && r.URL.Path == "/project-items/" {
@@ -863,7 +796,9 @@ func TestPush_RecordsTheNumberTheServerAssigned(t *testing.T) {
 		t.Fatalf("Number = %d before the push, want nil", *item.Number)
 	}
 
-	engine.Flush()
+	if pending := pendingAfterPush(engine); pending != 0 {
+		t.Fatalf("pending ops = %d, want the create pushed", pending)
+	}
 
 	pushed, err := sb.GetItem(item.ID)
 	if err != nil {
@@ -897,9 +832,7 @@ func TestPush_AnUndecodableCreateResponseIsNotAFailure(t *testing.T) {
 		t.Fatalf("CreateItem: %v", err)
 	}
 
-	engine.Flush()
-
-	if pending := engine.Status().PendingCount; pending != 0 {
+	if pending := pendingAfterPush(engine); pending != 0 {
 		t.Errorf("pending ops = %d, want 0 — the create landed and must not be retried", pending)
 	}
 	stored, err := sb.GetItem(item.ID)
@@ -913,8 +846,8 @@ func TestPush_AnUndecodableCreateResponseIsNotAFailure(t *testing.T) {
 
 // Two drains overlapping pushed the same queued op twice — a 201 followed by a
 // 409, and a server-side item number burned on the insert that lost the race.
-// Notify wakes the push loop on the same mutation a caller then flushes for, so
-// the overlap happens on an ordinary create rather than under contrived load.
+// Notify wakes the push loop on a create, and a pull drains the queue before it
+// fetches, so a create landing just before a pull is drained from both sides.
 func TestPush_AQueuedCreateIsPushedExactlyOnce(t *testing.T) {
 	var mu goSync.Mutex
 	creates := 0
@@ -939,9 +872,10 @@ func TestPush_AQueuedCreateIsPushedExactlyOnce(t *testing.T) {
 		t.Fatalf("CreateItem: %v", err)
 	}
 
-	// The create already woke the push loop; flushing races a drain that is
-	// very likely still in flight.
-	engine.Flush()
+	// The create already woke the push loop. The pull's own drain races one
+	// that is very likely still in flight, and its fetch then fails on the
+	// handler's "{}", which this test does not care about.
+	_ = engine.Pull(t.Context())
 	time.Sleep(300 * time.Millisecond)
 
 	mu.Lock()

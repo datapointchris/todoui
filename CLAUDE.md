@@ -22,7 +22,6 @@ direction. `env | rg '^TODOUI'` returning nothing means you do not have it.
 
 ```bash
 go run .            # launch TUI against dev.db
-go run . list       # run CLI subcommands against dev.db
 ```
 
 Build, vet and test check code correctness, not TUI correctness. Do not claim a TUI change
@@ -35,37 +34,27 @@ command chain, so a create and its refresh have both landed before the assertion
 `tea.Tick` commands rather than sleeping out their duration. A layout bug that appears only at one
 window size is reproducible here and invisible in a manual pass. It does not replace driving the TUI.
 
-## Sub-tasks, projects, dependencies
+## todoui is a TUI; there is no item CLI
 
-`todoui create "title" -p foo` errors if project `foo` doesn't exist, so create it first with
-`todoui projects create foo` or in the TUI project pane with `a`. It also errors if `foo` is closed:
-`resolveProjects` reads the active list, and filing new work into a finished project is not
-something to make easy.
+Chris drives todoui through the TUI. Agents and scripts reach the same projects and items through
+ichrisbirch's own CLI against the API. The subcommands here are `sync`, `update`, `version` and
+`completion`, and none of them reads or writes an item. A verb added here would be a second front
+door onto rows ichrisbirch's CLI already owns, spelled independently of it.
 
-**The CLI exists for Claude Code and automation, not for Chris** — he drives todoui through the
-TUI. That is why the verb set mirrors `icb projects items` name for name: an agent uses one grammar
-whether it reaches the data through the ichrisbirch API or through a local SQLite file. On a machine
-that cannot reach the API, this CLI is the *only* way an agent can touch todoui, so a verb missing
-here is a capability that does not exist there.
-
-An item is named by its **number** — short, unique, and what every command prints and takes back
-(`resolveItemID` in `cli/resolve.go`). The UUID is the sync key and stops there; it is in `--json`
-and nowhere a person reads.
+An item shows its **number**, the handle ichrisbirch assigns and prints. The UUID is the sync key
+and stops there.
 
 The number is assigned by whichever database is the authority. With sync on that is the API, and
-`pushCreatedItem` writes the number from the create response into the local row, so `todoui create`
-prints the handle in the same invocation. With sync off, `AssigningItemNumbers` makes todoui
-allocate `max+1` itself, which cannot collide because that database is a disjoint universe.
+`pushCreatedItem` writes the number from the create response into the local row, so the TUI shows
+it once the push lands rather than after the next pull. With sync off, `AssigningItemNumbers` makes
+todoui allocate `max+1` itself, which cannot collide because that database is a disjoint universe.
 
 An item created while the API is unreachable has no number until its push lands, and shows its UUID
-tail until then (`itemHandle`). That is the only reason suffix resolution survives: a handle a
-command printed has to keep resolving after the number arrives. Do not switch the fallback to prefix
-matching — `standards/cli-design.md` § "A UUID-keyed resource needs a short handle of its own" is why
-a UUIDv7 prefix cannot work.
+tail until then (`itemHandle` in `tui/app.go`).
 
 ## A project name is bounded work, never a repo
 
-`projects create` refuses a name the repo registry knows, and so does a rename.
+Creating a project refuses a name the repo registry knows, and so does a rename.
 The test is whether the thing ENDS, not whether the name reads like a verb
 phrase:
 
@@ -81,20 +70,20 @@ The tell was dotfiles' own description, which had grown a hand-written BOUNDARY
 paragraph explaining which work belonged to it — a modeling gap patched with
 prose.
 
-The repo association is the item's `--repo` tag, which already crosses project
+The repo association is the item's repo tag, which already crosses project
 boundaries and outlives any single project. "What is the dotfiles work" is a
-`--repo dotfiles` query spanning live projects, finished ones, and whatever is
-filed elsewhere.
+query on that tag, spanning live projects, finished ones, and whatever is filed
+elsewhere.
 
 A one-item project is the floor, not the target: fifteen papercuts are four or
 five small thematic projects, not fifteen projects. If the ban produced one
 project per item the list would read like items, which is the complaint that
 started this.
 
-A missing registry bans nothing, the same policy `--repo` validation follows.
+A missing registry bans nothing.
 
-Enforcement is on the backend (`RefusingRepoNames`), not in the CLI, because
-the TUI creates projects too and a rule only one surface enforces is decoration.
+Enforcement is on the backend (`RefusingRepoNames`), the one path every create
+and rename takes.
 
 ## A project has a status, and it is not an `archived` flag
 
@@ -113,10 +102,7 @@ items is not. Visibility is derived from the project instead.
 
 **A name is held only by the active project bearing it.** That is
 `idx_projects_name_active` in `indexes.sql`, a partial unique index, and it is
-what lets a finished `clisteno` give the name back. `resolveProjectRef` in
-`cli/commands.go` mirrors the API's rule: active first, then a lone terminal
-match — without which `projects reopen ifiles` could not name its own target —
-then an error listing candidates. Never guess between several closed projects.
+what lets a finished `clisteno` give the name back.
 
 `migrateProjectStatus` is the one migration that rebuilds a table rather than
 adding columns, because SQLite attaches the old column-level `UNIQUE(name)` as
@@ -163,11 +149,8 @@ automatic can waive is not a guard.
 ## Sync is automatic; `todoui sync` is a convenience, not a requirement
 
 `sync.interval` (default 2m, floored at 15s) is the single knob for how stale todoui may ever be,
-and it drives three loops:
+and it drives two loops:
 
-- **CLI** — `refreshForCLI` in `main.go` pulls before a command when the last pull is older than
-  the interval. `commandsThatSkipPull` is a denylist rather than an allowlist, so forgetting to
-  register a new command cannot silently serve stale data.
 - **TUI** — `syncPullTickMsg` re-arms itself every interval, and always reschedules, even on the
   ticks it skips: a tick that returns no command kills background sync for the session.
   `safeToAutoPull` gates the reconcile to `modeNormal`, because a pull rewrites items, memberships
@@ -176,8 +159,8 @@ and it drives three loops:
   mutation, so a push that failed while the API was down retries without another edit.
 
 An automatic pull neither flashes on success nor claims the status bar on failure; failure surfaces
-through the engine status (`SYNC ERR`). A CLI pull failure warns and continues — local-first means
-an unreachable API degrades to local data, never an error.
+through the engine status (`SYNC ERR`). Local-first means an unreachable API degrades to local
+data, never an error.
 
 `Pull` records a pending-sync high-water mark before it fetches, then clears only the ops at or
 below it and spares entities queued above it from the "deleted upstream" sweeps. Without that mark,

@@ -46,13 +46,12 @@ func AssigningItemNumbers() LocalOption {
 //
 // A project name must be bounded work — something that ends — and a repo does
 // not end, so a project named after one silently becomes the eternal bucket the
-// next papercut falls into. The repo association is `--repo`, which already
-// crosses project boundaries and outlives any single project.
+// next papercut falls into. The repo association is an item's repo tag, which
+// already crosses project boundaries and outlives any single project.
 //
-// It lives on the backend rather than in the CLI because the TUI creates
-// projects too, and a rule only the CLI enforces is decoration. Loaded lazily,
-// matching `validateRepo`: a command that never names a project should not pay
-// to read the registry.
+// It lives on the backend because every create and rename passes through here,
+// whichever surface asked for it. Loaded lazily, so a session that never names
+// a project does not pay to read the registry.
 func RefusingRepoNames(path string) LocalOption {
 	return func(b *LocalBackend) { b.repoRegistryPath = path }
 }
@@ -80,8 +79,8 @@ func newID() string {
 // --- Projects ---
 
 // refuseRepoName rejects a project name the repo registry knows. A missing
-// registry bans nothing, the same policy `--repo` validation follows: refusing
-// to file work on a machine without a registry is worse than the wrong name.
+// registry bans nothing: refusing to create a project on a machine without one
+// is worse than a project named after a repo.
 func (b *LocalBackend) refuseRepoName(name string) error {
 	if b.repoRegistryPath == "" {
 		return nil
@@ -91,18 +90,12 @@ func (b *LocalBackend) refuseRepoName(name string) error {
 		return err
 	}
 	if registry.Knows(name) {
-		return fmt.Errorf("%w: %q names a repo, which never ends — name the bounded work instead, and tag it with --repo %s", model.ErrRepoNamedProject, name, name)
+		return fmt.Errorf("%w: %q names a repo, which never ends — name the bounded work instead", model.ErrRepoNamedProject, name)
 	}
 	return nil
 }
 
-func (b *LocalBackend) ListProjects() ([]model.ProjectWithItemCount, error) {
-	return b.ListProjectsByStatus(model.StatusActive)
-}
-
-// ListProjectsByStatus takes a status name or model.StatusAll. Closing a project
-// is what takes it out of the list, so every caller that has not asked for
-// something else goes through ListProjects and sees the active ones.
+// ListProjectsByStatus takes a status name or model.StatusAll.
 func (b *LocalBackend) ListProjectsByStatus(status string) ([]model.ProjectWithItemCount, error) {
 	rows, err := b.q.ListProjectsWithItemCount(b.ctx(), status)
 	if err != nil {
@@ -308,32 +301,6 @@ func (b *LocalBackend) ReorderProject(projectID string, newPosition int) error {
 }
 
 // --- Items ---
-
-func (b *LocalBackend) ListAllItems() ([]model.ProjectItem, error) {
-	items, err := b.q.ListAllItems(b.ctx())
-	if err != nil {
-		return nil, fmt.Errorf("listing all items: %w", err)
-	}
-	return toModelProjectItems(items), nil
-}
-
-// nullRepo renders the repo filter for sqlc. A nil pointer becomes an invalid
-// NullString, which the `repo IS ?` queries match against the untagged rows —
-// the deliberate "not repo work" case, not an absence of filtering.
-func nullRepo(repo *string) sql.NullString {
-	if repo == nil {
-		return sql.NullString{}
-	}
-	return sql.NullString{String: *repo, Valid: true}
-}
-
-func (b *LocalBackend) ListItemsByRepo(repo *string) ([]model.ProjectItem, error) {
-	items, err := b.q.ListItemsByRepo(b.ctx(), nullRepo(repo))
-	if err != nil {
-		return nil, fmt.Errorf("listing items by repo: %w", err)
-	}
-	return toModelProjectItems(items), nil
-}
 
 func (b *LocalBackend) ListAllItemsIncludingArchived() ([]model.ProjectItem, error) {
 	items, err := b.q.ListAllItemsRaw(b.ctx())
@@ -788,30 +755,6 @@ func (b *LocalBackend) DeleteTask(itemID, taskID string) error {
 	})
 }
 
-func (b *LocalBackend) CompleteTask(itemID, taskID string) error {
-	ctx := b.ctx()
-
-	current, err := b.q.GetTask(ctx, taskID)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return fmt.Errorf("task %q: %w", taskID, model.ErrNotFound)
-		}
-		return fmt.Errorf("getting task for complete: %w", err)
-	}
-
-	return b.inTx(func(qtx *generated.Queries) error {
-		if _, err := qtx.UpdateTask(ctx, generated.UpdateTaskParams{
-			Title:     current.Title,
-			Completed: 1,
-			Position:  current.Position,
-			ID:        taskID,
-		}); err != nil {
-			return fmt.Errorf("completing task: %w", err)
-		}
-		return b.logUndo(qtx, "update", "task", taskID, current)
-	})
-}
-
 // --- Search ---
 
 func (b *LocalBackend) Search(query string) ([]model.ProjectItem, error) {
@@ -822,22 +765,6 @@ func (b *LocalBackend) Search(query string) ([]model.ProjectItem, error) {
 	})
 	if err != nil {
 		return nil, fmt.Errorf("searching items: %w", err)
-	}
-	return toModelProjectItems(items), nil
-}
-
-func (b *LocalBackend) SearchByRepo(query string, repo *string) ([]model.ProjectItem, error) {
-	if repo == nil {
-		return b.Search(query)
-	}
-	q := sql.NullString{String: query, Valid: true}
-	items, err := b.q.SearchItemsByRepo(b.ctx(), generated.SearchItemsByRepoParams{
-		Repo:    nullRepo(repo),
-		Column2: q,
-		Column3: q,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("searching items by repo: %w", err)
 	}
 	return toModelProjectItems(items), nil
 }
@@ -1186,8 +1113,7 @@ func (b *LocalBackend) CanUndo() (bool, error) {
 // itemSnapshot is everything a delete destroys. The row alone is not enough
 // to undo one: memberships, dependencies, and tasks all cascade. An item
 // restored without its memberships belongs to no project, which the TUI
-// cannot show at all — it builds every view by walking projects — while the
-// CLI's flat listing still returns it.
+// cannot show at all, because it builds every view by walking projects.
 type itemSnapshot struct {
 	Item         generated.ProjectItem             `json:"item"`
 	Memberships  []generated.ProjectItemMembership `json:"memberships"`

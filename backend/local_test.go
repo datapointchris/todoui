@@ -45,7 +45,7 @@ func TestCreateAndListProjects(t *testing.T) {
 		t.Errorf("expected name 'work', got %q", p.Name)
 	}
 
-	projects, err := b.ListProjects()
+	projects, err := b.ListProjectsByStatus(model.StatusActive)
 	if err != nil {
 		t.Fatalf("listing projects: %v", err)
 	}
@@ -204,23 +204,6 @@ func TestListItemsByProjectIncludesPosition(t *testing.T) {
 	}
 	if items[0].Position == 0 && items[1].Position == 0 {
 		t.Error("expected items to have non-zero positions")
-	}
-}
-
-func TestListAllItems(t *testing.T) {
-	b := newTestBackend(t)
-
-	p1 := mustCreateProject(t, b, "work")
-	p2 := mustCreateProject(t, b, "personal")
-	mustCreateItem(t, b, model.CreateProjectItem{Title: "work task", ProjectIDs: []string{p1.ID}})
-	mustCreateItem(t, b, model.CreateProjectItem{Title: "personal task", ProjectIDs: []string{p2.ID}})
-
-	items, err := b.ListAllItems()
-	if err != nil {
-		t.Fatalf("listing all items: %v", err)
-	}
-	if len(items) != 2 {
-		t.Fatalf("expected 2 items, got %d", len(items))
 	}
 }
 
@@ -498,7 +481,8 @@ func TestTaskCRUD(t *testing.T) {
 	}
 
 	// Complete task
-	if err := b.CompleteTask(item.ID, task1.ID); err != nil {
+	done := true
+	if _, err := b.UpdateTask(item.ID, task1.ID, model.UpdateProjectItemTask{Completed: &done}); err != nil {
 		t.Fatalf("completing task: %v", err)
 	}
 
@@ -520,7 +504,7 @@ func TestDeleteProject(t *testing.T) {
 		t.Fatalf("deleting project: %v", err)
 	}
 
-	projects, _ := b.ListProjects()
+	projects, _ := b.ListProjectsByStatus(model.StatusAll)
 	if len(projects) != 0 {
 		t.Errorf("expected 0 projects after delete, got %d", len(projects))
 	}
@@ -926,7 +910,8 @@ func TestUndoCoversTaskCompletion(t *testing.T) {
 		t.Fatalf("creating task: %v", err)
 	}
 
-	if err := b.CompleteTask(item.ID, task.ID); err != nil {
+	done := true
+	if _, err := b.UpdateTask(item.ID, task.ID, model.UpdateProjectItemTask{Completed: &done}); err != nil {
 		t.Fatalf("completing task: %v", err)
 	}
 	if _, err := b.Undo(); err != nil {

@@ -24,24 +24,12 @@ func NewSyncBackend(local *backend.LocalBackend, engine *Engine) *SyncBackend {
 
 // --- Read methods: pass through to local ---
 
-func (s *SyncBackend) ListProjects() ([]model.ProjectWithItemCount, error) {
-	return s.local.ListProjects()
-}
-
 func (s *SyncBackend) ListProjectsByStatus(status string) ([]model.ProjectWithItemCount, error) {
 	return s.local.ListProjectsByStatus(status)
 }
 
 func (s *SyncBackend) GetProject(id string) (*model.ProjectWithItemCount, error) {
 	return s.local.GetProject(id)
-}
-
-func (s *SyncBackend) ListAllItems() ([]model.ProjectItem, error) {
-	return s.local.ListAllItems()
-}
-
-func (s *SyncBackend) ListItemsByRepo(repo *string) ([]model.ProjectItem, error) {
-	return s.local.ListItemsByRepo(repo)
 }
 
 func (s *SyncBackend) ListAllItemsIncludingArchived() ([]model.ProjectItem, error) {
@@ -78,10 +66,6 @@ func (s *SyncBackend) ListTasks(itemID string) ([]model.ProjectItemTask, error) 
 
 func (s *SyncBackend) Search(query string) ([]model.ProjectItem, error) {
 	return s.local.Search(query)
-}
-
-func (s *SyncBackend) SearchByRepo(query string, repo *string) ([]model.ProjectItem, error) {
-	return s.local.SearchByRepo(query, repo)
 }
 
 func (s *SyncBackend) ListBlocked() ([]model.ProjectItem, error) {
@@ -277,15 +261,6 @@ func (s *SyncBackend) DeleteTask(itemID, taskID string) error {
 		return err
 	}
 	_ = s.engine.QueueOp(OpDeleteTask, taskID, taskRefPayload{ItemID: itemID})
-	s.engine.Notify()
-	return nil
-}
-
-func (s *SyncBackend) CompleteTask(itemID, taskID string) error {
-	if err := s.local.CompleteTask(itemID, taskID); err != nil {
-		return err
-	}
-	_ = s.engine.QueueOp(OpCompleteTask, taskID, taskRefPayload{ItemID: itemID})
 	s.engine.Notify()
 	return nil
 }
