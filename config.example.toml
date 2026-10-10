@@ -15,10 +15,12 @@
 enabled = false
 # API URL for sync (required when enabled)
 # Env: TODOUI_SYNC_URL
-# api_url = "https://api.ichrisbirch.com"
-# Personal API key (ichrisbirch: POST /api-keys/ to generate)
-# Env: TODOUI_SYNC_KEY
-# api_key = "icb_..."
+# api_url = "https://example.com/api"
+# Command printing a bearer token for api_url, split on spaces and run without a
+# shell. Unset sends no token. A URL from TODOUI_SYNC_URL takes its command from
+# TODOUI_SYNC_TOKEN_COMMAND alone, never from this file.
+# Env: TODOUI_SYNC_TOKEN_COMMAND
+# token_command = "<cli> auth token"
 
 [local]
 # Path to SQLite database
