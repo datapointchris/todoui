@@ -1,8 +1,12 @@
 package main
 
 import (
+	"errors"
+	"io"
+	"strings"
 	"testing"
 
+	"github.com/datapointchris/goclikit"
 	"github.com/spf13/cobra"
 )
 
@@ -58,6 +62,27 @@ func TestNeedsBackendSkipsCompletionProtocolCommands(t *testing.T) {
 		root.AddCommand(cmd)
 		if needsBackend(cmd) {
 			t.Errorf("%s opened the database, want it skipped", name)
+		}
+	}
+}
+
+// A positional on a leaf is a typing mistake, so it exits 2 like a bad flag.
+// cobra validates arguments before PersistentPreRunE, so `sync` refuses the
+// word before it opens a database.
+func TestAPositionalOnALeafIsAUsageError(t *testing.T) {
+	for _, line := range [][]string{{"sync", "bogus"}, {"version", "bogus"}} {
+		root := testRoot(t)
+		root.SetOut(io.Discard)
+		root.SetErr(io.Discard)
+		root.SetArgs(line)
+
+		err := root.Execute()
+		if !errors.Is(err, goclikit.ErrUsage) {
+			t.Errorf("%v answered %v, want a usage error", line, err)
+			continue
+		}
+		if want := "takes no arguments, and was given \"bogus\""; !strings.Contains(err.Error(), want) {
+			t.Errorf("%v answered %q, want it to say it %s", line, err, want)
 		}
 	}
 }
