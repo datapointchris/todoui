@@ -30,7 +30,12 @@ type Config struct {
 type SyncConfig struct {
 	Enabled bool   `mapstructure:"enabled"`
 	APIURL  string `mapstructure:"api_url"`
-	APIKey  string `mapstructure:"api_key"`
+
+	// TokenCommand prints a bearer token for APIURL, the way a CLI's
+	// `auth token` does. It is split on spaces and run without a shell. Empty
+	// sends no Authorization header, which a dev API that sets its own identity
+	// wants.
+	TokenCommand string `mapstructure:"token_command"`
 
 	// Interval is the longest todoui will go without reconciling: the TUI's
 	// background pull period.
@@ -63,7 +68,7 @@ func Load() (*Config, error) {
 	_ = v.BindEnv("local.db_path", "TODOUI_DB")
 	_ = v.BindEnv("sync.enabled", "TODOUI_SYNC")
 	_ = v.BindEnv("sync.api_url", "TODOUI_SYNC_URL")
-	_ = v.BindEnv("sync.api_key", "TODOUI_SYNC_KEY")
+	_ = v.BindEnv("sync.token_command", "TODOUI_SYNC_TOKEN_COMMAND")
 	_ = v.BindEnv("sync.interval", "TODOUI_SYNC_INTERVAL")
 
 	// ErrorUnused, so a key todoui does not read is refused rather than dropped.
@@ -85,6 +90,18 @@ func Load() (*Config, error) {
 
 	if cfg.Sync.Enabled && cfg.Sync.APIURL == "" {
 		return nil, fmt.Errorf("sync.api_url is required when sync is enabled (set in config or TODOUI_SYNC_URL)")
+	}
+
+	// A token command answers for the URL beside it. A URL from the environment
+	// names an API the config file does not describe, so the file's command
+	// never pairs with it: a dev .envrc overriding the URL would otherwise send a
+	// production token to the dev API. TODOUI_SYNC_TOKEN_COMMAND is then the only
+	// source, and unset means no token.
+	if os.Getenv("TODOUI_SYNC_URL") != "" {
+		cfg.Sync.TokenCommand = os.Getenv("TODOUI_SYNC_TOKEN_COMMAND")
+	}
+	if cfg.Sync.TokenCommand != "" && strings.TrimSpace(cfg.Sync.TokenCommand) == "" {
+		return nil, fmt.Errorf("sync.token_command names no command")
 	}
 
 	// time.NewTicker panics on a non-positive duration, and a config typo must not

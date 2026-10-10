@@ -93,7 +93,7 @@ func rootCmd() *cobra.Command {
 			banRepoNames := backend.RefusingRepoNames(repos.DefaultPath())
 			if cfg.Sync.Enabled {
 				local := backend.NewLocalBackend(d, banRepoNames)
-				syncEngine = sync.New(d, cfg.Sync.APIURL, cfg.Sync.APIKey)
+				syncEngine = sync.New(d, cfg.Sync.APIURL, cfg.Sync.TokenCommand)
 				syncEngine.Start()
 				b = sync.NewSyncBackend(local, syncEngine)
 			} else {

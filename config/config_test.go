@@ -145,6 +145,59 @@ func writeConfig(t *testing.T, body string) {
 	t.Setenv("XDG_CONFIG_HOME", dir)
 }
 
+const syncedConfig = "[sync]\nenabled = true\napi_url = \"https://api.example\"\ntoken_command = \"print-token --for api\"\n"
+
+func TestTheTokenCommandIsReadFromTheConfigFile(t *testing.T) {
+	writeConfig(t, syncedConfig)
+	t.Setenv("TODOUI_SYNC_URL", "")
+	t.Setenv("TODOUI_SYNC_TOKEN_COMMAND", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Sync.TokenCommand != "print-token --for api" {
+		t.Errorf("token command %q, want the file's", cfg.Sync.TokenCommand)
+	}
+}
+
+// A dev .envrc points the URL at another API. The file's command was written for
+// the file's URL, and must not hand its token to that one.
+func TestAURLFromTheEnvironmentTakesNoTokenCommandFromTheFile(t *testing.T) {
+	writeConfig(t, syncedConfig)
+	t.Setenv("TODOUI_SYNC_URL", "https://dev.example")
+	t.Setenv("TODOUI_SYNC_TOKEN_COMMAND", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Sync.TokenCommand != "" {
+		t.Errorf("token command %q paired with the environment's URL, want none", cfg.Sync.TokenCommand)
+	}
+
+	t.Setenv("TODOUI_SYNC_TOKEN_COMMAND", "print-token --for dev")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Sync.TokenCommand != "print-token --for dev" {
+		t.Errorf("token command %q, want the environment's", cfg.Sync.TokenCommand)
+	}
+}
+
+// Split on spaces, a blank command is nothing to run, and silently sending no
+// token would read as the API refusing a good one.
+func TestABlankTokenCommandIsRefused(t *testing.T) {
+	writeConfig(t, "[sync]\nenabled = true\napi_url = \"https://api.example\"\ntoken_command = \"   \"\n")
+	t.Setenv("TODOUI_SYNC_URL", "")
+	t.Setenv("TODOUI_SYNC_TOKEN_COMMAND", "")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("a blank token_command loaded")
+	}
+}
+
 // time.NewTicker panics on a non-positive duration, so a typo here would take
 // the TUI down on launch rather than degrading to a slower sync.
 func TestLoad_SyncIntervalIsFloored(t *testing.T) {

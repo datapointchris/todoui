@@ -175,10 +175,22 @@ Config file: `~/.config/todoui/config.toml`
 
 [sync]
 enabled = false
-# api_url = "https://api.ichrisbirch.com"
-# api_key = "icb_..."  # personal API key from POST /api-keys/
+# api_url = "https://example.com/api"
+# token_command = "<cli> auth token"  # prints a bearer token for api_url
 # interval = "2m"  # longest todoui goes without reconciling; floored at 15s
 ```
+
+`token_command` is how todoui authenticates to the API without holding a
+secret itself. It is split on spaces and run without a shell or stdin, and
+whatever it prints becomes the bearer token. todoui keeps the token until the
+API refuses it, then runs the command once more and retries once. A failing
+command's first line of stderr is what the status bar shows. Leave it unset for
+an API that needs no token, such as a dev stack that sets its own identity.
+
+The command belongs to the URL beside it. When `TODOUI_SYNC_URL` supplies the
+URL, the config file's `token_command` is ignored and `TODOUI_SYNC_TOKEN_COMMAND`
+is the only source, so overriding the URL never sends one API's token to
+another.
 
 A pull is two requests — the item list embeds memberships, dependencies, and
 sub-tasks. Against an API predating that embed it falls back to 2+2N, fetching
@@ -191,7 +203,7 @@ Environment variable overrides:
 | `TODOUI_DB` | SQLite database path |
 | `TODOUI_SYNC` | Enable sync (`true`/`false`) |
 | `TODOUI_SYNC_URL` | API URL for sync |
-| `TODOUI_SYNC_KEY` | Personal API key for sync auth |
+| `TODOUI_SYNC_TOKEN_COMMAND` | Command printing a bearer token for sync |
 | `TODOUI_SYNC_INTERVAL` | Reconcile interval (e.g. `30s`, `5m`) |
 | `TODOUI_REPOS_REGISTRY` | Repo registry path |
 

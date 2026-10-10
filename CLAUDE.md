@@ -17,7 +17,7 @@ DB.
 ⚠️ **`.envrc` is machine-local and is not in this repo. Check it exists before
 running anything here.** Without it nothing is overridden, so `go run .` opens
 the production database against the production API — which is the accident the
-three-coupled-variables rule below exists to prevent, arrived at from the other
+coupled-variables rule below exists to prevent, arrived at from the other
 direction. `env | rg '^TODOUI'` returning nothing means you do not have it.
 
 ```bash
@@ -115,8 +115,11 @@ a live one sharing its name.
 
 ## A database and its API are a pair — never mix a dev half with a prod half
 
-`.envrc` exports **three** coupled variables: `TODOUI_DB`, `TODOUI_SYNC_URL`,
-`TODOUI_SYNC_KEY`. They name one environment. Overriding one of them names an
+`.envrc` exports two coupled variables, `TODOUI_DB` and `TODOUI_SYNC_URL`, and
+`TODOUI_SYNC_TOKEN_COMMAND` where the dev API wants a token. They name one
+environment. A URL from the environment never takes the config file's
+`token_command` (`config.Load`), so the dev URL cannot carry the production
+token. Overriding one of them names an
 environment that does not exist, and for this tool that is destructive rather
 than merely wrong: a pull deletes every local row the server did not return, so
 a production database reconciled against the dev API is emptied of everything
@@ -126,7 +129,7 @@ happened.
 
 **To run against production data, run from outside this repo**, where direnv has
 loaded nothing. Un-setting your way out is how the accident happened: `env -u`
-on the variable you remembered still leaves the two you did not.
+on the variable you remembered still leaves the one you did not.
 
 `sync_origin` is the enforcement, because a rule only prose enforces is
 decoration. The first pull records which API the database belongs to, and every

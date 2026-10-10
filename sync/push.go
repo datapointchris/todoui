@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -183,7 +184,15 @@ func (e *Engine) classifyResponse(status int) error {
 }
 
 // friendlyNetErr translates raw network errors into user-readable messages.
+//
+// A token command's failure arrives through the same call, wrapped as a network
+// error. Its own message says what to run, and its timeout is not the API's, so
+// it is returned as it is.
 func friendlyNetErr(err error) error {
+	var tokenErr *TokenCommandError
+	if errors.As(err, &tokenErr) {
+		return tokenErr
+	}
 	msg := err.Error()
 	switch {
 	case strings.Contains(msg, "connection refused"):

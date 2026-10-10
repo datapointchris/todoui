@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	gosync "sync"
 	"time"
 
@@ -50,15 +51,14 @@ func WithPushRetryInterval(d time.Duration) Option {
 }
 
 // New creates a sync engine. Call Start() to launch the background push loop.
-// If apiKey is non-empty, it is sent as a Bearer token on every request.
-func New(db *sql.DB, apiURL, apiKey string, opts ...Option) *Engine {
+// A non-empty tokenCommand is split on spaces and run without a shell, and every
+// request carries the bearer token it prints (tokenTransport). Empty sends no
+// Authorization header.
+func New(db *sql.DB, apiURL, tokenCommand string, opts ...Option) *Engine {
 	ctx, cancel := context.WithCancel(context.Background())
 	client := &http.Client{Timeout: 10 * time.Second}
-	if apiKey != "" {
-		client.Transport = &authTransport{
-			key:  apiKey,
-			base: http.DefaultTransport,
-		}
+	if argv := strings.Fields(tokenCommand); len(argv) > 0 {
+		client.Transport = newTokenTransport(argv, http.DefaultTransport)
 	}
 	e := &Engine{
 		db:            db,
@@ -79,18 +79,6 @@ func New(db *sql.DB, apiURL, apiKey string, opts ...Option) *Engine {
 
 // APIURL returns the remote API base URL this engine syncs with.
 func (e *Engine) APIURL() string { return e.apiURL }
-
-// authTransport injects an Authorization header into every outgoing request.
-type authTransport struct {
-	key  string
-	base http.RoundTripper
-}
-
-func (t *authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	req = req.Clone(req.Context())
-	req.Header.Set("Authorization", "Bearer "+t.key)
-	return t.base.RoundTrip(req)
-}
 
 // Start launches the background push loop goroutine.
 func (e *Engine) Start() {
