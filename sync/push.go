@@ -28,7 +28,8 @@ func (e *Engine) executePush(op generated.PendingSync) error {
 	case OpDeleteProject:
 		return e.pushDelete(fmt.Sprintf("/projects/%s", op.EntityID))
 	case OpReorderProject:
-		return e.pushJSON(http.MethodPatch, fmt.Sprintf("/projects/%s/reorder", op.EntityID), op.Payload)
+		// The payload is {"position": n}, which a project's own PATCH takes.
+		return e.pushJSON(http.MethodPatch, fmt.Sprintf("/projects/%s", op.EntityID), op.Payload)
 
 	case OpCreateItem:
 		return e.pushCreatedItem(op.EntityID, op.Payload)
@@ -72,7 +73,7 @@ func (e *Engine) executePush(op generated.PendingSync) error {
 			ItemID string `json:"item_id"`
 		}
 		_ = json.Unmarshal([]byte(op.Payload), &p)
-		return e.pushJSON(http.MethodPost, fmt.Sprintf("/project-items/%s/tasks/%s/complete", p.ItemID, op.EntityID), "")
+		return e.pushJSON(http.MethodPatch, fmt.Sprintf("/project-items/%s/tasks/%s", p.ItemID, op.EntityID), `{"completed":true}`)
 
 	case OpAddDependency:
 		return e.pushJSON(http.MethodPost, fmt.Sprintf("/project-items/%s/dependencies", op.EntityID), op.Payload)
