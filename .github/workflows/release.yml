@@ -27,3 +27,8 @@ jobs:
       contents: write
     with:
       goreleaser: true
+      # A tag exists before the module proxy has fetched it, and `go install
+      # <module>@latest` resolves through that proxy. Inside the gap it returns
+      # the previous version and exits 0, so the installer reports the machine
+      # converged while leaving the old binary in place.
+      prime-module-proxy: true
