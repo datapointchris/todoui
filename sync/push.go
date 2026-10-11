@@ -22,20 +22,20 @@ func (e *Engine) executePush(op generated.PendingSync) error {
 
 	switch opType {
 	case OpCreateProject:
-		return e.pushJSON(http.MethodPost, "/projects/", op.Payload)
+		return e.pushJSON(http.MethodPost, "/projects", op.Payload)
 	case OpUpdateProject:
-		return e.pushJSON(http.MethodPatch, fmt.Sprintf("/projects/%s/", op.EntityID), op.Payload)
+		return e.pushJSON(http.MethodPatch, fmt.Sprintf("/projects/%s", op.EntityID), op.Payload)
 	case OpDeleteProject:
-		return e.pushDelete(fmt.Sprintf("/projects/%s/", op.EntityID))
+		return e.pushDelete(fmt.Sprintf("/projects/%s", op.EntityID))
 	case OpReorderProject:
 		return e.pushJSON(http.MethodPatch, fmt.Sprintf("/projects/%s/reorder", op.EntityID), op.Payload)
 
 	case OpCreateItem:
 		return e.pushCreatedItem(op.EntityID, op.Payload)
 	case OpUpdateItem:
-		return e.pushJSON(http.MethodPatch, fmt.Sprintf("/project-items/%s/", op.EntityID), op.Payload)
+		return e.pushJSON(http.MethodPatch, fmt.Sprintf("/project-items/%s", op.EntityID), op.Payload)
 	case OpDeleteItem:
-		return e.pushDelete(fmt.Sprintf("/project-items/%s/", op.EntityID))
+		return e.pushDelete(fmt.Sprintf("/project-items/%s", op.EntityID))
 
 	case OpReorderItem:
 		return e.pushJSON(http.MethodPatch, fmt.Sprintf("/project-items/%s/reorder", op.EntityID), op.Payload)
@@ -54,25 +54,25 @@ func (e *Engine) executePush(op generated.PendingSync) error {
 			ItemID string `json:"item_id"`
 		}
 		_ = json.Unmarshal([]byte(op.Payload), &p)
-		return e.pushJSON(http.MethodPost, fmt.Sprintf("/project-items/%s/tasks/", p.ItemID), op.Payload)
+		return e.pushJSON(http.MethodPost, fmt.Sprintf("/project-items/%s/tasks", p.ItemID), op.Payload)
 	case OpUpdateTask:
 		var p struct {
 			ItemID string `json:"item_id"`
 		}
 		_ = json.Unmarshal([]byte(op.Payload), &p)
-		return e.pushJSON(http.MethodPatch, fmt.Sprintf("/project-items/%s/tasks/%s/", p.ItemID, op.EntityID), op.Payload)
+		return e.pushJSON(http.MethodPatch, fmt.Sprintf("/project-items/%s/tasks/%s", p.ItemID, op.EntityID), op.Payload)
 	case OpDeleteTask:
 		var p struct {
 			ItemID string `json:"item_id"`
 		}
 		_ = json.Unmarshal([]byte(op.Payload), &p)
-		return e.pushDelete(fmt.Sprintf("/project-items/%s/tasks/%s/", p.ItemID, op.EntityID))
+		return e.pushDelete(fmt.Sprintf("/project-items/%s/tasks/%s", p.ItemID, op.EntityID))
 	case OpCompleteTask:
 		var p struct {
 			ItemID string `json:"item_id"`
 		}
 		_ = json.Unmarshal([]byte(op.Payload), &p)
-		return e.pushJSON(http.MethodPost, fmt.Sprintf("/project-items/%s/tasks/%s/complete/", p.ItemID, op.EntityID), "")
+		return e.pushJSON(http.MethodPost, fmt.Sprintf("/project-items/%s/tasks/%s/complete", p.ItemID, op.EntityID), "")
 
 	case OpAddDependency:
 		return e.pushJSON(http.MethodPost, fmt.Sprintf("/project-items/%s/dependencies", op.EntityID), op.Payload)
@@ -99,7 +99,7 @@ func (e *Engine) pushCreatedItem(itemID, payload string) error {
 	var created struct {
 		Number *int `json:"number"`
 	}
-	if err := e.pushJSONInto(http.MethodPost, "/project-items/", payload, &created); err != nil {
+	if err := e.pushJSONInto(http.MethodPost, "/project-items", payload, &created); err != nil {
 		return err
 	}
 	if created.Number == nil {
@@ -128,7 +128,7 @@ func (e *Engine) pushJSONInto(method, path string, payload string, out any) erro
 		body = bytes.NewReader([]byte(payload))
 	}
 
-	req, err := http.NewRequestWithContext(e.ctx, method, e.apiURL+path, body)
+	req, err := http.NewRequestWithContext(e.ctx, method, e.base+path, body)
 	if err != nil {
 		return err
 	}
@@ -143,7 +143,7 @@ func (e *Engine) pushJSONInto(method, path string, payload string, out any) erro
 	defer func() { _ = resp.Body.Close() }()
 	responseBody, _ := io.ReadAll(resp.Body)
 
-	if err := e.classifyResponse(resp.StatusCode); err != nil {
+	if err := classifyResponse(resp.StatusCode, responseBody); err != nil {
 		return err
 	}
 	if out != nil && resp.StatusCode < 400 {
@@ -154,7 +154,7 @@ func (e *Engine) pushJSONInto(method, path string, payload string, out any) erro
 
 // pushDelete sends a DELETE request.
 func (e *Engine) pushDelete(path string) error {
-	req, err := http.NewRequestWithContext(e.ctx, http.MethodDelete, e.apiURL+path, nil)
+	req, err := http.NewRequestWithContext(e.ctx, http.MethodDelete, e.base+path, nil)
 	if err != nil {
 		return err
 	}
@@ -164,23 +164,36 @@ func (e *Engine) pushDelete(path string) error {
 		return friendlyNetErr(err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	_, _ = io.ReadAll(resp.Body)
+	responseBody, _ := io.ReadAll(resp.Body)
 
-	return e.classifyResponse(resp.StatusCode)
+	return classifyResponse(resp.StatusCode, responseBody)
 }
 
 // classifyResponse decides whether a status code means success, drop, or retry.
-func (e *Engine) classifyResponse(status int) error {
+func classifyResponse(status int, body []byte) error {
 	switch {
 	case status < 400:
 		return nil // success
 	case status == http.StatusNotFound, status == http.StatusConflict:
 		return nil // drop: server wins, next pull reconciles
 	case status >= 500:
-		return fmt.Errorf("server error: %d", status)
+		return refusal("server error", status, body)
 	default:
-		return fmt.Errorf("push rejected: %d", status)
+		return refusal("push rejected", status, body)
 	}
+}
+
+// refusal names the status and the reason the API gave in its error body's
+// `message`, or the body as it arrived when it carries none.
+func refusal(prefix string, status int, body []byte) error {
+	reason := strings.TrimSpace(string(body))
+	var answer struct {
+		Message string `json:"message"`
+	}
+	if json.Unmarshal(body, &answer) == nil && answer.Message != "" {
+		reason = answer.Message
+	}
+	return fmt.Errorf("%s (%d %s): %s", prefix, status, http.StatusText(status), reason)
 }
 
 // friendlyNetErr translates raw network errors into user-readable messages.

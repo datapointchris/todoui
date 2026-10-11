@@ -21,9 +21,9 @@ func apiWith(t *testing.T, projects []model.Project, items []model.ProjectItemDe
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
-		case "/projects/":
+		case "/api/v1/projects":
 			_ = json.NewEncoder(w).Encode(projects)
-		case "/project-items/":
+		case "/api/v1/project-items":
 			_ = json.NewEncoder(w).Encode(items)
 		default:
 			w.WriteHeader(http.StatusOK)

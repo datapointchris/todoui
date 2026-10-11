@@ -194,7 +194,7 @@ func TestAPushRefusedForAnExpiredTokenIsResentWithItsBody(t *testing.T) {
 
 	var posts []seenRequest
 	for _, r := range api.requests() {
-		if r.Method == http.MethodPost && r.Path == "/projects/" {
+		if r.Method == http.MethodPost && r.Path == "/api/v1/projects" {
 			posts = append(posts, r)
 		}
 	}

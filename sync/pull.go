@@ -85,24 +85,24 @@ func (e *Engine) pull(ctx context.Context, opts PullOptions) error {
 	// Fetch all data from the server.
 	//
 	// status=all because the sweep below deletes any local project the server
-	// did not return, cascading through to its memberships. Once /projects/
+	// did not return, cascading through to its memberships. Once /projects
 	// defaults to active-only, an omitted-because-completed project reads as
 	// deleted-upstream and the row goes. Terminal projects are filtered for
 	// display locally instead. The param is ignored by an API predating it,
 	// which is what lets this ship ahead of the server change.
-	projects, err := fetchJSON[[]model.Project](ctx, e.client, e.apiURL, "/projects/?status=all")
+	projects, err := fetchJSON[[]model.Project](ctx, e.client, e.base, "/projects?status=all")
 	if err != nil {
 		return fmt.Errorf("pulling projects: %w", err)
 	}
 
 	// status=all for the same reason as projects, and this one is not
-	// hypothetical: /project-items/ already defaults to open, so every completed
+	// hypothetical: /project-items already defaults to open, so every completed
 	// item was absent from the response and the sweep below deleted it. Measured
 	// 2026-08-14 against production — the response fell from 277 rows to 239 when
 	// the default changed, and the local store held 229 items with none completed.
 	// Only completed-and-not-archived was lost, because the old default excluded
 	// archived rows too.
-	items, err := fetchJSON[[]model.ProjectItemDetail](ctx, e.client, e.apiURL, "/project-items/?status=all")
+	items, err := fetchJSON[[]model.ProjectItemDetail](ctx, e.client, e.base, "/project-items?status=all")
 	if err != nil {
 		return fmt.Errorf("pulling items: %w", err)
 	}
@@ -126,12 +126,12 @@ func (e *Engine) pull(ctx context.Context, opts PullOptions) error {
 		// than trusting the zero value matters: treating absent as empty would
 		// erase every task and dependency locally on the first pull against an
 		// older API, so deploy order between this and ichrisbirch cannot lose data.
-		detail, err := fetchJSON[*model.ProjectItemDetail](ctx, e.client, e.apiURL, fmt.Sprintf("/project-items/%s/", item.ID))
+		detail, err := fetchJSON[*model.ProjectItemDetail](ctx, e.client, e.base, fmt.Sprintf("/project-items/%s", item.ID))
 		if err != nil {
 			return fmt.Errorf("pulling item %s detail: %w", item.ID, err)
 		}
 
-		tasks, err := fetchJSON[[]model.ProjectItemTask](ctx, e.client, e.apiURL, fmt.Sprintf("/project-items/%s/tasks/", item.ID))
+		tasks, err := fetchJSON[[]model.ProjectItemTask](ctx, e.client, e.base, fmt.Sprintf("/project-items/%s/tasks", item.ID))
 		if err != nil {
 			return fmt.Errorf("pulling item %s tasks: %w", item.ID, err)
 		}
@@ -410,7 +410,7 @@ func fetchJSON[T any](ctx context.Context, client *http.Client, baseURL, path st
 
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(resp.Body)
-		return zero, fmt.Errorf("API error (%d): %s", resp.StatusCode, string(body))
+		return zero, refusal("API error", resp.StatusCode, body)
 	}
 
 	var result T

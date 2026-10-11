@@ -175,7 +175,7 @@ Config file: `~/.config/todoui/config.toml`
 
 [sync]
 enabled = false
-# api_url = "https://example.com/api"
+# api_url = "https://example.com"  # the server's host; todoui adds /api/v1
 # token_command = "<cli> auth token"  # prints a bearer token for api_url
 # interval = "2m"  # longest todoui goes without reconciling; floored at 15s
 ```
@@ -202,7 +202,7 @@ Environment variable overrides:
 | -------- | ------- |
 | `TODOUI_DB` | SQLite database path |
 | `TODOUI_SYNC` | Enable sync (`true`/`false`) |
-| `TODOUI_SYNC_URL` | API URL for sync |
+| `TODOUI_SYNC_URL` | The API server's host, for sync |
 | `TODOUI_SYNC_TOKEN_COMMAND` | Command printing a bearer token for sync |
 | `TODOUI_SYNC_INTERVAL` | Reconcile interval (e.g. `30s`, `5m`) |
 | `TODOUI_REPOS_REGISTRY` | Repo registry path |

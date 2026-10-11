@@ -295,15 +295,15 @@ func TestSyncTickReconcilesWithTheServer(t *testing.T) {
 		mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
-		case "/projects/":
+		case "/api/v1/projects":
 			_ = json.NewEncoder(w).Encode([]model.Project{
 				{ID: "proj-1", Name: "Remote", Position: 0, CreatedAt: time.Now()},
 			})
-		case "/project-items/":
+		case "/api/v1/project-items":
 			_ = json.NewEncoder(w).Encode([]model.ProjectItem{
 				{ID: "item-1", Title: "Added Elsewhere", CreatedAt: time.Now(), UpdatedAt: time.Now()},
 			})
-		case "/project-items/item-1/":
+		case "/api/v1/project-items/item-1":
 			_ = json.NewEncoder(w).Encode(model.ProjectItemDetail{
 				ProjectItem: model.ProjectItem{ID: "item-1", Title: "Added Elsewhere", CreatedAt: time.Now(), UpdatedAt: time.Now()},
 				Projects:    []model.Project{{ID: "proj-1", Name: "Remote"}},

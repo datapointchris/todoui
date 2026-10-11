@@ -15,12 +15,16 @@ import (
 	"github.com/datapointchris/todoui/db/generated"
 )
 
+// apiPrefix is the API version every path and decoder here is written against.
+const apiPrefix = "/api/v1"
+
 // Engine orchestrates push and pull synchronization with the remote API.
 type Engine struct {
 	db     *sql.DB
 	q      *generated.Queries
 	client *http.Client
 	apiURL string
+	base   string
 
 	mu        gosync.Mutex
 	status    SyncStatus
@@ -65,6 +69,7 @@ func New(db *sql.DB, apiURL, tokenCommand string, opts ...Option) *Engine {
 		q:             generated.New(db),
 		client:        client,
 		apiURL:        apiURL,
+		base:          strings.TrimRight(apiURL, "/") + apiPrefix,
 		pushCh:        make(chan struct{}, 1),
 		retryInterval: defaultPushRetryInterval,
 		ctx:           ctx,
@@ -77,7 +82,7 @@ func New(db *sql.DB, apiURL, tokenCommand string, opts ...Option) *Engine {
 	return e
 }
 
-// APIURL returns the remote API base URL this engine syncs with.
+// APIURL returns the configured address of the server this engine syncs with.
 func (e *Engine) APIURL() string { return e.apiURL }
 
 // Start launches the background push loop goroutine.

@@ -250,7 +250,7 @@ func TestSyncBackend_UndoAfterPushDeletesRemotely(t *testing.T) {
 	}
 	time.Sleep(300 * time.Millisecond)
 
-	want := "DELETE /project-items/" + item.ID + "/"
+	want := "DELETE /api/v1/project-items/" + item.ID
 	calls := recorder.snapshot()
 	for _, call := range calls {
 		if call == want {
@@ -294,20 +294,20 @@ func TestPull_Reconciles(t *testing.T) {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
-		case "/projects/":
+		case "/api/v1/projects":
 			_ = json.NewEncoder(w).Encode([]model.Project{
 				{ID: "proj-1", Name: "Pulled", Position: 0, CreatedAt: time.Now()},
 			})
-		case "/project-items/":
+		case "/api/v1/project-items":
 			_ = json.NewEncoder(w).Encode([]model.ProjectItem{
 				{ID: "item-1", Title: "Pulled Item", CreatedAt: time.Now(), UpdatedAt: time.Now()},
 			})
-		case "/project-items/item-1/":
+		case "/api/v1/project-items/item-1":
 			_ = json.NewEncoder(w).Encode(model.ProjectItemDetail{
 				ProjectItem: model.ProjectItem{ID: "item-1", Title: "Pulled Item", CreatedAt: time.Now(), UpdatedAt: time.Now()},
 				Projects:    []model.Project{{ID: "proj-1", Name: "Pulled"}},
 			})
-		case "/project-items/item-1/tasks/":
+		case "/api/v1/project-items/item-1/tasks":
 			_ = json.NewEncoder(w).Encode([]model.ProjectItemTask{
 				{ID: "task-1", ItemID: "item-1", Title: "Pulled Task", CreatedAt: time.Now()},
 			})
@@ -396,9 +396,9 @@ func TestSyncBackend_UndoOfPushedDeleteRecreatesRemotely(t *testing.T) {
 	var sawItemCreate, sawTaskCreate bool
 	for _, call := range calls {
 		switch call {
-		case "POST /project-items/":
+		case "POST /api/v1/project-items":
 			sawItemCreate = true
-		case "POST /project-items/" + item.ID + "/tasks/":
+		case "POST /api/v1/project-items/" + item.ID + "/tasks":
 			sawTaskCreate = true
 		}
 	}
@@ -437,8 +437,8 @@ func TestSyncBackend_UndoOfMembershipDoesNotDeleteTheItem(t *testing.T) {
 	time.Sleep(400 * time.Millisecond)
 
 	calls := recorder.snapshot()[beforeUndo:]
-	wantRemove := "DELETE /project-items/" + item.ID + "/projects/" + homelab.ID
-	itemDelete := "DELETE /project-items/" + item.ID + "/"
+	wantRemove := "DELETE /api/v1/project-items/" + item.ID + "/projects/" + homelab.ID
+	itemDelete := "DELETE /api/v1/project-items/" + item.ID
 
 	var sawRemove bool
 	for _, call := range calls {
@@ -478,7 +478,7 @@ func TestSyncBackend_UndoOfTaskCompletionPushesTheReversal(t *testing.T) {
 	time.Sleep(400 * time.Millisecond)
 
 	calls := recorder.snapshot()[beforeUndo:]
-	want := "PATCH /project-items/" + item.ID + "/tasks/" + task.ID + "/"
+	want := "PATCH /api/v1/project-items/" + item.ID + "/tasks/" + task.ID
 	for _, call := range calls {
 		if call == want {
 			return
@@ -531,15 +531,15 @@ func TestPull_KeepsWorkDoneWhileItWasRunning(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
-		case "/projects/":
+		case "/api/v1/projects":
 			_ = json.NewEncoder(w).Encode([]model.Project{
 				{ID: project.ID, Name: "Server", Position: 0, CreatedAt: time.Now()},
 			})
-		case "/project-items/":
+		case "/api/v1/project-items":
 			_ = json.NewEncoder(w).Encode([]model.ProjectItem{
 				{ID: "item-1", Title: "Server Item", CreatedAt: time.Now(), UpdatedAt: time.Now()},
 			})
-		case "/project-items/item-1/":
+		case "/api/v1/project-items/item-1":
 			// Mid-pull: the user adds an item the server response cannot know about.
 			once.Do(func() {
 				created, err := sb.CreateItem(model.CreateProjectItem{
@@ -661,9 +661,9 @@ func pullFixture(embedded bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
-		case "/projects/":
+		case "/api/v1/projects":
 			_ = json.NewEncoder(w).Encode([]model.Project{{ID: "proj-1", Name: "Remote", Position: 0, CreatedAt: now}})
-		case "/project-items/":
+		case "/api/v1/project-items":
 			blocker := base("item-1", "Blocker")
 			blocked := base("item-2", "Blocked")
 			if embedded {
@@ -673,13 +673,13 @@ func pullFixture(embedded bool) http.HandlerFunc {
 				blocked["tasks"] = []map[string]any{task}
 			}
 			_ = json.NewEncoder(w).Encode([]map[string]any{blocker, blocked})
-		case "/project-items/item-1/":
+		case "/api/v1/project-items/item-1":
 			_ = json.NewEncoder(w).Encode(base("item-1", "Blocker"))
-		case "/project-items/item-2/":
+		case "/api/v1/project-items/item-2":
 			detail := base("item-2", "Blocked")
 			detail["dependency_ids"] = []string{"item-1"}
 			_ = json.NewEncoder(w).Encode(detail)
-		case "/project-items/item-2/tasks/":
+		case "/api/v1/project-items/item-2/tasks":
 			_ = json.NewEncoder(w).Encode([]map[string]any{task})
 		default:
 			_ = json.NewEncoder(w).Encode([]map[string]any{})
@@ -776,7 +776,7 @@ func pendingAfterPush(engine *sync.Engine) int {
 // for up to a full sync interval after it was made.
 func TestPush_RecordsTheNumberTheServerAssigned(t *testing.T) {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && r.URL.Path == "/project-items/" {
+		if r.Method == http.MethodPost && r.URL.Path == "/api/v1/project-items" {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusCreated)
 			_, _ = w.Write([]byte(`{"number": 231}`))
@@ -816,7 +816,7 @@ func TestPush_RecordsTheNumberTheServerAssigned(t *testing.T) {
 // decodes. Failing here would re-queue it and file the item twice.
 func TestPush_AnUndecodableCreateResponseIsNotAFailure(t *testing.T) {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && r.URL.Path == "/project-items/" {
+		if r.Method == http.MethodPost && r.URL.Path == "/api/v1/project-items" {
 			w.WriteHeader(http.StatusCreated)
 			_, _ = w.Write([]byte("not json"))
 			return
@@ -852,7 +852,7 @@ func TestPush_AQueuedCreateIsPushedExactlyOnce(t *testing.T) {
 	var mu goSync.Mutex
 	creates := 0
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && r.URL.Path == "/project-items/" {
+		if r.Method == http.MethodPost && r.URL.Path == "/api/v1/project-items" {
 			mu.Lock()
 			creates++
 			mu.Unlock()
@@ -881,7 +881,7 @@ func TestPush_AQueuedCreateIsPushedExactlyOnce(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	if creates != 1 {
-		t.Errorf("POST /project-items/ called %d times, want exactly 1", creates)
+		t.Errorf("POST /api/v1/project-items called %d times, want exactly 1", creates)
 	}
 }
 
@@ -896,11 +896,11 @@ func TestPull_DropsLinksToEntitiesTheServerDidNotSend(t *testing.T) {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
-		case "/projects/":
+		case "/api/v1/projects":
 			_ = json.NewEncoder(w).Encode([]model.Project{
 				{ID: "proj-1", Name: "Real", Position: 0, CreatedAt: time.Now()},
 			})
-		case "/project-items/":
+		case "/api/v1/project-items":
 			_ = json.NewEncoder(w).Encode([]model.ProjectItemDetail{{
 				ProjectItem: model.ProjectItem{ID: "item-1", Title: "Kept", CreatedAt: time.Now(), UpdatedAt: time.Now()},
 				Projects: []model.Project{
@@ -967,7 +967,7 @@ func TestPull_SurvivesItemsSwappingNumbers(t *testing.T) {
 	numbers := map[string]int{"item-a": 1, "item-b": 2}
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		if r.URL.Path != "/project-items/" {
+		if r.URL.Path != "/api/v1/project-items" {
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte("[]"))
 			return
@@ -1034,10 +1034,10 @@ func TestPull_RequestsEveryStatusFromBothListEndpoints(t *testing.T) {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
-		case "/projects/":
+		case "/api/v1/projects":
 			record(r)
 			_ = json.NewEncoder(w).Encode([]model.Project{})
-		case "/project-items/":
+		case "/api/v1/project-items":
 			record(r)
 			_ = json.NewEncoder(w).Encode([]model.ProjectItemDetail{})
 		default:
@@ -1062,7 +1062,7 @@ func TestPull_RequestsEveryStatusFromBothListEndpoints(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	for _, path := range []string{"/projects/", "/project-items/"} {
+	for _, path := range []string{"/api/v1/projects", "/api/v1/project-items"} {
 		if asked[path] != "all" {
 			t.Errorf("%s fetched with status=%q, want all — the sweep deletes whatever the server omits", path, asked[path])
 		}

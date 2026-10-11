@@ -13,9 +13,9 @@
 # Enable background sync with ichrisbirch API
 # Env: TODOUI_SYNC
 enabled = false
-# API URL for sync (required when enabled)
+# The API server's host, required when enabled. todoui adds /api/v1 itself.
 # Env: TODOUI_SYNC_URL
-# api_url = "https://example.com/api"
+# api_url = "https://example.com"
 # Command printing a bearer token for api_url, split on spaces and run without a
 # shell. Unset sends no token. A URL from TODOUI_SYNC_URL takes its command from
 # TODOUI_SYNC_TOKEN_COMMAND alone, never from this file.
