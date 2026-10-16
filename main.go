@@ -68,8 +68,16 @@ func rootCmd() *cobra.Command {
 	var cfg *config.Config
 
 	root := &cobra.Command{
-		Use:     "todoui",
-		Short:   "Personal project organization",
+		Use:   "todoui",
+		Short: "Personal project organization",
+		Long: "Personal project organization.\n\n" +
+			"Run `todoui` to open the TUI, where everything happens. With sync enabled it\n" +
+			"pushes each edit as you make it and pulls in the background on every interval,\n" +
+			"so it never needs a sync by hand.\n\n" +
+			"Reach for `todoui sync` when you want the API's state now rather than at the\n" +
+			"next interval, or need --adopt or --force: it pushes anything queued, then pulls.",
+		Example: "  todoui         open the TUI, syncing in the background when sync is enabled\n" +
+			"  todoui sync    push queued edits and pull now, without waiting for the interval",
 		Version: cli.Version(),
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
 			if !needsBackend(cmd) {
