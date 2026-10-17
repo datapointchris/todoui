@@ -87,6 +87,41 @@ func TestAPositionalOnALeafIsAUsageError(t *testing.T) {
 	}
 }
 
+// The root screen is where a reader decides between the TUI's background sync
+// and `todoui sync`, and an agent lifts the first example verbatim, so the most
+// common invocation leads the examples spelled exactly as typed.
+func TestRootHelpSaysWhenToReachForSync(t *testing.T) {
+	root := testRoot(t)
+	var out strings.Builder
+	root.SetOut(&out)
+	root.SetErr(io.Discard)
+	root.SetArgs([]string{"--help"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("todoui --help: %v", err)
+	}
+	help := out.String()
+
+	for _, want := range []string{
+		"Run `todoui` to open the TUI",
+		"pulls in the background",
+		"Reach for `todoui sync` when you want the API's state now",
+	} {
+		if !strings.Contains(help, want) {
+			t.Errorf("root help lacks %q:\n%s", want, help)
+		}
+	}
+
+	_, examples, found := strings.Cut(help, "Examples:\n")
+	if !found {
+		t.Fatalf("root help has no examples block:\n%s", help)
+	}
+	first, _, _ := strings.Cut(examples, "\n")
+	if fields := strings.Fields(first); len(fields) < 2 || fields[0] != "todoui" || fields[1] != "open" {
+		t.Errorf("first example is %q, want bare `todoui` opening the TUI", first)
+	}
+}
+
 func TestNeedsBackendOpensTheDatabaseForTheTUIAndSync(t *testing.T) {
 	root := testRoot(t)
 
