@@ -8,10 +8,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// NoArgs refuses a positional on a command that takes none, marked as a usage
-// error so it exits 2. Cobra's own NoArgs returns an unmarked error, which
-// exits 1 as if the command had run and failed, and calls the word an unknown
-// command, which names a subcommand a leaf never had.
+// NoArgs refuses a positional on a command that takes none. Cobra's own NoArgs
+// calls the word an unknown command, which names a subcommand a leaf never had.
+// The refusal is marked as a usage error, so goclikit.Execute keeps its wording
+// and the caller exits 2.
 func NoArgs(cmd *cobra.Command, args []string) error {
 	if len(args) == 0 {
 		return nil
