@@ -95,13 +95,9 @@ func (e *Engine) pull(ctx context.Context, opts PullOptions) error {
 		return fmt.Errorf("pulling projects: %w", err)
 	}
 
-	// status=all for the same reason as projects, and this one is not
-	// hypothetical: /project-items already defaults to open, so every completed
-	// item was absent from the response and the sweep below deleted it. Measured
-	// 2026-08-14 against production — the response fell from 277 rows to 239 when
-	// the default changed, and the local store held 229 items with none completed.
-	// Only completed-and-not-archived was lost, because the old default excluded
-	// archived rows too.
+	// status=all for the same reason as projects. /project-items defaults to
+	// open items, so without it every completed item is absent from the response
+	// and the sweep below deletes it.
 	items, err := fetchJSON[[]model.ProjectItemDetail](ctx, e.client, e.base, "/project-items?status=all")
 	if err != nil {
 		return fmt.Errorf("pulling items: %w", err)
@@ -293,8 +289,7 @@ func (e *Engine) pull(ctx context.Context, opts PullOptions) error {
 			// nothing makes them agree. The link is dropped rather than
 			// inserted: it has no project to point at, and failing the pull over
 			// it would take the whole reconcile down with it, which is the
-			// opposite of local-first. Before foreign keys were enforced this
-			// wrote an orphan row instead, and 46 of them accumulated.
+			// opposite of local-first.
 			if !projectExists[proj.ID] || !itemExists[extra.detail.ID] {
 				continue
 			}

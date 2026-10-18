@@ -10,11 +10,10 @@ import "time"
 // does not.
 const (
 	StatusActive = "active"
-	// StatusCompleted and not "done": the API stores this value, an item stores a
-	// `completed` boolean, and one concept spelled two ways across a resource and
-	// its own children is what the rename on 2026-08-12 removed. todoui syncs
-	// against that API, so the word has to be the same one or a push writes a
-	// value its FK rejects.
+	// StatusCompleted and not "done". The API stores this value behind a foreign
+	// key, so a push carrying any other word is rejected. It also matches the
+	// `completed` boolean an item carries, so a project and its own items spell
+	// one concept one way.
 	StatusCompleted = "completed"
 	StatusDropped   = "dropped"
 

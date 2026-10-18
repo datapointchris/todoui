@@ -34,26 +34,18 @@ type Registry struct {
 // own directories, which is what keeps a generic tool generic. The two above it
 // are how a machine says the file is maintained elsewhere.
 //
-// It used to be the data directory alone, and this comment said "point it at a
-// shared registry with a symlink". That instruction is what produced one: a
-// hand-made link from todoui's data directory to the real file, on every
-// machine, declared nowhere and reported by nothing. Worse here than most,
-// because the link pointed at another link — so a single clobbered symlink two
-// hops away forked the registry silently, with both copies still parsing. The
-// config key is that arrangement written down instead.
+// A registry kept elsewhere is declared in the config file, because the two
+// other ways to point at it fail silently:
 //
-// What first replaced the symlink was $REPOS_JSON, shared between tools and
-// prefixed with none of their names. It came out because it is exported from
-// ~/.env, and a process that sources no profile never sees it — run the way a
-// systemd timer runs it, a reader of this registry resolved a data directory
-// that does not exist, reported the miss, and exited 0. So the rung was empty
-// in exactly the unattended runs it existed to serve, while the config file is
-// already the machine layer and reaches every process. A tool reads no variable
-// that is not prefixed with its own name; that is what stops one fleet's
-// vocabulary being compiled into a generic tool.
+//   - A symlink from the data directory is declared nowhere and reported by
+//     nothing. Once a link is clobbered the registry forks, and both copies
+//     still parse.
+//   - A variable exported from a shell profile never reaches a process that
+//     sources no profile, such as a systemd timer. The rung would be empty in
+//     exactly the unattended runs it exists to serve.
 //
-// See standards/data.md § "A shared file is named in config; only the tool's
-// own default is compiled in".
+// The config file reaches every process. The one variable read carries
+// todoui's own prefix, so no other tool's vocabulary is compiled into it.
 func DefaultPath() string {
 	if p := os.Getenv("TODOUI_REPOS_REGISTRY"); p != "" {
 		return config.ExpandTilde(p)

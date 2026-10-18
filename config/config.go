@@ -76,11 +76,10 @@ func Load() (*Config, error) {
 	// field below, so the only keys this can reject are ones the file supplied and
 	// the struct has no home for.
 	//
-	// The two are the same answer without it, and that is how a rename hides.
-	// Measured 2026-08-13 across this fleet: repos_file became repos_registry, and
-	// every reader that merely dropped the old spelling reported a machine that had
-	// declared nothing — indistinguishable from one whose registry is genuinely
-	// empty.
+	// Without it a misspelled key and an unset one are the same answer. A config
+	// naming its registry under a key todoui does not read would fall back to the
+	// data directory, find no registry there, and lift the ban with nothing
+	// reporting why.
 	var cfg Config
 	if err := v.Unmarshal(&cfg, viper.DecodeHook(mapstructure.StringToTimeDurationHookFunc()), func(dc *mapstructure.DecoderConfig) {
 		dc.ErrorUnused = true
@@ -153,7 +152,7 @@ func ConfiguredReposRegistry() string {
 	return ExpandTilde(cfg.ReposRegistry)
 }
 
-// expandTilde resolves a leading ~, which a hand-edited config will carry. Left
+// ExpandTilde resolves a leading ~, which a hand-edited config will carry. Left
 // literal it names a directory that does not exist, and a registry that is not
 // there is not an error here — it reads as an empty registry rather than a bad
 // path, so the mistake surfaces as a project-name ban that bans nothing.

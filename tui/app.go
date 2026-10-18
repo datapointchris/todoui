@@ -3311,9 +3311,9 @@ func (m *App) renderProjectPane(width, height int) string {
 		end = totalEntries
 	}
 
-	// Only the name is truncated. Slicing the finished line by byte, which is
-	// what this did, cuts a multi-byte rune in half as soon as a name is long
-	// enough to reach the ● or the count glyphs.
+	// Only the name is truncated. Slicing the finished line by byte would cut a
+	// multi-byte rune in half as soon as a name is long enough to reach the ● or
+	// the count glyphs.
 	row := func(prefix, name string, open, done int, style lipgloss.Style) string {
 		avail := width - lipgloss.Width(prefix) - style.GetPaddingLeft() - projectCountsWidth(open, done) - 1
 		if avail < 1 {
@@ -3457,12 +3457,11 @@ func (m *App) renderItemPane(width, height int) string {
 	return strings.Join(lines, "\n")
 }
 
-// paneLayout is where every row of the item pane lands in line space. The pane
-// used to scroll by row index while rendering by line, so the two disagreed the
-// moment a row was worth more than one line — a group header, a blocker, a
-// wrapped note: the scroll offset believed the cursor was on screen while the
-// render ran out of lines before reaching it, and the pane stopped following
-// the cursor at all.
+// paneLayout is where every row of the item pane lands in line space. Scrolling
+// counts lines rather than rows because a row can be worth more than one line:
+// a group header, a blocker, a wrapped note. A scroll offset counted in rows
+// believes the cursor is on screen while the render runs out of lines before
+// reaching it, and the pane stops following the cursor.
 type paneLayout struct {
 	// blockStart is the row's first line, counting any blank separator above a
 	// group header. anchor is the first line that has to stay on screen, which

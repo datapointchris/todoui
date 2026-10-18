@@ -31,7 +31,7 @@ type Row struct {
 const Unlimited = -1
 
 // Tree indexes dependency edges both ways and flattens them into drawable rows.
-// It is the shape `icb projects items tree` draws over the API; the two are
+// It is the shape the API server's own CLI draws for the same tree; the two are
 // kept identical so one dataset reads the same through either front door.
 type Tree struct {
 	nodes map[string]Node
