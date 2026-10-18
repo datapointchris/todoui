@@ -116,10 +116,8 @@ func pressKey(t *testing.T, app *App, key string) {
 	send(t, app, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)})
 }
 
-// The add-task prompt used to render as a trailer line after the item's
-// last row, which syncScroll never reserved room for — on a short window
-// the input was dropped while still swallowing every keystroke. It is an
-// overlay now, so it must survive a window too short to show the list.
+// The add-task prompt is an overlay, so it shows in a window too short for the
+// list. An input that is not drawn still swallows every keystroke.
 func TestAddTaskPromptVisibleInShortWindow(t *testing.T) {
 	app := newTestApp(t, 80, 6, "first", "second", "third")
 

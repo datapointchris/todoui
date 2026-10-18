@@ -419,12 +419,12 @@ func TestSyncBackend_UndoOfMembershipDoesNotDeleteTheItem(t *testing.T) {
 	sb, _ := setupSync(t, recorder.handler())
 
 	work, _ := sb.CreateProject(model.CreateProject{Name: "work"})
-	homelab, _ := sb.CreateProject(model.CreateProject{Name: "homelab"})
+	personal, _ := sb.CreateProject(model.CreateProject{Name: "personal"})
 	item, _ := sb.CreateItem(model.CreateProjectItem{
 		Title:      "shared",
 		ProjectIDs: []string{work.ID},
 	})
-	if err := sb.AddToProject(item.ID, homelab.ID); err != nil {
+	if err := sb.AddToProject(item.ID, personal.ID); err != nil {
 		t.Fatalf("AddToProject: %v", err)
 	}
 
@@ -437,7 +437,7 @@ func TestSyncBackend_UndoOfMembershipDoesNotDeleteTheItem(t *testing.T) {
 	time.Sleep(400 * time.Millisecond)
 
 	calls := recorder.snapshot()[beforeUndo:]
-	wantRemove := "DELETE /api/v1/project-items/" + item.ID + "/projects/" + homelab.ID
+	wantRemove := "DELETE /api/v1/project-items/" + item.ID + "/projects/" + personal.ID
 	itemDelete := "DELETE /api/v1/project-items/" + item.ID
 
 	var sawRemove bool
@@ -886,12 +886,10 @@ func TestPush_AQueuedCreateIsPushedExactlyOnce(t *testing.T) {
 }
 
 // The server assembles /projects/ and each item's embedded Projects list
-// separately, and nothing makes the two agree — the real API returned items
-// belonging to projects the projects endpoint omitted. With foreign keys off
-// that wrote an orphan membership, and 46 accumulated until the projects
-// migration refused to run past them. With foreign keys on it would fail the
-// pull outright, which would be worse: one inconsistent link would cost every
-// other change in the reconcile. The link is dropped and the pull carries on.
+// separately, and nothing makes the two agree, so an item can name a project
+// the projects endpoint omitted. The pull drops that link and carries on.
+// Inserting it would fail the pull on the foreign key, and one inconsistent
+// link would cost every other change in the reconcile.
 func TestPull_DropsLinksToEntitiesTheServerDidNotSend(t *testing.T) {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -1018,10 +1016,8 @@ func TestPull_SurvivesItemsSwappingNumbers(t *testing.T) {
 
 // Both list fetches ask for every status, because the sweep in Pull deletes any
 // local row the server did not return. An unqualified fetch is therefore not a
-// narrower read — it is a delete. /project-items/ defaults to open, so the
-// unqualified version emptied the local store of finished work: measured
-// 2026-08-14 against production, the response fell from 277 rows to 239 when the
-// default changed, and the local store held 229 items with none completed.
+// narrower read — it is a delete. /project-items/ defaults to open items, so an
+// unqualified fetch would delete every completed item here.
 func TestPull_RequestsEveryStatusFromBothListEndpoints(t *testing.T) {
 	var mu goSync.Mutex
 	asked := map[string]string{}

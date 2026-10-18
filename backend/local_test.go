@@ -373,8 +373,8 @@ func TestUndoCoversProjectCreates(t *testing.T) {
 	unrelated := mustCreateItem(t, b, model.CreateProjectItem{Title: "unrelated", ProjectIDs: []string{older.ID}})
 	newer := mustCreateProject(t, b, "newer")
 
-	// Project creates used to go unlogged, so undo skipped past this one and
-	// silently reversed the item create before it.
+	// The project create is the latest change, so undo reverses it and leaves
+	// the item create before it alone.
 	result, err := b.Undo()
 	if err != nil {
 		t.Fatalf("undoing: %v", err)
@@ -625,7 +625,7 @@ func TestItemRepoRoundTripAndClear(t *testing.T) {
 	b := newTestBackend(t)
 	p := mustCreateProject(t, b, "tools")
 
-	repo := "forge"
+	repo := "todoui"
 	item, err := b.CreateItem(model.CreateProjectItem{
 		Title:      "fix the brief collision",
 		Repo:       &repo,
@@ -634,15 +634,15 @@ func TestItemRepoRoundTripAndClear(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating item: %v", err)
 	}
-	if item.Repo == nil || *item.Repo != "forge" {
-		t.Fatalf("expected repo 'forge', got %v", item.Repo)
+	if item.Repo == nil || *item.Repo != "todoui" {
+		t.Fatalf("expected repo 'todoui', got %v", item.Repo)
 	}
 
 	fetched, err := b.GetItem(item.ID)
 	if err != nil {
 		t.Fatalf("getting item: %v", err)
 	}
-	if fetched.Repo == nil || *fetched.Repo != "forge" {
+	if fetched.Repo == nil || *fetched.Repo != "todoui" {
 		t.Errorf("repo did not survive a read: %v", fetched.Repo)
 	}
 
@@ -652,7 +652,7 @@ func TestItemRepoRoundTripAndClear(t *testing.T) {
 		t.Fatalf("updating title: %v", err)
 	}
 	fetched, _ = b.GetItem(item.ID)
-	if fetched.Repo == nil || *fetched.Repo != "forge" {
+	if fetched.Repo == nil || *fetched.Repo != "todoui" {
 		t.Errorf("repo lost on unrelated update: %v", fetched.Repo)
 	}
 
@@ -686,10 +686,10 @@ func TestUndoRestoresDeletedItemMemberships(t *testing.T) {
 	b := newTestBackend(t)
 
 	work := mustCreateProject(t, b, "work")
-	homelab := mustCreateProject(t, b, "homelab")
+	personal := mustCreateProject(t, b, "personal")
 	item := mustCreateItem(t, b, model.CreateProjectItem{
 		Title:      "doomed",
-		ProjectIDs: []string{work.ID, homelab.ID},
+		ProjectIDs: []string{work.ID, personal.ID},
 	})
 
 	if err := b.DeleteItem(item.ID); err != nil {
@@ -868,8 +868,8 @@ func TestUndoAcceptsPreSnapshotDeleteEntries(t *testing.T) {
 	}
 }
 
-// Each of these mutations used to write nothing to the undo log, so pressing
-// undo afterwards reached past it and reversed an older, unrelated change.
+// Each mutation below writes to the undo log. A mutation that wrote nothing
+// would let undo reach past it and reverse an older, unrelated change.
 
 func TestUndoCoversTaskCreate(t *testing.T) {
 	b := newTestBackend(t)
@@ -958,10 +958,10 @@ func TestUndoCoversTaskDelete(t *testing.T) {
 func TestUndoCoversMembershipAdd(t *testing.T) {
 	b := newTestBackend(t)
 	work := mustCreateProject(t, b, "work")
-	homelab := mustCreateProject(t, b, "homelab")
+	personal := mustCreateProject(t, b, "personal")
 	item := mustCreateItem(t, b, model.CreateProjectItem{Title: "item", ProjectIDs: []string{work.ID}})
 
-	if err := b.AddToProject(item.ID, homelab.ID); err != nil {
+	if err := b.AddToProject(item.ID, personal.ID); err != nil {
 		t.Fatalf("adding to project: %v", err)
 	}
 	if _, err := b.Undo(); err != nil {
@@ -980,13 +980,13 @@ func TestUndoCoversMembershipAdd(t *testing.T) {
 func TestUndoCoversMembershipRemove(t *testing.T) {
 	b := newTestBackend(t)
 	work := mustCreateProject(t, b, "work")
-	homelab := mustCreateProject(t, b, "homelab")
+	personal := mustCreateProject(t, b, "personal")
 	item := mustCreateItem(t, b, model.CreateProjectItem{
 		Title:      "item",
-		ProjectIDs: []string{work.ID, homelab.ID},
+		ProjectIDs: []string{work.ID, personal.ID},
 	})
 
-	if err := b.RemoveFromProject(item.ID, homelab.ID); err != nil {
+	if err := b.RemoveFromProject(item.ID, personal.ID); err != nil {
 		t.Fatalf("removing from project: %v", err)
 	}
 	if _, err := b.Undo(); err != nil {

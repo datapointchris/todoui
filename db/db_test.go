@@ -286,9 +286,9 @@ func TestMigrate_AddsRepoColumnToExistingDatabase(t *testing.T) {
 	}
 }
 
-// The index set silently vanished once already, when schema.sql replaced the
-// original migration file and its CREATE INDEX statements were not carried
-// over. Nothing reported it because a missing index only costs performance.
+// Open creates every index in indexes.sql, on a new database and on one that
+// predates them. Most of them cost only performance when missing, so nothing at
+// runtime reports one gone.
 func TestOpen_CreatesIndexes(t *testing.T) {
 	want := []string{
 		"idx_deps_depends",
