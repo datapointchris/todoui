@@ -1,35 +1,28 @@
 # todoui
 
-Personal project organization tool. A terminal UI over local-first SQLite, with optional background sync to [ichrisbirch](https://github.com/datapointchris/ichrisbirch).
+A terminal UI for organizing personal projects. It holds the projects, the items that make each one
+up, the dependencies between items, and the sub-tasks on each item. It reads and writes a local
+SQLite database, so it works with no network at all. Sync to an
+[ichrisbirch](https://github.com/datapointchris/ichrisbirch) API server is optional, and runs in the
+background when it is on.
 
-## Features
-
-- **TUI** — two-pane Bubble Tea interface with vim keybindings
-- **All Items / multi-select** — view all items at once or toggle specific projects to compare
-- **Multi-project items** — items can belong to multiple projects
-- **Dependencies** — items can block other items, with cycle detection
-- **Dependency browser** — `T` opens a two-pane view: every tree on the left,
-  searchable, and the tree you are standing in on the right, where you drill,
-  flip direction, and open items
-- **Sub-tasks** — checklist tasks on each item
-- **Notes** — multiline notes on items
-- **Repo links** — an item's detail names the repo it is work on. The tag is set
-  through ichrisbirch and arrives with sync
-- **Project descriptions** — long-form notes/decisions per project, viewable and editable in project detail
-- **Project status** — a project is finished (`done`) or abandoned with a reason
-  (`dropped`), and either one hides it. A name is held only by the active project
-  bearing it, so a finished `clisteno` gives the name back
-- **Undo** — revert the last mutation
-- **Search** — find items across all projects
-- **Sync** — optional background push/pull to ichrisbirch API
+todoui is the TUI and nothing more. Its subcommands are `sync`, `update`, `version` and
+`completion`, and none of them reads or writes an item. Scripts and agents reach the same projects
+and items through ichrisbirch's own CLI, against the same API.
 
 ## Install
 
 ```bash
-go install github.com/datapointchris/todoui@latest
+go install github.com/datapointchris/todoui@latest   # the main package is the module root
+todoui update                                         # replace the binary with the latest release
 ```
 
-Or build from source:
+Release archives for Linux and macOS, on amd64 and arm64, are on the
+[releases page](https://github.com/datapointchris/todoui/releases). `todoui update` replaces the
+running binary with one of them, verified against the release's published checksums. It needs no Go
+toolchain.
+
+To build from source:
 
 ```bash
 git clone https://github.com/datapointchris/todoui
@@ -37,138 +30,165 @@ cd todoui
 go build -o todoui .
 ```
 
-## Usage
+A release build run in a terminal checks GitHub for a newer release at most once a day. It prints a
+line naming one and never installs it. `TODOUI_NO_AUTO_UPDATE`, set to any value, switches the check
+off.
+
+## Starting from scratch
 
 ```bash
-todoui                    # open the TUI
-todoui sync               # push queued changes, then pull
-todoui update             # install the latest release
-todoui version
-todoui completion zsh     # also bash, fish, powershell
+go install github.com/datapointchris/todoui@latest  # the binary, and nothing else
+todoui version                                      # proves the install, and opens no database
+todoui                                              # creates ~/.local/share/todoui/todoui.db, opens the TUI
+
+mkdir -p ~/.config/todoui                           # todoui reads its config and never writes one
+$EDITOR ~/.config/todoui/config.toml                # [sync] enabled, api_url, token_command
+todoui sync                                         # binds the database to that API, then pulls
+todoui                                              # the status bar reads SYNCED and the API's URL
 ```
 
-Everything else happens in the TUI. Scripts and agents reach the same projects
-and items through ichrisbirch's own CLI.
+The first three lines are the whole setup for local use. The right end of the status bar reads
+`LOCAL` and the database path. That proves todoui is running without sync. In the TUI, `a` adds a
+project, `Tab` moves to the item pane, and `a` adds an item there. `q` quits.
 
-A project name must be bounded work — something that ends — so creating a
-project refuses a name the repo registry knows, and so does a rename. `todoui`
-is banned; `todoui sync improvements` and `Extract xx from dotfiles` are not. A
-repo does not end, so a project named after one becomes the bucket every later
-papercut falls into. The repo association is the item's repo tag instead, which
-crosses project boundaries and outlives any single project. The registry is
-`repos_registry` in the config, else `$XDG_DATA_HOME/todoui/repos.json`.
-Without one nothing is banned.
+The second group is only for sync, and it comes before you add anything. Nothing written with sync
+off is queued for push. The first pull deletes it as rows the server never returned. The guard under
+[A database belongs to one API](#a-database-belongs-to-one-api-and-a-pull-that-would-empty-it-stops)
+stops that only once a pull would delete ten projects or ten items. To keep local work and sync as
+well, point `TODOUI_DB` or `db_path` at a second database for the synced one.
 
-A project is a finite effort, so completing it is what takes it out of the list
-— there is no separate archive step the way items have one. Dropping is the
-other way to close one and requires a reason, because "deferred" invites the
-same idea back next month. Closing a project does **not** touch its items: an
-item still open when the project finished was still open, and that is worth
-knowing.
+`config.toml` takes the keys under
+[Configuration](#configuration--one-toml-file-every-key-overridable-from-the-environment). A key
+todoui does not read is an error rather than ignored, so a misspelled key never passes for an unset
+one.
 
-Only the active project holds its name, so completing `clisteno` frees the name
-for the next `clisteno` effort.
+## The TUI — projects on the left, their items on the right, every key one press away
 
-**Item numbers**: an item shows its number, the same handle ichrisbirch uses.
-It is not the primary key. The key stays a UUID, so items can be created
-offline and pushed without a round trip to claim an id. The number comes from
-the ichrisbirch API when sync is on and from todoui itself when it is off. An
-item created while the API is unreachable shows the last 8 characters of its id
-until its push lands and earns it a number.
+```text
+j / k     move through items and their tasks as one list    J / K   jump item to item
+Tab       switch pane                                       Enter   detail view
+a         add a project, or an item to this project         space   mark done
+T         dependency browser                                /       search every project
+u         undo the last change                              R       sync now
+?         every key the pane you are in takes               q       quit
+```
 
-**Freshness**: when sync is enabled, todoui reconciles on its own and running
-`todoui sync` by hand is never required. The TUI pulls on launch and again every
-`sync.interval` (default two minutes) for as long as it is open. A pull is
-deferred while a text input, overlay, or move is active and runs on the next
-tick instead, so it never moves the ground under an edit.
+The status bar carries the keys the current row takes, and `?` lists every key for the pane. That is
+why this list stops at the first ones.
 
-Queued pushes retry on their own too — a change made while the API was
-unreachable is sent once it comes back, without another edit to trigger it.
+The project pane opens on an `All` row, which shows every item grouped by project. `space` on a
+project adds it to a selection. The item pane then shows the selected projects' items, grouped the
+same way. An item belongs to one project or to several. `A` adds an item to more than one, and `p`
+changes which projects hold it. Each item carries a title, notes, a checklist of sub-tasks, and the
+items it waits on. Its detail view also names the repo it is work on. That tag is set through
+ichrisbirch and arrives with sync. todoui has no key that sets it.
 
-An unreachable API shows `SYNC ERR` in the status bar and falls back to local
-data — todoui is local-first and never blocks on the network. Force a reconcile
-with `R` in the TUI or `todoui sync`.
+`b` links an item this one is blocked by. A link that would close a cycle is refused. `T` opens the
+dependency browser. The left pane is every tree, searchable with `/`. The right pane is the tree you
+are standing in. `l` drills in, so the row under the cursor becomes the root. `h` backs out one
+drill at a time. `i` flips the tree between what an item waits on and what it unblocks. Finished
+trees stay hidden until `a` shows them.
 
-### A database belongs to one API
+`x` archives an item. `1` filters to blocked items, `2` adds archived ones back, and `0` clears the
+filter.
 
-A pull deletes every local row the server did not return, so a database and the
-API it reconciles against are a pair. The first pull records which API a
-database belongs to, and every pull and push after that refuses any other —
-pointing a database at the wrong API deletes everything that API has never heard
-of, and the reconcile has no way to tell that from a real deletion.
+## A project is bounded work, and its name is never a repo's
+
+A project is something that ends. `todoui sync improvements` ends, and `todoui` does not. A
+project named after a repo becomes the bucket every later papercut falls into, because the repo
+keeps existing after the work is done. An item's repo tag carries that association instead. The tag
+crosses project boundaries and outlives any one project.
+
+So creating a project refuses a name the repo registry holds, and so does renaming one. The registry
+is a JSON file with a `repos` array, and each entry's `name` is a banned project name:
+
+```json
+{ "repos": [{ "name": "todoui" }] }
+```
+
+The match ignores case and surrounding spaces. todoui reads the first registry it finds, in this
+order:
+
+1. `$TODOUI_REPOS_REGISTRY`
+2. `repos_registry` in the config file
+3. `$XDG_DATA_HOME/todoui/repos.json`, which defaults to `~/.local/share/todoui/repos.json`
+
+A missing registry bans nothing. A registry that does not parse fails every create and rename with
+the parse error.
+
+A project's status is `active`, `completed` or `dropped`. In the project detail view, `c` completes
+it, `x` drops it, and `r` reopens a closed one. Completing a project is what takes it out of the
+list, so there is no separate archive step the way items have one. `C` shows closed projects again.
+Dropping requires a reason, because "deferred" invites the same idea back next month and "dropped,
+and here is why" does not.
+
+Closing a project does not touch its items. An item still open when the project closed was still
+open, and that is worth knowing.
+
+Only an active project holds its name. A completed `todoui sync improvements` frees the name for the
+next round of them.
+
+## An item's handle is its number, and its key is a UUID
+
+An item shows its number, the same handle ichrisbirch prints. The number is not the primary key.
+todoui creates every id as a UUIDv7, so an item can be created offline and pushed without a round
+trip to claim one.
+
+With sync on, the number comes from the API's response to the create, and the TUI shows it once the
+push lands. With sync off, todoui allocates the next number itself. An item created while the API is
+unreachable shows the last 8 characters of its id until its push lands and earns it a number.
+
+## Sync is automatic, and `todoui sync` is for now rather than for correctness
+
+With sync on, every edit is queued and pushed as you make it. The TUI pulls on launch, then again
+every `sync.interval` (default two minutes) for as long as it is open. A pull waits while a text
+input, an overlay, a detail view or a move is open, and runs on the next tick instead. It never
+moves the ground under an edit.
+
+Queued pushes retry on a timer. A change made while the API was unreachable is sent once it comes
+back, with no further edit to trigger it.
+
+The status bar names the API's URL beside one of `SYNCING...`, `PENDING (n)`, `SYNC ERR` or
+`SYNCED`. An unreachable API shows `SYNC ERR` and leaves the local data in place. todoui is
+local-first and never blocks on the network. `R` in the TUI or `todoui sync` forces a reconcile.
+
+A pull is two requests, because the item list embeds memberships, dependencies and sub-tasks.
+Against an API that does not embed them, it falls back to two more requests per item. Lower
+`interval` to sync more eagerly. It is floored at 15 seconds.
+
+## A database belongs to one API, and a pull that would empty it stops
 
 ```bash
-todoui sync --adopt    # bind this database to the configured API (it moved)
-todoui sync --force    # allow a pull that would delete most of what is here
+todoui sync            # push anything queued, then pull, however recently the last pull ran
+todoui sync --adopt    # bind this database to the configured API, replacing the old binding
+todoui sync --force    # allow a pull that would delete most of the projects or items here
 ```
 
-`--force` exists because a truncated response, an authentication failure that
-still returns `200`, and a genuine mass deletion look identical from the client:
-a pull removing more than half of at least ten projects or items stops and asks.
+A pull deletes every local row the server did not return, so a database and its API are a pair.
+The first pull records which API the database belongs to. Every pull and push after that refuses any
+other. A database pointed at the wrong API would lose everything that API has never heard of, and
+the reconcile cannot tell that from a real deletion.
+
+A database that has pulled before but records no API refuses as well. It asks for `--adopt` rather
+than guessing from whatever is configured, because guessing from the loaded configuration is the
+mistake the binding exists to stop.
+
+The second guard is for the right API giving a wrong answer. A pull that would delete ten or more
+projects, and more than half of them, stops and asks for `--force`. Items are guarded the same way.
+A truncated response, an authentication failure that still returns `200`, and a genuine mass
+deletion look identical from the client. The floor keeps the guard quiet on a small database, where
+losing most of it is a handful of rows.
+
 Neither flag is reachable from the background timers.
 
-## TUI Keybindings
+## Configuration — one TOML file, every key overridable from the environment
 
-| Key | Action |
-| --- | ------ |
-| `j/k` | Navigate up/down (walks items AND tasks as one list) |
-| `J/K` | Jump to next/prev item (skip tasks) |
-| `h/l` | Switch panes |
-| `Enter` | Detail view (item or project) |
-| **Project pane** | |
-| `space` | Toggle multi-select |
-| `Esc` | Clear selections |
-| `a` | Add project |
-| `m` | Reorder (move mode) |
-| `C` | Show/hide closed projects |
-| `e` | Edit project name (in detail) |
-| `d` | Edit project description (in detail) |
-| `c` | Complete project (in detail) |
-| `x` | Drop project, prompting for why (in detail) |
-| `r` | Reopen a closed project (in detail) |
-| **On an item row** | |
-| `space` | Toggle done/incomplete |
-| `a` | Add item to current project |
-| `A` | Add item to multiple projects |
-| `e` | Edit title |
-| `n` | Edit notes |
-| `t` | Add a sub-task |
-| `x` | Archive |
-| `m` | Reorder (move mode) |
-| `b/B` | Link/unlink dependency |
-| `T` | Dependency browser (works from either pane) |
-| `p` | Manage project membership |
-| **Dependency browser — left pane, the map** | |
-| `j/k` | Move; the right pane follows |
-| `l` | Into the focused tree |
-| `/` | Filter to matching items, keeping the path to each |
-| `a` | Show finished trees too |
-| **Dependency browser — right pane, the tree** | |
-| `l` | Drill in — the row under the cursor becomes the root |
-| `h` | Back one drill, then back to the map |
-| `i` | Flip between what it waits on and what it unblocks |
-| `Enter` | Item detail; `Esc` returns to the row you left |
-| `Esc` | Leave the browser |
-| **On a task row** | |
-| `space` | Toggle task done |
-| `d` | Delete task |
-| `t` | Add a sibling task to the same item |
-| **Global** | |
-| `u` | Undo |
-| `/` | Search |
-| `1` | Filter: blocked items |
-| `2` | Filter: archived items |
-| `0` | Clear filter |
-| `R` | Sync now (also runs automatically every `sync.interval`) |
-| `?` | Help |
-| `q` | Quit |
-
-## Configuration
-
-Config file: `~/.config/todoui/config.toml`
+todoui reads `$XDG_CONFIG_HOME/todoui/config.toml`, else `~/.config/todoui/config.toml`, on macOS
+as well as Linux. No config file is a valid configuration: a local database, with sync off.
+[config.example.toml](config.example.toml) is an annotated copy.
 
 ```toml
-# repos_registry = "~/dev/repos.json"  # default: ~/.local/share/todoui/repos.json
+# repos_registry = "/path/to/repos.json"  # a bare key, so it sits above the first [section]
 
 [local]
 # db_path = "/custom/path/todoui.db"  # default: ~/.local/share/todoui/todoui.db
@@ -180,36 +200,34 @@ enabled = false
 # interval = "2m"  # longest todoui goes without reconciling; floored at 15s
 ```
 
-`token_command` is how todoui authenticates to the API without holding a
-secret itself. It is split on spaces and run without a shell or stdin, and
-whatever it prints becomes the bearer token. todoui keeps the token until the
-API refuses it, then runs the command once more and retries once. A failing
-command's first line of stderr is what the status bar shows. Leave it unset for
-an API that needs no token, such as a dev stack that sets its own identity.
+`enabled = true` without an `api_url` is an error.
 
-The command belongs to the URL beside it. When `TODOUI_SYNC_URL` supplies the
-URL, the config file's `token_command` is ignored and `TODOUI_SYNC_TOKEN_COMMAND`
-is the only source, so overriding the URL never sends one API's token to
-another.
+`token_command` is how todoui authenticates to the API without holding a secret itself. It is split
+on spaces and run without a shell or stdin. Whatever it prints becomes the bearer token. A command
+that has not finished in 10 seconds fails. todoui keeps the token until the API refuses it, then
+runs the command once more and retries once. A failing command's first line of stderr is what the
+status bar shows. Leave it unset for an API that needs no token, such as a dev stack that sets its
+own identity.
 
-A pull is two requests — the item list embeds memberships, dependencies, and
-sub-tasks. Against an API predating that embed it falls back to 2+2N, fetching
-each item's detail and tasks separately. Lower `interval` to sync more eagerly.
+The command belongs to the URL beside it. When `TODOUI_SYNC_URL` supplies the URL, the config
+file's `token_command` is ignored and `TODOUI_SYNC_TOKEN_COMMAND` is the only source. Overriding the
+URL never sends one API's token to another.
 
-Environment variable overrides:
+Each variable overrides the key beside it:
 
-| Variable | Purpose |
-| -------- | ------- |
-| `TODOUI_DB` | SQLite database path |
-| `TODOUI_SYNC` | Enable sync (`true`/`false`) |
-| `TODOUI_SYNC_URL` | The API server's host, for sync |
-| `TODOUI_SYNC_TOKEN_COMMAND` | Command printing a bearer token for sync |
-| `TODOUI_SYNC_INTERVAL` | Reconcile interval (e.g. `30s`, `5m`) |
-| `TODOUI_REPOS_REGISTRY` | Repo registry path |
+| Variable | Overrides |
+| -------- | --------- |
+| `TODOUI_DB` | `local.db_path` |
+| `TODOUI_SYNC` | `sync.enabled` (`true` or `false`) |
+| `TODOUI_SYNC_URL` | `sync.api_url` |
+| `TODOUI_SYNC_TOKEN_COMMAND` | `sync.token_command` |
+| `TODOUI_SYNC_INTERVAL` | `sync.interval`, as a duration such as `30s` or `5m` |
+| `TODOUI_REPOS_REGISTRY` | `repos_registry` |
 
-## Architecture
+## Local-first — SQLite is the store, and sync is a layer over it
 
-Always local-first: reads and writes go to embedded SQLite. The optional sync engine pushes mutations and pulls remote state in the background.
+Every read and write goes to the embedded SQLite database. The optional sync engine pushes mutations
+and pulls remote state in the background.
 
 ```text
 TUI
@@ -225,4 +243,10 @@ Backend interface
             +-- Pull: HTTP from ichrisbirch -> upsert local SQLite
 ```
 
-Data model: projects, items (many-to-many via memberships), dependencies, sub-tasks. All IDs are UUID v7.
+The data model is projects, items, the memberships joining them many to many, dependencies between
+items, and sub-tasks.
+
+todoui writes two places. The database at `db_path` holds the data, the queue of pending pushes, and
+the API the database is bound to. The update check keeps its last result under
+`$XDG_STATE_HOME/todoui/`, which defaults to `~/.local/state/todoui/`. The config file and the repo
+registry are read and never written.
