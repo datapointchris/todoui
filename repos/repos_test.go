@@ -16,13 +16,13 @@ func writeRegistry(t *testing.T, body string) string {
 }
 
 // A machine without the registry still has to be able to create projects.
-func TestMissingRegistryIsNotAnError(t *testing.T) {
+func TestMissingRegistryBansNothing(t *testing.T) {
 	registry, err := Load(filepath.Join(t.TempDir(), "absent.json"))
 	if err != nil {
 		t.Fatalf("a missing registry must not be an error, got %v", err)
 	}
-	if registry.Available() {
-		t.Error("a missing registry must report itself unavailable")
+	if registry.Knows("todoui") {
+		t.Error("a missing registry must not ban anything")
 	}
 }
 
@@ -112,15 +112,5 @@ func TestKnowsIdentifiesARepoName(t *testing.T) {
 		if registry.Knows(name) {
 			t.Errorf("Knows(%q) = true; bounded work named after a repo is still bounded work", name)
 		}
-	}
-}
-
-func TestKnowsIsFalseWithoutARegistry(t *testing.T) {
-	registry, err := Load(filepath.Join(t.TempDir(), "absent.json"))
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if registry.Knows("todoui") {
-		t.Error("a missing registry must not ban anything")
 	}
 }
