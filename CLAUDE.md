@@ -123,9 +123,8 @@ token. Overriding one of them names an
 environment that does not exist, and for this tool that is destructive rather
 than merely wrong: a pull deletes every local row the server did not return, so
 a production database reconciled against the dev API is emptied of everything
-dev has never heard of. `standards/infrastructure.md` § "A dev environment
-override is all-or-nothing" carries what that cost, and this repo is where it
-happened.
+dev has never heard of. A sync run that way once deleted 42 projects and 286
+items and printed `Synced.`
 
 **To run against production data, run from outside this repo**, where direnv has
 loaded nothing. Un-setting your way out is how the accident happened: `env -u`
@@ -139,12 +138,13 @@ origin — anything predating this — refuses to guess and asks to be bound, si
 inferring it from whichever environment is loaded *is* the mistake.
 
 `guardSweep` is the second layer, for when the API is right but its answer is
-not: a pull deleting more than half of at least ten local projects or items is
-refused, because a truncated response, an auth failure that still returns 200,
-and a genuine mass deletion are the same event seen from here. `--force` allows
-it. The floor exists so the guard stays silent on small databases, where losing
-most of it is a handful of rows; a guard that fires on ordinary days gets forced
-past by reflex and stops guarding anything.
+not. A pull that would delete ten or more local projects, and more than half of
+them, is refused, and items are guarded the same way. A truncated response, an
+auth failure that still returns 200, and a genuine mass deletion are the same
+event seen from here. `--force` allows it. The floor counts rows deleted, not
+rows held, so 8 deletions out of 15 pass. It keeps the guard silent on small
+databases, where losing most of it is a handful of rows; a guard that fires on
+ordinary days gets forced past by reflex and stops guarding anything.
 
 Neither override is reachable from the background timers. A guard something
 automatic can waive is not a guard.
@@ -186,6 +186,14 @@ with no `/vN` path is an outage: `go install …@latest` stops seeing the tag, e
 installed binary is stranded, and recovery is a reinstall on each machine. The
 analyzer matches unanchored and ORs past `.semrelrc`, so nothing switches it off.
 A commit that merely *discusses* the trailer cuts one too — say "that marker".
-Deliberate majors are `chore(release-major)`. Reset procedure and the measurement:
-`standards/release.md` § "Never write the breaking-change trailer in a Go repo's
-commit message".
+Deliberate majors are `chore(release-major)`, and the same release adds the
+`/vN` suffix to the module path.
+
+History cannot be rewritten on `main`, so a major cut by accident is reset in
+this order:
+
+1. Delete the vN GitHub releases and their tags, remote and local.
+2. Tag a baseline on `main` above the offending commit, and push it. Without it
+   the commit stays in the analyzed range and the next push cuts the major again.
+3. Confirm `go list -m github.com/datapointchris/todoui@latest` answers the v1 tag.
+4. Reinstall on every machine. Self-update will not recover a stranded binary.
