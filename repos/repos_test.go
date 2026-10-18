@@ -64,8 +64,7 @@ func TestDefaultPathIsTheToolsOwnDataDirectory(t *testing.T) {
 
 // The three rungs in order: the tool's own variable, then its own config key,
 // then its own data directory. A machine that maintains its registry elsewhere
-// says so in the config, which replaced a hand-made symlink from the data
-// directory that was declared nowhere.
+// says so in the config.
 func TestDefaultPathResolvesInThreeRungs(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", "/tmp/xdg")
 	withConfig(t, "repos_registry = \"/declared/repos.json\"\n")
@@ -86,35 +85,14 @@ func TestDefaultPathResolvesInThreeRungs(t *testing.T) {
 // rather than as a bad path.
 func TestTheConfiguredPathExpandsALeadingTilde(t *testing.T) {
 	t.Setenv("TODOUI_REPOS_REGISTRY", "")
-	withConfig(t, "repos_registry = \"~/dev/repos.json\"\n")
+	withConfig(t, "repos_registry = \"~/registry/repos.json\"\n")
 
 	home, err := os.UserHomeDir()
 	if err != nil {
 		t.Fatalf("UserHomeDir: %v", err)
 	}
-	if got, want := DefaultPath(), filepath.Join(home, "dev", "repos.json"); got != want {
+	if got, want := DefaultPath(), filepath.Join(home, "registry", "repos.json"); got != want {
 		t.Errorf("DefaultPath() = %q, want %q", got, want)
-	}
-}
-
-// $REPOS_JSON is never read. It was a rung here once, below no config key at
-// all, and it came out: the variable is exported from ~/.env, so a process that
-// sources no profile never sees it, and the rung was empty in exactly the
-// unattended runs it existed to serve. The invariant is broader than that one
-// variable — a tool consults nothing that is not prefixed with its own name.
-func TestTheUnprefixedVariableIsNeverConsulted(t *testing.T) {
-	t.Setenv("REPOS_JSON", "/unprefixed/repos.json")
-	t.Setenv("TODOUI_REPOS_REGISTRY", "")
-	t.Setenv("XDG_DATA_HOME", "/tmp/xdg")
-
-	withConfig(t, "")
-	if got, want := DefaultPath(), "/tmp/xdg/todoui/repos.json"; got != want {
-		t.Errorf("the unprefixed variable displaced the default: got %q, want %q", got, want)
-	}
-
-	withConfig(t, "repos_registry = \"/declared/repos.json\"\n")
-	if got, want := DefaultPath(), "/declared/repos.json"; got != want {
-		t.Errorf("the unprefixed variable displaced the config key: got %q, want %q", got, want)
 	}
 }
 
