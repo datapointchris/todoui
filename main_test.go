@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"io"
+	"os"
 	"testing"
 
 	"github.com/datapointchris/goclikit"
+	"github.com/datapointchris/goselfupdate/autoupdate"
 	"github.com/spf13/cobra"
 )
 
@@ -67,15 +70,19 @@ func TestNeedsBackendSkipsCompletionProtocolCommands(t *testing.T) {
 
 // A positional on a leaf is a typing mistake, so it exits 2 like a bad flag.
 // cobra validates arguments before PersistentPreRunE, so `sync` refuses the
-// word before it opens a database.
+// word before it opens a database. goclikit.Execute resolves the command from
+// os.Args, so the line goes there rather than through SetArgs.
 func TestAPositionalOnALeafIsAUsageError(t *testing.T) {
+	original := os.Args
+	t.Cleanup(func() { os.Args = original })
+
 	for _, line := range [][]string{{"sync", "bogus"}, {"version", "bogus"}} {
-		root := testRoot(t)
+		root := rootCmd()
 		root.SetOut(io.Discard)
 		root.SetErr(io.Discard)
-		root.SetArgs(line)
+		os.Args = append([]string{"todoui"}, line...)
 
-		err := root.Execute()
+		err := goclikit.Execute(context.Background(), root, autoupdate.Config{Suppress: true})
 		if !errors.Is(err, goclikit.ErrUsage) {
 			t.Errorf("%v answered %v, want a usage error", line, err)
 		}

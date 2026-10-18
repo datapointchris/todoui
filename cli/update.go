@@ -44,7 +44,7 @@ func VersionCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "version",
 		Short: "Print the current version",
-		Args:  NoArgs,
+		Args:  cobra.NoArgs,
 		Run: func(cmd *cobra.Command, _ []string) {
 			cmd.Println(Version())
 		},

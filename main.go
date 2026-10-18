@@ -136,7 +136,7 @@ func rootCmd() *cobra.Command {
 			"A pull deletes everything the server did not return, so the database is bound to\n" +
 			"the API it was first pulled from and refuses to reconcile against any other.\n" +
 			"--adopt rebinds it; --force allows a pull that would delete most of what is here.",
-		Args: cli.NoArgs,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if syncEngine == nil {
 				return fmt.Errorf("sync is disabled — enable it in ~/.config/todoui/config.toml")
