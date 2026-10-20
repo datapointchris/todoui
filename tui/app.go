@@ -135,7 +135,6 @@ func NewApp(b backend.Backend, syncEngine *sync.Engine, dbPath string, syncInter
 	ti.CharLimit = 200
 
 	ta := textarea.New()
-	ta.CharLimit = 5000
 	ta.ShowLineNumbers = false
 
 	df := textinput.New()
