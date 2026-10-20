@@ -66,7 +66,7 @@ one.
 
 ```text
 j / k     move through items and their tasks as one list    J / K   jump item to item
-Tab       switch pane                                       Enter   detail view
+Tab       switch pane                                       Enter   read it in full
 a         add a project, or an item to this project         space   mark done
 T         dependency browser                                /       search every project
 u         undo the last change                              R       sync now
@@ -80,8 +80,18 @@ The project pane opens on an `All` row, which shows every item grouped by projec
 project adds it to a selection. The item pane then shows the selected projects' items, grouped the
 same way. An item belongs to one project or to several. `A` adds an item to more than one, and `p`
 changes which projects hold it. Each item carries a title, notes, a checklist of sub-tasks, and the
-items it waits on. Its detail view also names the repo it is work on. That tag is set through
+items it waits on. The reader also names the repo the item is for. That tag is set through
 ichrisbirch and arrives with sync. todoui has no key that sets it.
+
+`Enter` opens the reader, a full screen holding one item or one project. An item shows its fields,
+what blocks it, what it blocks, its tasks, and its notes rendered as markdown. A project shows its
+status, its open and done counts, and its description rendered the same way. `j`/`k` scroll a line,
+`Ctrl+d`/`Ctrl+u` half a screen, and `g`/`G` jump to either end. `Esc`, `q` or `h` goes back to
+where the reader was opened: the list on the same row, or the dependency browser. The item keys act
+on the item shown, so `n` edits the note in `$EDITOR` and the reader shows the result. `u` undoes
+the last change, and the reader shows that too. A placeholder written as `<word>` shows as written
+rather than being read as an HTML tag. The list draws no note text. A `≡` on the row says the item
+has one.
 
 `b` links an item this one is blocked by. A link that would close a cycle is refused. `T` opens the
 dependency browser. The left pane is every tree, searchable with `/`. The right pane is the tree you
@@ -116,7 +126,7 @@ order:
 A missing registry bans nothing. A registry that does not parse fails every create and rename with
 the parse error.
 
-A project's status is `active`, `completed` or `dropped`. In the project detail view, `c` completes
+A project's status is `active`, `completed` or `dropped`. Reading a project, `c` completes
 it, `x` drops it, and `r` reopens a closed one. Completing a project is what takes it out of the
 list, so there is no separate archive step the way items have one. `C` shows closed projects again.
 Dropping requires a reason, because "deferred" invites the same idea back next month and "dropped,
@@ -142,7 +152,7 @@ unreachable shows the last 8 characters of its id until its push lands and earns
 
 With sync on, every edit is queued and pushed as you make it. The TUI pulls on launch, then again
 every `sync.interval` (default two minutes) for as long as it is open. A pull waits while a text
-input, an overlay, a detail view or a move is open, and runs on the next tick instead. It never
+input, an overlay, the reader or a move is open, and runs on the next tick instead. It never
 moves the ground under an edit.
 
 Queued pushes retry on a timer. A change made while the API was unreachable is sent once it comes

@@ -38,7 +38,7 @@ func newPickerForCreate(allProjects []model.ProjectWithItemCount, currentProject
 	}
 }
 
-func newPickerForManage(allProjects []model.ProjectWithItemCount, currentProjects []model.Project, item model.ProjectItemInProject) projectPicker {
+func newPickerForManage(allProjects []model.ProjectWithItemCount, currentProjects []model.Project, item model.ProjectItem) projectPicker {
 	memberSet := make(map[string]bool)
 	for _, p := range currentProjects {
 		memberSet[p.ID] = true
