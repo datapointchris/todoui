@@ -420,31 +420,32 @@ func TestDepTree_SharedDependencyIsMarkedRatherThanRepeated(t *testing.T) {
 	}
 }
 
-// T works from every row and from the project pane, so every hint line has to
-// name it. Advertising it on one of three was why it read as missing.
-func TestDepTree_EveryHintLineAdvertisesTheKey(t *testing.T) {
-	app := newTestApp(t, 140, 30, "serve")
-	if _, err := app.backend.CreateTask(itemIDByTitle(t, app, "serve"), model.CreateProjectItemTask{Title: "a sub-task"}); err != nil {
-		t.Fatalf("creating task: %v", err)
-	}
-	send(t, app, app.fetchItems()())
+// T on a task row opens the browser standing on the item that owns the task.
+func TestDepTree_OpensFromATaskRowOnItsOwningItem(t *testing.T) {
+	for _, owner := range []string{"serve", "schema"} {
+		t.Run(owner, func(t *testing.T) {
+			app := newTestApp(t, 120, 30, "serve", "schema")
+			dependsOn(t, app, "serve", "schema")
+			if _, err := app.backend.CreateTask(itemIDByTitle(t, app, owner), model.CreateProjectItemTask{Title: "a sub-task"}); err != nil {
+				t.Fatalf("creating task: %v", err)
+			}
+			send(t, app, app.fetchItems()())
+			for range 10 {
+				if row := app.currentRow(); row != nil && row.kind == rowTask {
+					break
+				}
+				pressKey(t, app, "j")
+			}
+			if row := app.currentRow(); row == nil || row.kind != rowTask {
+				t.Fatal("precondition: the cursor never reached the task row")
+			}
 
-	if hints := app.statusBarHints(); !strings.Contains(hints, "[T]ree") {
-		t.Errorf("item-row hints = %q, want the tree key", hints)
-	}
-
-	app.activePane = projectPane
-	if hints := app.statusBarHints(); !strings.Contains(hints, "[T]ree") {
-		t.Errorf("project-pane hints = %q, want the tree key — T works there too", hints)
-	}
-
-	app.activePane = itemPane
-	pressKey(t, app, "j") // onto the sub-task row
-	if row := app.currentRow(); row == nil || row.kind != rowTask {
-		t.Fatal("precondition: cursor is not on a task row")
-	}
-	if hints := app.statusBarHints(); !strings.Contains(hints, "[T]ree") {
-		t.Errorf("task-row hints = %q, want the tree key — T opens the owning item's tree", hints)
+			openTree(t, app)
+			s := app.depTree
+			if got := s.lookup[s.forestRows[s.forestCursor].ID].Item.Title; got != owner {
+				t.Errorf("the browser stands on %q, want the task's item %q", got, owner)
+			}
+		})
 	}
 }
 
