@@ -324,7 +324,7 @@ func TestDepTree_FinishedTreesAreHiddenUntilToggled(t *testing.T) {
 	}
 }
 
-func TestDepTree_EnterOpensTheDetailAndEscComesBack(t *testing.T) {
+func TestDepTree_EnterOpensTheReaderAndEscComesBack(t *testing.T) {
 	app := newTestApp(t, 120, 30, "serve", "schema")
 	dependsOn(t, app, "serve", "schema")
 
@@ -332,11 +332,11 @@ func TestDepTree_EnterOpensTheDetailAndEscComesBack(t *testing.T) {
 	pressKey(t, app, "j")
 	send(t, app, tea.KeyMsg{Type: tea.KeyEnter})
 
-	if app.appMode != modeItemDetail {
-		t.Fatalf("mode = %v, want modeItemDetail", app.appMode)
+	if app.appMode != modeReader {
+		t.Fatalf("mode = %v, want modeReader", app.appMode)
 	}
 	if app.itemDetail == nil || app.itemDetail.Title != "schema" {
-		t.Errorf("detail = %v, want the row the cursor was on", app.itemDetail)
+		t.Errorf("reader = %v, want the row the cursor was on", app.itemDetail)
 	}
 
 	send(t, app, tea.KeyMsg{Type: tea.KeyEsc})

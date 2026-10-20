@@ -61,10 +61,6 @@ var (
 				Foreground(lipgloss.Color("3"))
 	notesIndicatorStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("6"))
-	notesPreviewStyle = lipgloss.NewStyle().
-				PaddingLeft(16)
-	notesConnectorStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("4"))
 	blockerStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("1")).
 			PaddingLeft(5)
@@ -112,6 +108,12 @@ var (
 
 	overlayTitleStyle = lipgloss.NewStyle().
 				Bold(true)
+
+	// Reader
+	readerTitleStyle = lipgloss.NewStyle().
+				Bold(true)
+	readerBlockerStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("1"))
 
 	dimStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("8"))

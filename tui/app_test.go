@@ -32,9 +32,8 @@ func newTestApp(t *testing.T, width, height int, itemTitles ...string) *App {
 	return newTestAppWithItems(t, width, height, inputs)
 }
 
-// newTestAppWithItems is newTestApp for the cases that need more than a title —
-// notes and repos change how many lines a row renders into, which is where
-// layout bugs live.
+// newTestAppWithItems is newTestApp for the cases that need more than a title,
+// such as an item holding a note.
 func newTestAppWithItems(t *testing.T, width, height int, inputs []model.CreateProjectItem) *App {
 	t.Helper()
 
@@ -238,7 +237,7 @@ func TestAutoPullOnlyRunsInNormalMode(t *testing.T) {
 	if !app.safeToAutoPull() {
 		t.Error("normal mode must allow the background reconcile")
 	}
-	for _, mode := range []appMode{modeAddItem, modeExternalEdit, modeMove, modeMoveProject, modeItemDetail} {
+	for _, mode := range []appMode{modeAddItem, modeExternalEdit, modeMove, modeMoveProject, modeReader} {
 		app.appMode = mode
 		if app.safeToAutoPull() {
 			t.Errorf("mode %v must defer the reconcile to the next tick", mode)
@@ -396,8 +395,8 @@ func TestCompletedProjectLeavesTheProjectPane(t *testing.T) {
 	app.activePane = projectPane
 
 	send(t, app, tea.KeyMsg{Type: tea.KeyEnter})
-	if app.appMode != modeProjectDetail {
-		t.Fatalf("expected the project detail overlay, got mode %v", app.appMode)
+	if app.appMode != modeReader || app.projectDetail == nil {
+		t.Fatalf("expected the reader on the project, got mode %v", app.appMode)
 	}
 	keys(t, app, "c")
 
@@ -488,58 +487,41 @@ func assertPaneInvariants(t *testing.T, app *App, context string) {
 	}
 }
 
-// The pane scrolls by row index and renders by line. A row that renders into
-// more than one line — a note, a blocker, a group header — makes the two
-// disagree: syncScroll believes the cursor is inside the window while the
-// render runs out of lines before reaching it, so pressing j walks the cursor
-// off the bottom and the page never follows.
-func TestCursorStaysVisibleScrollingPastNotes(t *testing.T) {
-	notes := "a note that costs the row a second line"
-	inputs := make([]model.CreateProjectItem, 0, 12)
-	for i := range 12 {
-		inputs = append(inputs, model.CreateProjectItem{
-			Title: "item-" + strconv.Itoa(i),
-			Notes: &notes,
-		})
+// chainedApp is an app whose items each depend on the next, so every item but
+// the last carries a blocker line under its row.
+func chainedApp(t *testing.T, width, height, n int) *App {
+	t.Helper()
+	titles := make([]string, n)
+	for i := range n {
+		titles[i] = "item-" + strconv.Itoa(i)
 	}
+	app := newTestApp(t, width, height, titles...)
+	for i := range n - 1 {
+		dependsOn(t, app, titles[i], titles[i+1])
+	}
+	send(t, app, app.fetchItems()())
+	return app
+}
 
+// The pane scrolls by row index and renders by line. A row that renders into
+// more than one line — a blocker, a group header — makes the two disagree:
+// syncScroll believes the cursor is inside the window while the render runs out
+// of lines before reaching it, so pressing j walks the cursor off the bottom and
+// the page never follows.
+func TestCursorStaysVisibleScrollingPastBlockers(t *testing.T) {
 	for _, height := range []int{10, 14, 24, 40} {
 		t.Run("height="+strconv.Itoa(height), func(t *testing.T) {
-			app := newTestAppWithItems(t, 80, height, inputs)
+			app := chainedApp(t, 80, height, 12)
 			assertPaneInvariants(t, app, "at the top")
-			for range len(inputs) - 1 {
+			for range len(app.rows) - 1 {
 				pressKey(t, app, "j")
 				assertPaneInvariants(t, app, "after j")
 			}
-			for range len(inputs) - 1 {
+			for range len(app.rows) - 1 {
 				pressKey(t, app, "k")
 				assertPaneInvariants(t, app, "after k")
 			}
 		})
-	}
-}
-
-// The pane must never draw outside the box it was handed, or it pushes the
-// status bar off the terminal and the layout collapses.
-func TestItemPaneNeverOverflowsItsHeight(t *testing.T) {
-	notes := "a note that costs the row a second line"
-	inputs := make([]model.CreateProjectItem, 0, 12)
-	for i := range 12 {
-		inputs = append(inputs, model.CreateProjectItem{
-			Title: "item-" + strconv.Itoa(i),
-			Notes: &notes,
-		})
-	}
-
-	for _, height := range []int{10, 14, 24, 40} {
-		app := newTestAppWithItems(t, 80, height, inputs)
-		for range len(inputs) - 1 {
-			pressKey(t, app, "j")
-			if got := lipgloss.Height(app.View()); got > height {
-				t.Fatalf("height %d: view rendered %d lines at row %d:\n%s",
-					height, got, app.rowCursor+1, app.View())
-			}
-		}
 	}
 }
 
@@ -593,18 +575,8 @@ func addTask(t *testing.T, app *App, title string) {
 // height that is one line off from what gets drawn is the original scroll bug
 // with extra steps.
 func TestLayoutHeightMatchesWhatGetsRendered(t *testing.T) {
-	notes := "a note long enough to wrap more than once at a narrow pane width, with an em dash — in it"
-	inputs := make([]model.CreateProjectItem, 0, 6)
-	for i := range 6 {
-		in := model.CreateProjectItem{Title: "item-" + strconv.Itoa(i)}
-		if i%2 == 0 {
-			in.Notes = &notes
-		}
-		inputs = append(inputs, in)
-	}
-
 	for _, width := range []int{20, 40, 80, 200} {
-		app := newTestAppWithItems(t, width+30, 40, inputs)
+		app := chainedApp(t, width+30, 40, 6)
 		addTask(t, app, "a task title that is itself longer than a narrow pane")
 
 		layout := app.itemPaneLayout(width)
@@ -618,16 +590,12 @@ func TestLayoutHeightMatchesWhatGetsRendered(t *testing.T) {
 
 // Every line the pane emits has to fit the column it was handed, or lipgloss
 // wraps it at the border and the layout loses a line it never counted. Real
-// titles, notes and project names are all longer than a pane routinely is.
+// titles and project names are both longer than a pane routinely is.
 func TestNoRenderedLineExceedsThePaneWidth(t *testing.T) {
-	notes := "notes with a very long unbroken token ————————————————————————————————— and more prose after it"
 	long := "a title that is very considerably longer than any reasonable pane will ever be, by design"
-	inputs := []model.CreateProjectItem{
-		{Title: long, Notes: &notes},
-		{Title: "short"},
-	}
 	for _, width := range []int{18, 25, 40, 80} {
-		app := newTestAppWithItems(t, width+30, 40, inputs)
+		app := newTestApp(t, width+30, 40, long, "short")
+		dependsOn(t, app, "short", long)
 		addTask(t, app, long)
 
 		for i := range app.rows {
@@ -702,8 +670,8 @@ func TestCancellingTheDropPromptLeavesTheProjectAlone(t *testing.T) {
 
 	send(t, app, tea.KeyMsg{Type: tea.KeyEsc})
 
-	if app.appMode != modeProjectDetail {
-		t.Errorf("Esc must return to the overlay it came from, got mode %v", app.appMode)
+	if app.appMode != modeReader {
+		t.Errorf("Esc must return to the reader it came from, got mode %v", app.appMode)
 	}
 	if len(app.projects) != 1 {
 		t.Error("canceling must not drop anything")

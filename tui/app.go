@@ -40,6 +40,10 @@ type App struct {
 	// create independent of any refresh that reorders m.items underneath.
 	addTaskItemID    string
 	addTaskItemTitle string
+	// Target of modeEditTitle, captured on keypress for the same reason. The
+	// edit starts from the list or from the reader, and only the keypress knows
+	// which item it meant.
+	editTitleItemID string
 
 	activePane    pane
 	projectCursor int
@@ -58,25 +62,22 @@ type App struct {
 	pendingTitle string // for A flow: title input → project picker
 	statusMsg    string // flash feedback in status bar
 
-	// Item detail view
+	// Reader: the full-screen view of one item or one project. itemDetail is
+	// set while it shows an item, projectDetail while it shows a project.
 	itemDetail            *model.ProjectItemDetail
 	detailBlockers        []model.ProjectItem
 	detailBlockerProjects map[string][]string
+	detailDependents      []model.ProjectItem
 	detailTasks           []model.ProjectItemTask
-	// detailTaskCursor is the unified detail-view cursor:
-	//   -1 = cursor is on the item (its fields/meta header)
-	//    0..N-1 = cursor is on that task
-	detailTaskCursor int
-	addingTask       bool // true when typing a new task title
-
-	// Project detail view
-	projectDetail *model.ProjectWithItemCount
+	projectDetail         *model.ProjectWithItemCount
+	readerScroll          int // the first rendered row on screen
+	readerMarkdown        markdownRender
 
 	// Dependency tree overlay
 	depTree depTreeState
-	// detailFromTree routes the item detail back to the tree it was opened
-	// from. Not returnMode, which the input overlays claim while the detail is
-	// still on screen and would overwrite this.
+	// detailFromTree routes the reader back to the tree it was opened from.
+	// Not returnMode, which the input overlays claim while the reader is still
+	// on screen and would overwrite this.
 	detailFromTree bool
 
 	// Filters
@@ -206,7 +207,6 @@ type (
 	projectCreatedMsg    struct{}
 	projectUpdatedMsg    struct{}
 	undoResultMsg        string
-	itemProjectsMsg      []model.Project
 	membershipUpdatedMsg struct{}
 	itemReorderedMsg     struct{}
 	projectReorderedMsg  struct{}
@@ -214,10 +214,19 @@ type (
 	depUnlinkedMsg       struct{}
 )
 
+// itemProjectsMsg carries the item whose membership is being managed, because
+// the reader opened from the dependency browser shows an item the list cursor
+// is not on.
+type itemProjectsMsg struct {
+	item     model.ProjectItem
+	projects []model.Project
+}
+
 type itemDetailMsg struct {
 	detail       *model.ProjectItemDetail
 	blockers     []model.ProjectItem
 	projectNames map[string][]string
+	dependents   []model.ProjectItem
 	tasks        []model.ProjectItemTask
 }
 
@@ -303,50 +312,6 @@ func truncate(s string, maxWidth int) string {
 	return string(runes[:maxWidth-1]) + "…"
 }
 
-// wrapPoints walks the break positions of a line wrapped to maxWidth, calling
-// emit with each piece. Runes rather than bytes throughout: a hard break by byte
-// offset splits a multi-byte rune in half, and the notes this wraps are full of
-// em dashes and arrows.
-func wrapPoints(s string, maxWidth int, emit func(piece []rune)) {
-	runes := []rune(s)
-	if len(runes) <= maxWidth {
-		emit(runes)
-		return
-	}
-	for len(runes) > maxWidth {
-		cut := maxWidth
-		for cut > 0 && runes[cut] != ' ' {
-			cut--
-		}
-		if cut == 0 {
-			cut = maxWidth // no space found, hard break
-		}
-		emit(runes[:cut])
-		runes = runes[cut:]
-		for len(runes) > 0 && runes[0] == ' ' {
-			runes = runes[1:]
-		}
-	}
-	if len(runes) > 0 {
-		emit(runes)
-	}
-}
-
-func wrapLine(s string, maxWidth int) []string {
-	var result []string
-	wrapPoints(s, maxWidth, func(piece []rune) { result = append(result, string(piece)) })
-	return result
-}
-
-// wrapCount is wrapLine's height without its allocations. The measure pass runs
-// over every item on every frame, so building the strings only to count them
-// was most of what a render cost on a real database.
-func wrapCount(s string, maxWidth int) int {
-	n := 0
-	wrapPoints(s, maxWidth, func([]rune) { n++ })
-	return n
-}
-
 // --- Sync commands ---
 
 func syncPullCmd(e *sync.Engine, manual bool) tea.Cmd {
@@ -373,7 +338,7 @@ func syncPullTickCmd(d time.Duration) tea.Cmd {
 // safeToAutoPull reports whether a background reconcile can run without pulling
 // the ground out from under the user. A pull rewrites items, memberships and
 // ordering wholesale, which would corrupt a grab in progress or refresh a
-// detail overlay into a snapshot of something else. Every other mode defers to
+// reader into a snapshot of something else. Every other mode defers to
 // the next tick rather than skipping the pull outright.
 // projectStatusFilter is what the project pane is currently asking for. Closing
 // a project is what takes it out of the list, so the default hides the terminal
@@ -707,13 +672,13 @@ func undoCmd(b backend.Backend) tea.Cmd {
 	}
 }
 
-func fetchItemProjectsCmd(b backend.Backend, itemID string) tea.Cmd {
+func fetchItemProjectsCmd(b backend.Backend, item model.ProjectItem) tea.Cmd {
 	return func() tea.Msg {
-		projects, err := b.GetItemProjects(itemID)
+		projects, err := b.GetItemProjects(item.ID)
 		if err != nil {
 			return errMsg{err}
 		}
-		return itemProjectsMsg(projects)
+		return itemProjectsMsg{item: item, projects: projects}
 	}
 }
 
@@ -758,11 +723,28 @@ func fetchItemDetailCmd(b backend.Backend, itemID string, isBlocked bool) tea.Cm
 				pnames[bl.ID] = names
 			}
 		}
+		// GetBlockers answers only the other direction, so what this item
+		// blocks is read off the whole edge list.
+		edges, err := b.ListDependencies()
+		if err != nil {
+			return errMsg{err}
+		}
+		var dependents []model.ProjectItem
+		for _, e := range edges {
+			if e.DependsOnID != itemID {
+				continue
+			}
+			dep, err := b.GetItem(e.ItemID)
+			if err != nil {
+				return errMsg{err}
+			}
+			dependents = append(dependents, dep.ProjectItem)
+		}
 		tasks, err := b.ListTasks(itemID)
 		if err != nil {
 			return errMsg{err}
 		}
-		return itemDetailMsg{detail: detail, blockers: blockers, projectNames: pnames, tasks: tasks}
+		return itemDetailMsg{detail: detail, blockers: blockers, projectNames: pnames, dependents: dependents, tasks: tasks}
 	}
 }
 
@@ -1031,14 +1013,13 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case taskCreatedMsg, taskUpdatedMsg, taskDeletedMsg:
-		if m.itemDetail != nil {
-			return m, fetchItemDetailCmd(m.backend, m.itemDetail.ID, m.blockedSet[m.itemDetail.ID])
+		// The list refreshes either way, so its task rows and counts are right
+		// when the reader closes onto it.
+		refresh := m.fetchItems()
+		if m.readingItem() {
+			return m, tea.Batch(refresh, fetchItemDetailCmd(m.backend, m.itemDetail.ID, m.blockedSet[m.itemDetail.ID]))
 		}
-		// Refresh item list to update task counts and inline tasks
-		if cmd := m.fetchItems(); cmd != nil {
-			return m, cmd
-		}
-		return m, nil
+		return m, refresh
 
 	case itemCreatedMsg:
 		flashCmd := m.flash("Item created")
@@ -1049,7 +1030,7 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.statusMsg == "" {
 			flashCmd = m.flash("Item updated")
 		}
-		if m.appMode == modeItemDetail && m.itemDetail != nil {
+		if m.readingItem() {
 			return m, tea.Batch(
 				fetchProjectsCmd(m.backend, m.projectStatusFilter()),
 				fetchItemDetailCmd(m.backend, m.itemDetail.ID, m.blockedSet[m.itemDetail.ID]),
@@ -1073,7 +1054,7 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case projectUpdatedMsg:
 		flashCmd := m.flash("Project updated")
-		if m.appMode == modeProjectDetail && m.projectDetail != nil {
+		if m.appMode == modeReader && m.projectDetail != nil {
 			return m, tea.Batch(
 				fetchProjectsCmd(m.backend, m.projectStatusFilter()),
 				fetchProjectDetailCmd(m.backend, m.projectDetail.ID),
@@ -1083,8 +1064,14 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(fetchProjectsCmd(m.backend, m.projectStatusFilter()), flashCmd)
 
 	case projectDetailMsg:
+		// A refresh of the project already on screen keeps its scroll, so a
+		// rename or a status change does not throw the reader back to the top.
+		if m.appMode != modeReader || m.projectDetail == nil || m.projectDetail.ID != msg.project.ID {
+			m.readerScroll = 0
+		}
+		m.clearReader()
 		m.projectDetail = msg.project
-		m.appMode = modeProjectDetail
+		m.appMode = modeReader
 		return m, nil
 
 	case undoResultMsg:
@@ -1092,26 +1079,18 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(fetchProjectsCmd(m.backend, m.projectStatusFilter()), flashCmd)
 
 	case itemDetailMsg:
-		// Preserve the cursor when the overlay is already open (so
-		// toggling/deleting a task doesn't snap focus back to the item
-		// header). Only reset when entering the overlay fresh.
-		opening := m.appMode != modeItemDetail
+		// A refresh of the item already on screen keeps its scroll, so saving
+		// a note or adding a task does not throw the reader back to the top.
+		if !m.readingItem() || m.itemDetail.ID != msg.detail.ID {
+			m.readerScroll = 0
+		}
+		m.clearReader()
 		m.itemDetail = msg.detail
 		m.detailBlockers = msg.blockers
 		m.detailBlockerProjects = msg.projectNames
+		m.detailDependents = msg.dependents
 		m.detailTasks = msg.tasks
-		if opening {
-			m.detailTaskCursor = -1 // start on the item; tasks are >= 0
-			m.addingTask = false
-		} else if m.detailTaskCursor >= len(m.detailTasks) {
-			// Tasks shortened (e.g. delete) — clamp so we don't index
-			// past the end. Falling back to the item header is safe.
-			m.detailTaskCursor = len(m.detailTasks) - 1
-			if m.detailTaskCursor < -1 {
-				m.detailTaskCursor = -1
-			}
-		}
-		m.appMode = modeItemDetail
+		m.appMode = modeReader
 		return m, nil
 
 	case depTreeMsg:
@@ -1129,16 +1108,13 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, missCmd
 
 	case itemProjectsMsg:
-		if item := m.currentItem(); item != nil {
-			m.picker = newPickerForManage(m.projects, msg, *item)
-			m.appMode = modeProjectPicker
-		}
+		m.picker = newPickerForManage(m.projects, msg.projects, msg.item)
+		m.appMode = modeProjectPicker
 		return m, nil
 
 	case membershipUpdatedMsg:
 		flashCmd := m.flash("Project membership updated")
-		if m.returnMode == modeItemDetail && m.itemDetail != nil {
-			m.appMode = modeItemDetail
+		if m.readingItem() {
 			return m, tea.Batch(
 				fetchProjectsCmd(m.backend, m.projectStatusFilter()),
 				fetchItemDetailCmd(m.backend, m.itemDetail.ID, m.blockedSet[m.itemDetail.ID]),
@@ -1283,12 +1259,10 @@ func (m *App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleInputKey(msg)
 	case modeProjectPicker:
 		return m.handlePickerKey(msg)
-	case modeItemDetail:
-		return m.handleDetailKey(msg)
+	case modeReader:
+		return m.handleReaderKey(msg)
 	case modeExternalEdit:
 		return m, nil
-	case modeProjectDetail:
-		return m.handleProjectDetailKey(msg)
 	case modeEditProjectName, modeDropProject:
 		return m.handleInputKey(msg)
 	case modeHelp:
@@ -1521,23 +1495,8 @@ func (m *App) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			tasks := m.itemTasks[m.items[row.itemIdx].ID]
 			return m, toggleTaskCmd(m.backend, m.items[row.itemIdx].ID, tasks[row.taskIdx])
 		}
-		item := m.currentItem()
-		if !item.Completed && m.hasIncompleteTasks[item.ID] {
-			flashCmd := m.flash("Cannot complete: item has incomplete tasks")
-			return m, flashCmd
-		}
-		if m.blockedSet[item.ID] && !item.Completed {
-			flashCmd := m.flash("Cannot complete: item has unresolved blockers")
-			return m, flashCmd
-		}
-		toggled := !item.Completed
-		var flashCmd tea.Cmd
-		if toggled {
-			flashCmd = m.flash("Marked done")
-		} else {
-			flashCmd = m.flash("Marked incomplete")
-		}
-		return m, tea.Batch(updateItemCmd(m.backend, item.ID, model.UpdateProjectItem{Completed: &toggled}), flashCmd)
+		cmd, _ := m.handleItemActionKey(" ", m.listActionTarget(), modeNormal)
+		return m, cmd
 
 	case "d":
 		if m.activePane == itemPane && row != nil && row.kind == rowTask {
@@ -1552,80 +1511,25 @@ func (m *App) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case "x":
-		if m.activePane == itemPane && row != nil {
-			if row.kind == rowTask {
-				flashCmd := m.flash("Archive is only for items")
-				return m, flashCmd
-			}
-			item := m.currentItem()
-			archived := true
-			flashCmd := m.flash("Archived")
-			return m, tea.Batch(updateItemCmd(m.backend, item.ID, model.UpdateProjectItem{Archived: &archived}), flashCmd)
+	case "x", "e", "n", "p", "b", "B":
+		if m.activePane != itemPane || row == nil {
+			return m, nil
 		}
-		return m, nil
-
-	case "e":
-		if m.activePane == itemPane && row != nil {
-			if row.kind == rowTask {
-				flashCmd := m.flash("Edit is only for items")
-				return m, flashCmd
-			}
-			item := m.currentItem()
-			m.titleInput.SetValue(item.Title)
-			m.titleInput.Placeholder = ""
-			cmd := m.titleInput.Focus()
-			m.returnMode = modeNormal
-			m.appMode = modeEditTitle
-			return m, cmd
+		if row.kind == rowTask {
+			flashCmd := m.flash(itemOnlyMessages[msg.String()])
+			return m, flashCmd
 		}
-		return m, nil
-
-	case "n":
-		if m.activePane == itemPane && row != nil {
-			if row.kind == rowTask {
-				flashCmd := m.flash("Notes are only for items")
-				return m, flashCmd
-			}
-			item := m.currentItem()
-			notes := ""
-			if item.Notes != nil {
-				notes = *item.Notes
-			}
-			editCmd := m.openInEditor(editTarget{itemID: item.ID}, itemNoteFileName(item.ProjectItem), notes)
-			return m, editCmd
-		}
-		return m, nil
-
-	case "p":
-		if m.activePane == itemPane && row != nil {
-			if row.kind == rowTask {
-				flashCmd := m.flash("Project membership is only for items")
-				return m, flashCmd
-			}
-			item := m.currentItem()
-			m.returnMode = modeNormal
-			return m, fetchItemProjectsCmd(m.backend, item.ID)
-		}
-		return m, nil
+		cmd, _ := m.handleItemActionKey(msg.String(), m.listActionTarget(), modeNormal)
+		return m, cmd
 
 	case "t":
-		if m.activePane == itemPane && row != nil {
-			// Works from an item row or one of its task rows — both
-			// resolve to the owning item.
-			item := m.currentItem()
-			if item == nil {
-				return m, nil
-			}
-			m.addTaskItemID = item.ID
-			m.addTaskItemTitle = item.Title
-			m.titleInput.SetValue("")
-			m.titleInput.Placeholder = "New task..."
-			m.returnMode = modeNormal
-			m.appMode = modeAddTask
-			return m, m.titleInput.Focus()
+		// Works from an item row or one of its task rows — both resolve to
+		// the owning item.
+		if m.activePane != itemPane || row == nil {
+			return m, nil
 		}
-		return m, nil
+		cmd, _ := m.handleItemActionKey("t", m.listActionTarget(), modeNormal)
+		return m, cmd
 
 	case "u":
 		return m, undoCmd(m.backend)
@@ -1710,47 +1614,119 @@ func (m *App) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case "b":
-		if m.activePane == itemPane && row != nil {
-			if row.kind == rowTask {
-				flashCmd := m.flash("Dependency linking is only for items")
-				return m, flashCmd
-			}
-			item := m.currentItem()
-			m.depItemID = item.ID
-			m.depItemName = item.Title
-			m.depItemHandle = itemHandle(item.ProjectItem)
-			return m, fetchDepCandidatesCmd(m.backend, m.projects)
-		}
-		return m, nil
-
-	case "B":
-		if m.activePane == itemPane && row != nil {
-			if row.kind == rowTask {
-				flashCmd := m.flash("Dependency unlinking is only for items")
-				return m, flashCmd
-			}
-			item := m.currentItem()
-			m.depItemID = item.ID
-			m.depItemName = item.Title
-			m.depItemHandle = itemHandle(item.ProjectItem)
-			return m, fetchDepBlockersCmd(m.backend, item.ID)
-		}
-		return m, nil
-
 	case "T":
 		// Works from either pane. On an item it opens the browser standing on
 		// that item; anywhere else it opens at the top of the forest, so
 		// browsing the dependencies never requires finding an item first.
-		focus := ""
 		if m.activePane == itemPane && row != nil {
-			focus = m.currentItem().ID
+			cmd, _ := m.handleItemActionKey("T", m.listActionTarget(), modeNormal)
+			return m, cmd
 		}
-		treeCmd := m.openDepTree(focus)
+		treeCmd := m.openDepTree("")
 		return m, treeCmd
 	}
 
 	return m, nil
+}
+
+// itemOnlyMessages answers an item action pressed on a task row.
+var itemOnlyMessages = map[string]string{
+	"x": "Archive is only for items",
+	"e": "Edit is only for items",
+	"n": "Notes are only for items",
+	"p": "Project membership is only for items",
+	"b": "Dependency linking is only for items",
+	"B": "Dependency unlinking is only for items",
+}
+
+// itemActionTarget is the item an action key acts on, with the two facts the
+// done toggle checks before it lets an item close.
+type itemActionTarget struct {
+	item               model.ProjectItem
+	hasIncompleteTasks bool
+	blocked            bool
+}
+
+func (m *App) listActionTarget() itemActionTarget {
+	item := m.currentItem()
+	return itemActionTarget{
+		item:               item.ProjectItem,
+		hasIncompleteTasks: m.hasIncompleteTasks[item.ID],
+		blocked:            m.blockedSet[item.ID],
+	}
+}
+
+// handleItemActionKey runs one item action key on target. The list and the
+// reader both send their item keys here, so a key does the same thing in
+// either place. A prompt the key opens returns to returnTo. handled is false
+// for a key that is not an item action.
+func (m *App) handleItemActionKey(key string, target itemActionTarget, returnTo appMode) (cmd tea.Cmd, handled bool) {
+	item := target.item
+	switch key {
+	case " ":
+		if !item.Completed && target.hasIncompleteTasks {
+			return m.flash("Cannot complete: item has incomplete tasks"), true
+		}
+		if !item.Completed && target.blocked {
+			return m.flash("Cannot complete: item has unresolved blockers"), true
+		}
+		toggled := !item.Completed
+		note := "Marked incomplete"
+		if toggled {
+			note = "Marked done"
+		}
+		flashCmd := m.flash(note)
+		return tea.Batch(updateItemCmd(m.backend, item.ID, model.UpdateProjectItem{Completed: &toggled}), flashCmd), true
+
+	case "x":
+		archived := true
+		flashCmd := m.flash("Archived")
+		return tea.Batch(updateItemCmd(m.backend, item.ID, model.UpdateProjectItem{Archived: &archived}), flashCmd), true
+
+	case "e":
+		m.editTitleItemID = item.ID
+		m.titleInput.SetValue(item.Title)
+		m.titleInput.Placeholder = ""
+		m.returnMode = returnTo
+		m.appMode = modeEditTitle
+		return m.titleInput.Focus(), true
+
+	case "n":
+		notes := ""
+		if item.Notes != nil {
+			notes = *item.Notes
+		}
+		return m.openInEditor(editTarget{itemID: item.ID}, itemNoteFileName(item), notes), true
+
+	case "p":
+		m.returnMode = returnTo
+		return fetchItemProjectsCmd(m.backend, item), true
+
+	case "t":
+		m.addTaskItemID = item.ID
+		m.addTaskItemTitle = item.Title
+		m.titleInput.SetValue("")
+		m.titleInput.Placeholder = "New task..."
+		m.returnMode = returnTo
+		m.appMode = modeAddTask
+		return m.titleInput.Focus(), true
+
+	case "b":
+		m.depItemID = item.ID
+		m.depItemName = item.Title
+		m.depItemHandle = itemHandle(item)
+		return fetchDepCandidatesCmd(m.backend, m.projects), true
+
+	case "B":
+		m.depItemID = item.ID
+		m.depItemName = item.Title
+		m.depItemHandle = itemHandle(item)
+		return fetchDepBlockersCmd(m.backend, item.ID), true
+
+	case "T":
+		return m.openDepTree(item.ID), true
+	}
+	return nil, false
 }
 
 func (m *App) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -1788,7 +1764,7 @@ func (m *App) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, createProjectCmd(m.backend, model.CreateProject{Name: value})
 
 		case modeAddTask:
-			m.appMode = modeNormal
+			m.appMode = m.returnMode
 			m.titleInput.Blur()
 			if m.addTaskItemID == "" {
 				return m, nil
@@ -1798,17 +1774,10 @@ func (m *App) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case modeEditTitle:
 			m.appMode = m.returnMode
 			m.titleInput.Blur()
-			// Edit can be entered from either the main pane (currentItem)
-			// or the detail overlay (itemDetail).
-			var itemID string
-			if m.returnMode == modeItemDetail && m.itemDetail != nil {
-				itemID = m.itemDetail.ID
-			} else if item := m.currentItem(); item != nil {
-				itemID = item.ID
-			} else {
+			if m.editTitleItemID == "" {
 				return m, nil
 			}
-			return m, updateItemCmd(m.backend, itemID, model.UpdateProjectItem{Title: &value})
+			return m, updateItemCmd(m.backend, m.editTitleItemID, model.UpdateProjectItem{Title: &value})
 
 		case modeEditProjectName:
 			m.appMode = m.returnMode
@@ -1890,269 +1859,6 @@ func (m *App) handlePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.appMode = m.returnMode
 		m.pendingTitle = ""
 		return m, nil
-	}
-
-	return m, nil
-}
-
-func (m *App) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if m.itemDetail == nil {
-		return m, nil
-	}
-
-	// Adding a new task — route to text input. Applies regardless of
-	// where the detail cursor is, since `t` always creates under the
-	// overlay's single item.
-	if m.addingTask {
-		switch msg.String() {
-		case "enter":
-			title := m.titleInput.Value()
-			m.addingTask = false
-			m.titleInput.Blur()
-			if title == "" {
-				return m, nil
-			}
-			return m, createTaskCmd(m.backend, m.itemDetail.ID, title)
-		case "esc":
-			m.addingTask = false
-			m.titleInput.Blur()
-			return m, nil
-		default:
-			var cmd tea.Cmd
-			m.titleInput, cmd = m.titleInput.Update(msg)
-			return m, cmd
-		}
-	}
-
-	// detailTaskCursor encodes position:
-	//   -1 = on the item
-	//    0..len(detailTasks)-1 = on that task
-	onTask := m.detailTaskCursor >= 0 && m.detailTaskCursor < len(m.detailTasks)
-
-	switch msg.String() {
-	case "esc", "q":
-		m.itemDetail = nil
-		m.detailBlockers = nil
-		m.detailTasks = nil
-		if m.detailFromTree && m.depTree.tree != nil {
-			m.detailFromTree = false
-			m.appMode = modeDepTree
-			return m, nil
-		}
-		m.appMode = modeNormal
-		// The tree holds a snapshot of every item; drop it with the overlay
-		// rather than carrying it for the rest of the session.
-		m.depTree = depTreeState{}
-		m.detailFromTree = false
-		return m, nil
-
-	case "j", "down":
-		// Walk -1 → 0 → 1 → … → len-1 (clamped).
-		if m.detailTaskCursor < len(m.detailTasks)-1 {
-			m.detailTaskCursor++
-		}
-		return m, nil
-
-	case "k", "up":
-		// Walk toward the item header, clamped at -1.
-		if m.detailTaskCursor > -1 {
-			m.detailTaskCursor--
-		}
-		return m, nil
-
-	case "tab":
-		// Toggle between item zone and first task; a quick keyboard jump
-		// without having to j/k through any tasks in between.
-		if onTask {
-			m.detailTaskCursor = -1
-		} else if len(m.detailTasks) > 0 {
-			m.detailTaskCursor = 0
-		}
-		return m, nil
-
-	case " ":
-		if onTask {
-			return m, toggleTaskCmd(m.backend, m.itemDetail.ID, m.detailTasks[m.detailTaskCursor])
-		}
-		// Item-level: same incomplete-task/blocked guards as main pane.
-		for _, task := range m.detailTasks {
-			if !task.Completed {
-				flashCmd := m.flash("Cannot complete: item has incomplete tasks")
-				return m, flashCmd
-			}
-		}
-		if m.blockedSet[m.itemDetail.ID] && !m.itemDetail.Completed {
-			flashCmd := m.flash("Cannot complete: item has unresolved blockers")
-			return m, flashCmd
-		}
-		toggled := !m.itemDetail.Completed
-		var flashCmd tea.Cmd
-		if toggled {
-			flashCmd = m.flash("Marked done")
-		} else {
-			flashCmd = m.flash("Marked incomplete")
-		}
-		return m, tea.Batch(updateItemCmd(m.backend, m.itemDetail.ID, model.UpdateProjectItem{Completed: &toggled}), flashCmd)
-
-	case "d":
-		if onTask {
-			task := m.detailTasks[m.detailTaskCursor]
-			// Nudge cursor up if we're deleting the last task row so the
-			// post-refresh cursor doesn't land past the end.
-			if m.detailTaskCursor >= len(m.detailTasks)-1 && m.detailTaskCursor > 0 {
-				m.detailTaskCursor--
-			} else if m.detailTaskCursor >= len(m.detailTasks)-1 {
-				// Deleting the only task — return to the item.
-				m.detailTaskCursor = -1
-			}
-			return m, deleteTaskCmd(m.backend, m.itemDetail.ID, task.ID)
-		}
-		return m, nil
-
-	case "enter":
-		// Inert on task rows (matches main pane).
-		return m, nil
-
-	case "x":
-		if onTask {
-			flashCmd := m.flash("Archive is only for items")
-			return m, flashCmd
-		}
-		archived := true
-		id := m.itemDetail.ID
-		flashCmd := m.flash("Archived")
-		m.appMode = modeNormal
-		m.itemDetail = nil
-		return m, tea.Batch(updateItemCmd(m.backend, id, model.UpdateProjectItem{Archived: &archived}), flashCmd)
-
-	case "e":
-		if onTask {
-			flashCmd := m.flash("Edit is only for items")
-			return m, flashCmd
-		}
-		m.titleInput.SetValue(m.itemDetail.Title)
-		m.titleInput.Placeholder = ""
-		cmd := m.titleInput.Focus()
-		m.returnMode = modeItemDetail
-		m.appMode = modeEditTitle
-		return m, cmd
-
-	case "n":
-		if onTask {
-			flashCmd := m.flash("Notes are only for items")
-			return m, flashCmd
-		}
-		notes := ""
-		if m.itemDetail.Notes != nil {
-			notes = *m.itemDetail.Notes
-		}
-		editCmd := m.openInEditor(editTarget{itemID: m.itemDetail.ID}, itemNoteFileName(m.itemDetail.ProjectItem), notes)
-		return m, editCmd
-
-	case "p":
-		if onTask {
-			flashCmd := m.flash("Project membership is only for items")
-			return m, flashCmd
-		}
-		m.returnMode = modeItemDetail
-		return m, fetchItemProjectsCmd(m.backend, m.itemDetail.ID)
-
-	case "b":
-		if onTask {
-			flashCmd := m.flash("Dependency linking is only for items")
-			return m, flashCmd
-		}
-		m.depItemID = m.itemDetail.ID
-		m.depItemName = m.itemDetail.Title
-		m.depItemHandle = itemHandle(m.itemDetail.ProjectItem)
-		return m, fetchDepCandidatesCmd(m.backend, m.projects)
-
-	case "B":
-		if onTask {
-			flashCmd := m.flash("Dependency unlinking is only for items")
-			return m, flashCmd
-		}
-		m.depItemID = m.itemDetail.ID
-		m.depItemName = m.itemDetail.Title
-		m.depItemHandle = itemHandle(m.itemDetail.ProjectItem)
-		return m, fetchDepBlockersCmd(m.backend, m.itemDetail.ID)
-
-	case "T":
-		// The blockers listed above are one level deep and lead nowhere. This
-		// is the same relation with the rest of the chain attached, and it can
-		// be walked.
-		treeCmd := m.openDepTree(m.itemDetail.ID)
-		return m, treeCmd
-
-	case "t":
-		// Always creates a task under the overlay's item, regardless of
-		// whether the cursor is on the item or on an existing task.
-		m.addingTask = true
-		m.titleInput.SetValue("")
-		m.titleInput.Placeholder = "New task..."
-		return m, m.titleInput.Focus()
-
-	case "u":
-		return m, undoCmd(m.backend)
-	}
-
-	return m, nil
-}
-
-func (m *App) handleProjectDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if m.projectDetail == nil {
-		return m, nil
-	}
-
-	switch msg.String() {
-	case "esc", "q":
-		m.appMode = modeNormal
-		m.projectDetail = nil
-		return m, nil
-
-	case "e":
-		m.titleInput.SetValue(m.projectDetail.Name)
-		m.titleInput.Placeholder = ""
-		cmd := m.titleInput.Focus()
-		m.returnMode = modeProjectDetail
-		m.appMode = modeEditProjectName
-		return m, cmd
-
-	case "d":
-		desc := ""
-		if m.projectDetail.Description != nil {
-			desc = *m.projectDetail.Description
-		}
-		editCmd := m.openInEditor(editTarget{projectID: m.projectDetail.ID}, projectDescriptionFileName(m.projectDetail.Project), desc)
-		return m, editCmd
-
-	case "c":
-		if model.IsTerminalStatus(m.projectDetail.Status) {
-			flashCmd := m.flash("Already closed — r reopens it")
-			return m, flashCmd
-		}
-		return m, setProjectStatusCmd(m.backend, m.projectDetail.ID, model.StatusCompleted, nil)
-
-	case "x":
-		if model.IsTerminalStatus(m.projectDetail.Status) {
-			flashCmd := m.flash("Already closed — r reopens it")
-			return m, flashCmd
-		}
-		// A reason is required, so dropping is a prompt rather than a keypress:
-		// "deferred" invites the same idea back, "dropped, and here is why" does not.
-		m.titleInput.SetValue("")
-		m.titleInput.Placeholder = "Why dropped rather than deferred?"
-		cmd := m.titleInput.Focus()
-		m.returnMode = modeProjectDetail
-		m.appMode = modeDropProject
-		return m, cmd
-
-	case "r":
-		if !model.IsTerminalStatus(m.projectDetail.Status) {
-			flashCmd := m.flash("Already active")
-			return m, flashCmd
-		}
-		return m, setProjectStatusCmd(m.backend, m.projectDetail.ID, model.StatusActive, nil)
 	}
 
 	return m, nil
@@ -2604,12 +2310,8 @@ func (m *App) View() string {
 	case modeProjectPicker:
 		overlay := m.picker.view(m.width)
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, overlay)
-	case modeItemDetail:
-		overlay := m.renderDetailOverlay()
-		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, overlay)
-	case modeProjectDetail:
-		overlay := m.renderProjectDetailOverlay()
-		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, overlay)
+	case modeReader:
+		return m.renderReader()
 	case modeHelp:
 		overlay := m.renderHelpOverlay()
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, overlay)
@@ -2708,189 +2410,6 @@ func (m *App) renderInputOverlay() string {
 	return overlayBoxStyle.Width(boxWidth).Render(content)
 }
 
-func (m *App) renderDetailOverlay() string {
-	d := m.itemDetail
-	if d == nil {
-		return ""
-	}
-
-	header := overlayTitleStyle.Render(fmt.Sprintf("Item %s", itemHandle(d.ProjectItem)))
-
-	status := "○ incomplete"
-	if d.Completed {
-		status = "✓ completed"
-	}
-	if d.Archived {
-		status = "▪ archived"
-	}
-
-	var projectNames []string
-	for _, p := range d.Projects {
-		projectNames = append(projectNames, p.Name)
-	}
-
-	var lines []string
-	lines = append(lines, header)
-	lines = append(lines, "")
-	itemPrefix := "  "
-	if m.detailTaskCursor == -1 {
-		itemPrefix = itemSelectedStyle.Render("> ")
-	}
-	lines = append(lines, fmt.Sprintf("%s%s    %s", itemPrefix, d.Title, dimStyle.Render(status)))
-	lines = append(lines, "")
-	lines = append(lines, dimStyle.Render(fmt.Sprintf("  Projects: %s", strings.Join(projectNames, ", "))))
-	if d.Repo != nil && *d.Repo != "" {
-		lines = append(lines, dimStyle.Render(fmt.Sprintf("  Repo: %s", *d.Repo)))
-	}
-	lines = append(lines, dimStyle.Render(fmt.Sprintf("  Created: %s", d.CreatedAt.Format("Jan 2, 2006"))))
-
-	if d.Notes != nil && *d.Notes != "" {
-		lines = append(lines, "")
-		lines = append(lines, dimStyle.Render("  ─── Notes ─────────────────────────"))
-		for _, noteLine := range strings.Split(*d.Notes, "\n") {
-			lines = append(lines, "  "+noteLine)
-		}
-	}
-
-	if len(m.detailBlockers) > 0 {
-		lines = append(lines, "")
-		lines = append(lines, dimStyle.Render("  ─── Blocked by ────────────────────"))
-		// Determine which projects this item belongs to
-		detailProjects := make(map[string]bool)
-		for _, p := range d.Projects {
-			detailProjects[p.Name] = true
-		}
-		for _, b := range m.detailBlockers {
-			prefix := ""
-			if names, ok := m.detailBlockerProjects[b.ID]; ok {
-				inSame := false
-				for _, n := range names {
-					if detailProjects[n] {
-						inSame = true
-						break
-					}
-				}
-				if !inSame && len(names) > 0 {
-					prefix = blockerProjectStyle.Render(names[0] + ": ")
-				}
-			}
-			lines = append(lines, blockerStyle.Render(
-				fmt.Sprintf("○ %s%s (%s)", prefix, b.Title, itemHandle(b)),
-			))
-		}
-	}
-
-	// Tasks section
-	if len(m.detailTasks) > 0 || m.addingTask {
-		done := 0
-		for _, t := range m.detailTasks {
-			if t.Completed {
-				done++
-			}
-		}
-		lines = append(lines, "")
-		lines = append(lines, dimStyle.Render(fmt.Sprintf("  ─── Tasks (%d/%d) ──────────────────", done, len(m.detailTasks))))
-		for i, t := range m.detailTasks {
-			check := "○"
-			title := t.Title
-			if t.Completed {
-				check = "✓"
-				title = taskCompletedStyle.Render(title)
-			}
-			line := fmt.Sprintf("%s %s", check, title)
-			if i == m.detailTaskCursor {
-				lines = append(lines, taskSelectedStyle.Render("> "+line))
-			} else {
-				lines = append(lines, taskNormalStyle.Render(line))
-			}
-		}
-		if m.addingTask {
-			lines = append(lines, "    "+m.titleInput.View())
-		}
-	}
-
-	lines = append(lines, "")
-	var hints string
-	onTask := m.detailTaskCursor >= 0 && m.detailTaskCursor < len(m.detailTasks)
-	switch {
-	case m.addingTask:
-		hints = "  [Enter]create  [Esc]cancel"
-	case onTask:
-		hints = "  [space]toggle  [d]elete  [t]add task  [Tab]item  [j/k]navigate  [Esc]close"
-	default:
-		hints = "  [e]dit  [n]otes  [p]rojects  [t]ask  [b]lock  [B]unblock  [T]ree  [space]done  [x]archive  [Tab/j]tasks  [Esc]close"
-	}
-	lines = append(lines, dimStyle.Render(hints))
-
-	content := strings.Join(lines, "\n")
-
-	boxWidth := m.width - 4
-	if boxWidth > 70 {
-		boxWidth = 70
-	}
-	if boxWidth < 40 {
-		boxWidth = 40
-	}
-
-	return overlayBoxStyle.Width(boxWidth).Render(content)
-}
-
-func (m *App) renderProjectDetailOverlay() string {
-	p := m.projectDetail
-	if p == nil {
-		return ""
-	}
-
-	header := overlayTitleStyle.Render(fmt.Sprintf("Project %s", shortID(p.ID)))
-
-	var lines []string
-	lines = append(lines, header)
-	lines = append(lines, "")
-	lines = append(lines, fmt.Sprintf(
-		"  %s    %s",
-		p.Name,
-		dimStyle.Render(fmt.Sprintf("%d items", p.ItemCount)),
-	))
-	lines = append(lines, dimStyle.Render(fmt.Sprintf("  Created: %s", p.CreatedAt.Format("Jan 2, 2006"))))
-	if model.IsTerminalStatus(p.Status) {
-		closed := p.Status
-		if p.ClosedAt != nil {
-			closed += " " + p.ClosedAt.Format("Jan 2, 2006")
-		}
-		lines = append(lines, dimStyle.Render("  "+closed))
-		if p.StatusReason != nil && *p.StatusReason != "" {
-			lines = append(lines, dimStyle.Render("  Reason: "+*p.StatusReason))
-		}
-	}
-
-	if p.Description != nil && *p.Description != "" {
-		lines = append(lines, "")
-		lines = append(lines, dimStyle.Render("  ─── Description ───────────────────"))
-		for _, line := range strings.Split(*p.Description, "\n") {
-			lines = append(lines, "  "+line)
-		}
-	}
-
-	lines = append(lines, "")
-	actions := "  [e]dit name  [d]escription  [c]omplete  dro[x]  [Esc]close"
-	if model.IsTerminalStatus(p.Status) {
-		actions = "  [e]dit name  [d]escription  [r]eopen  [Esc]close"
-	}
-	lines = append(lines, dimStyle.Render(actions))
-
-	content := strings.Join(lines, "\n")
-
-	boxWidth := m.width - 4
-	if boxWidth > 70 {
-		boxWidth = 70
-	}
-	if boxWidth < 40 {
-		boxWidth = 40
-	}
-
-	return overlayBoxStyle.Width(boxWidth).Render(content)
-}
-
 func (m *App) renderHelpOverlay() string {
 	var lines []string
 	lines = append(lines, overlayTitleStyle.Render("Keybindings"))
@@ -2903,28 +2422,34 @@ func (m *App) renderHelpOverlay() string {
   Ctrl+d/u       Half-page down/up
   h/l ←/→       Switch panes
   Tab            Toggle pane focus
-  Enter          Select / item detail`
+  Enter          Read the item or project
+
+  In the reader
+  j/k  Ctrl+d/u  Scroll by line / half page
+  g/G            Top/bottom
+  Esc  q  h      Back to the list`
 
 	lines = append(lines, nav)
 
 	if m.activePane == projectPane {
 		actions := `
   Project Pane
-  Enter          Project detail
   a              Add project
   m              Move/reorder project
   C              Show/hide closed projects
   space          Toggle multi-select
   Esc            Clear selections
 
-  In project detail
+  Reading a project
+  e              Edit name
+  d              Edit description in $EDITOR
   c              Complete project
   x              Drop project (asks why)
   r              Reopen a closed project`
 		lines = append(lines, actions)
 	} else {
 		actions := `
-  On an item row
+  On an item row, or reading an item
   space          Toggle done
   a              Add item
   A              Add item to multiple projects
@@ -3376,7 +2901,7 @@ func (m *App) renderItemPane(width, height int) string {
 
 // paneLayout is where every row of the item pane lands in line space. Scrolling
 // counts lines rather than rows because a row can be worth more than one line:
-// a group header, a blocker, a wrapped note. A scroll offset counted in rows
+// a group header or a blocker. A scroll offset counted in rows
 // believes the cursor is on screen while the render runs out of lines before
 // reaching it, and the pane stops following the cursor.
 type paneLayout struct {
@@ -3424,7 +2949,7 @@ func (m *App) itemPaneLayout(width int) paneLayout {
 			body++
 		}
 		if m.rowIsLastOfItem(i) {
-			body += m.itemTrailerHeight(m.items[m.rows[i].itemIdx], width)
+			body += m.itemTrailerHeight(m.items[m.rows[i].itemIdx])
 		}
 		l.blockStart[i] = l.total
 		l.anchor[i] = l.total + lead
@@ -3521,23 +3046,14 @@ func (m *App) renderRowBlock(i, width int) []string {
 	return lines
 }
 
-// itemTrailerHeight counts what itemTrailerLines would draw. It walks the same
-// wrapping rather than estimating it: a height that disagrees with the render
-// by one line is the scroll bug all over again.
-func (m *App) itemTrailerHeight(item model.ProjectItemInProject, width int) int {
-	height := len(m.itemBlockers[item.ID])
-	if item.Notes == nil || *item.Notes == "" {
-		return height
-	}
-	wrapWidth := max(width-16, 1)
-	for _, noteLine := range strings.Split(*item.Notes, "\n") {
-		height += wrapCount(noteLine, wrapWidth)
-	}
-	return height
+// itemTrailerHeight counts what itemTrailerLines draws: one line per blocker.
+// A height that disagrees with the render by one line breaks the scroll.
+func (m *App) itemTrailerHeight(item model.ProjectItemInProject) int {
+	return len(m.itemBlockers[item.ID])
 }
 
-// itemTrailerLines renders what hangs below an item: what blocks it, and a
-// preview of its notes.
+// itemTrailerLines renders what hangs below an item: what blocks it. A note is
+// read in the reader, and the row's ≡ says one exists.
 func (m *App) itemTrailerLines(item model.ProjectItemInProject, width int) []string {
 	var lines []string
 
@@ -3588,26 +3104,6 @@ func (m *App) itemTrailerLines(item model.ProjectItemInProject, width int) []str
 				lines = append(lines, blockerStyle.Render(truncate(
 					fmt.Sprintf("└─ blocked by: %s (%s)", b.Title, handle), max(width-5, 1),
 				)))
-			}
-		}
-	}
-
-	if item.Notes == nil || *item.Notes == "" {
-		return lines
-	}
-
-	notePrefix := "     " + notesConnectorStyle.Render("└─ notes ▸ ")
-	// 16 is what the connector and the continuation indent both cost. A floor
-	// above that would put the note past the pane border in a narrow window.
-	wrapWidth := max(width-16, 1)
-	first := true
-	for _, noteLine := range strings.Split(*item.Notes, "\n") {
-		for _, wrapped := range wrapLine(noteLine, wrapWidth) {
-			if first {
-				lines = append(lines, notePrefix+wrapped)
-				first = false
-			} else {
-				lines = append(lines, notesPreviewStyle.Render(wrapped))
 			}
 		}
 	}
@@ -3698,7 +3194,7 @@ func (m *App) statusBarHints() string {
 	if row := m.currentRow(); row != nil && row.kind == rowTask {
 		return "[space]toggle [d]elete [t]ask [J/K]next/prev item [T]ree [/]search"
 	}
-	hints := "[Enter]detail [space]done [T]ree [a]dd [x]archive [e]dit [n]otes [t]ask [J/K]item [m]ove [b]lock [B]unblock [/]search"
+	hints := "[Enter]read [space]done [T]ree [a]dd [x]archive [e]dit [n]otes [t]ask [J/K]item [m]ove [b]lock [B]unblock [/]search"
 	if m.filter != filterNone {
 		hints += " [0]reset"
 	}

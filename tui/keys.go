@@ -17,7 +17,7 @@ const (
 	modeAddTask                 // text input: new sub-task on the item pane's item
 	modeEditTitle               // text input: edit existing item title
 	modeProjectPicker           // checkbox picker: manage project membership
-	modeItemDetail              // expanded item view (read-only with action keys)
+	modeReader                  // full-screen reader: one item or project, markdown rendered
 	modeExternalEdit            // $EDITOR holds the terminal: notes or a project description
 	modeHelp                    // keybinding reference overlay
 	modeSearch                  // search text input + results
@@ -25,7 +25,6 @@ const (
 	modeMoveProject             // grab project, j/k to reposition
 	modeDepLink                 // pick item to add as dependency
 	modeDepUnlink               // pick existing dependency to remove
-	modeProjectDetail           // expanded project view (read-only with action keys)
 	modeEditProjectName         // text input: edit project name
 	modeDropProject             // text input: the reason a project is dropped rather than deferred
 	modeDepTree                 // dependency tree, walked by drilling into a row

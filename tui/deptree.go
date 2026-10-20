@@ -699,9 +699,9 @@ func (m *App) renderDepTreeStatusBar() string {
 	case s.searching:
 		left = truncate("[Enter]apply [Esc]clear", avail)
 	case s.active == forestPane:
-		left = truncate("[j/k]move [l]focus [/]search [a]finished [Enter]detail [Esc]back", avail)
+		left = truncate("[j/k]move [l]focus [/]search [a]finished [Enter]read [Esc]back", avail)
 	default:
-		left = truncate("[j/k]move [l]drill [h]back [i]flip [Enter]detail [Esc]back", avail)
+		left = truncate("[j/k]move [l]drill [h]back [i]flip [Enter]read [Esc]back", avail)
 	}
 
 	padding := m.width - lipgloss.Width(left) - rightWidth - 4
