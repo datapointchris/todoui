@@ -86,9 +86,12 @@ ichrisbirch and arrives with sync. todoui has no key that sets it.
 `Enter` opens the reader, a full screen holding one item or one project. An item shows its fields,
 what blocks it, what it blocks, its tasks, and its notes rendered as markdown. A project shows its
 status, its open and done counts, and its description rendered the same way. `j`/`k` scroll a line,
-`Ctrl+d`/`Ctrl+u` half a screen, and `g`/`G` jump to either end. `Esc`, `q` or `h` returns to the
-list on the same row. The item keys act on the item shown, so `n` edits the note in `$EDITOR` and
-the reader shows the result. The list draws no note text. A `≡` on the row says the item has one.
+`Ctrl+d`/`Ctrl+u` half a screen, and `g`/`G` jump to either end. `Esc`, `q` or `h` goes back to
+where the reader was opened: the list on the same row, or the dependency browser. The item keys act
+on the item shown, so `n` edits the note in `$EDITOR` and the reader shows the result. `u` undoes
+the last change, and the reader shows that too. A placeholder written as `<word>` shows as written
+rather than being read as an HTML tag. The list draws no note text. A `≡` on the row says the item
+has one.
 
 `b` links an item this one is blocked by. A link that would close a cycle is refused. `T` opens the
 dependency browser. The left pane is every tree, searchable with `/`. The right pane is the tree you
@@ -149,7 +152,7 @@ unreachable shows the last 8 characters of its id until its push lands and earns
 
 With sync on, every edit is queued and pushed as you make it. The TUI pulls on launch, then again
 every `sync.interval` (default two minutes) for as long as it is open. A pull waits while a text
-input, an overlay, a detail view or a move is open, and runs on the next tick instead. It never
+input, an overlay, the reader or a move is open, and runs on the next tick instead. It never
 moves the ground under an edit.
 
 Queued pushes retry on a timer. A change made while the API was unreachable is sent once it comes

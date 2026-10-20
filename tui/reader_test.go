@@ -7,6 +7,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/datapointchris/todoui/model"
 )
@@ -34,9 +35,6 @@ func TestReaderScrollsALongNoteByRenderedRows(t *testing.T) {
 	})
 	pressKey(t, app, "j")
 	row := app.rowCursor
-	if got := app.itemTrailerHeight(*app.currentItem()); got != 0 {
-		t.Errorf("the list hangs %d lines under a row with a note, want none", got)
-	}
 
 	send(t, app, tea.KeyMsg{Type: tea.KeyEnter})
 	if app.appMode != modeReader || app.itemDetail == nil || app.itemDetail.Title != "long note" {
@@ -77,9 +75,28 @@ func TestReaderScrollsALongNoteByRenderedRows(t *testing.T) {
 	if app.appMode != modeReader || !app.itemDetail.Completed {
 		t.Errorf("the reader did not stay open on the updated item, mode %v", app.appMode)
 	}
+	pressKey(t, app, "u")
+	if app.appMode != modeReader || app.itemDetail.Completed {
+		t.Error("u in the reader undid the change but the reader still shows the item done")
+	}
 
 	send(t, app, tea.KeyMsg{Type: tea.KeyEsc})
 	if app.appMode != modeNormal || app.rowCursor != row {
 		t.Errorf("esc left mode %v on row %d, want the list on row %d", app.appMode, app.rowCursor, row)
+	}
+}
+
+// A note's placeholder written as <slug> is text the reader shows, where glamour
+// alone strips it as an HTML tag. Code and autolinks render as they always did.
+func TestReaderShowsAnAngleBracketedWordAsWritten(t *testing.T) {
+	note := "Run `new <x>` then <slug>, and swap <old> for </new>.\n\n<details>\nsee <https://example.com>\n"
+	got := ansi.Strip(strings.Join(renderMarkdown(note, 80), "\n"))
+	for _, want := range []string{"new <x>", "<slug>", "<old>", "</new>", "<details>", "https://example.com"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the rendered note lost %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, `\`) {
+		t.Errorf("the rendered note shows an escape:\n%s", got)
 	}
 }

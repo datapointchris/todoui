@@ -1,7 +1,9 @@
 package tui
 
 import (
+	"bytes"
 	"fmt"
+	"slices"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -9,6 +11,10 @@ import (
 	markdownansi "github.com/charmbracelet/glamour/ansi"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/yuin/goldmark"
+	mdast "github.com/yuin/goldmark/ast"
+	"github.com/yuin/goldmark/extension"
+	mdtext "github.com/yuin/goldmark/text"
 
 	"github.com/datapointchris/todoui/model"
 )
@@ -96,11 +102,61 @@ func renderMarkdown(source string, width int) []string {
 	out := source
 	r, err := glamour.NewTermRenderer(glamour.WithStyles(readerMarkdownStyle), glamour.WithWordWrap(width))
 	if err == nil {
-		if rendered, err := r.Render(source); err == nil {
+		if rendered, err := r.Render(htmlAsText(source)); err == nil {
 			out = rendered
 		}
 	}
 	return wrapRows(strings.Trim(out, "\n"), width)
+}
+
+// htmlParser parses as glamour does, so it finds the raw HTML glamour would.
+var htmlParser = goldmark.New(goldmark.WithExtensions(extension.GFM, extension.DefinitionList)).Parser()
+
+// htmlAsText escapes each `<` that opens raw HTML, which glamour would strip,
+// so a placeholder like `<slug>` shows as written. It parses again until none
+// is left, because escaping a block's opening tag can expose inline tags.
+func htmlAsText(source string) string {
+	src := []byte(source)
+	for range bytes.Count(src, []byte("<")) {
+		var at []int
+		_ = mdast.Walk(htmlParser.Parse(mdtext.NewReader(src)), func(n mdast.Node, entering bool) (mdast.WalkStatus, error) {
+			if !entering {
+				return mdast.WalkContinue, nil
+			}
+			var segs []mdtext.Segment
+			switch n := n.(type) {
+			case *mdast.RawHTML:
+				segs = n.Segments.Sliced(0, n.Segments.Len())
+			case *mdast.HTMLBlock:
+				segs = n.Lines().Sliced(0, n.Lines().Len())
+				if n.HasClosure() {
+					segs = append(segs, n.ClosureLine)
+				}
+			}
+			for _, s := range segs {
+				for i := s.Start; i < s.Stop; i++ {
+					if src[i] == '<' {
+						at = append(at, i)
+					}
+				}
+			}
+			return mdast.WalkContinue, nil
+		})
+		if len(at) == 0 {
+			break
+		}
+		slices.Sort(at)
+		var b bytes.Buffer
+		prev := 0
+		for _, i := range slices.Compact(at) {
+			b.Write(src[prev:i])
+			b.WriteByte('\\')
+			prev = i
+		}
+		b.Write(src[prev:])
+		src = b.Bytes()
+	}
+	return string(src)
 }
 
 // wrapRows splits s into the rows it occupies at width. glamour wraps prose
@@ -126,6 +182,18 @@ func readerSection(title string) string {
 
 func (m *App) readingItem() bool {
 	return m.appMode == modeReader && m.itemDetail != nil
+}
+
+// refreshReaderCmd refetches what the reader shows, so a change made or undone
+// from it reaches the screen. It is nil outside the reader.
+func (m *App) refreshReaderCmd() tea.Cmd {
+	switch {
+	case m.readingItem():
+		return fetchItemDetailCmd(m.backend, m.itemDetail.ID, m.blockedSet[m.itemDetail.ID])
+	case m.appMode == modeReader && m.projectDetail != nil:
+		return fetchProjectDetailCmd(m.backend, m.projectDetail.ID)
+	}
+	return nil
 }
 
 // readerWidth leaves a column of margin on each side.
@@ -192,9 +260,12 @@ func (m *App) itemReaderRows(width int) []string {
 	if len(m.detailDependents) > 0 {
 		rows = append(rows, "", readerSection("Blocks"))
 		for _, dep := range m.detailDependents {
-			if dep.Completed {
+			switch {
+			case dep.Archived:
+				add(dimStyle, fmt.Sprintf("▪ %s (%s)", dep.Title, itemHandle(dep)))
+			case dep.Completed:
 				add(taskCompletedStyle, fmt.Sprintf("✓ %s (%s)", dep.Title, itemHandle(dep)))
-			} else {
+			default:
 				add(lipgloss.NewStyle(), fmt.Sprintf("○ %s (%s)", dep.Title, itemHandle(dep)))
 			}
 		}

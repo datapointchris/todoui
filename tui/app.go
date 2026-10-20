@@ -1030,14 +1030,7 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.statusMsg == "" {
 			flashCmd = m.flash("Item updated")
 		}
-		if m.readingItem() {
-			return m, tea.Batch(
-				fetchProjectsCmd(m.backend, m.projectStatusFilter()),
-				fetchItemDetailCmd(m.backend, m.itemDetail.ID, m.blockedSet[m.itemDetail.ID]),
-				flashCmd,
-			)
-		}
-		return m, tea.Batch(fetchProjectsCmd(m.backend, m.projectStatusFilter()), flashCmd)
+		return m, tea.Batch(fetchProjectsCmd(m.backend, m.projectStatusFilter()), m.refreshReaderCmd(), flashCmd)
 
 	case externalEditDoneMsg:
 		m.appMode = m.returnMode
@@ -1054,14 +1047,7 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case projectUpdatedMsg:
 		flashCmd := m.flash("Project updated")
-		if m.appMode == modeReader && m.projectDetail != nil {
-			return m, tea.Batch(
-				fetchProjectsCmd(m.backend, m.projectStatusFilter()),
-				fetchProjectDetailCmd(m.backend, m.projectDetail.ID),
-				flashCmd,
-			)
-		}
-		return m, tea.Batch(fetchProjectsCmd(m.backend, m.projectStatusFilter()), flashCmd)
+		return m, tea.Batch(fetchProjectsCmd(m.backend, m.projectStatusFilter()), m.refreshReaderCmd(), flashCmd)
 
 	case projectDetailMsg:
 		// A refresh of the project already on screen keeps its scroll, so a
@@ -1076,7 +1062,7 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case undoResultMsg:
 		flashCmd := m.flash(fmt.Sprintf("Undo: %s", string(msg)))
-		return m, tea.Batch(fetchProjectsCmd(m.backend, m.projectStatusFilter()), flashCmd)
+		return m, tea.Batch(fetchProjectsCmd(m.backend, m.projectStatusFilter()), m.refreshReaderCmd(), flashCmd)
 
 	case itemDetailMsg:
 		// A refresh of the item already on screen keeps its scroll, so saving
@@ -2427,7 +2413,7 @@ func (m *App) renderHelpOverlay() string {
   In the reader
   j/k  Ctrl+d/u  Scroll by line / half page
   g/G            Top/bottom
-  Esc  q  h      Back to the list`
+  Esc  q  h      Back to where it was opened`
 
 	lines = append(lines, nav)
 
