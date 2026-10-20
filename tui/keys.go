@@ -18,7 +18,7 @@ const (
 	modeEditTitle               // text input: edit existing item title
 	modeProjectPicker           // checkbox picker: manage project membership
 	modeItemDetail              // expanded item view (read-only with action keys)
-	modeEditNotes               // multiline textarea for notes editing
+	modeExternalEdit            // $EDITOR holds the terminal: notes or a project description
 	modeHelp                    // keybinding reference overlay
 	modeSearch                  // search text input + results
 	modeMove                    // grab item, j/k to reposition
@@ -27,7 +27,6 @@ const (
 	modeDepUnlink               // pick existing dependency to remove
 	modeProjectDetail           // expanded project view (read-only with action keys)
 	modeEditProjectName         // text input: edit project name
-	modeEditProjectDesc         // multiline textarea for project description editing
 	modeDropProject             // text input: the reason a project is dropped rather than deferred
 	modeDepTree                 // dependency tree, walked by drilling into a row
 )

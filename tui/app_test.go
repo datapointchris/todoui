@@ -238,7 +238,7 @@ func TestAutoPullOnlyRunsInNormalMode(t *testing.T) {
 	if !app.safeToAutoPull() {
 		t.Error("normal mode must allow the background reconcile")
 	}
-	for _, mode := range []appMode{modeAddItem, modeEditNotes, modeMove, modeMoveProject, modeItemDetail} {
+	for _, mode := range []appMode{modeAddItem, modeExternalEdit, modeMove, modeMoveProject, modeItemDetail} {
 		app.appMode = mode
 		if app.safeToAutoPull() {
 			t.Errorf("mode %v must defer the reconcile to the next tick", mode)

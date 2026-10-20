@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -55,7 +54,6 @@ type App struct {
 	appMode      appMode
 	returnMode   appMode // mode to return to after overlay closes
 	titleInput   textinput.Model
-	notesInput   textarea.Model
 	picker       projectPicker
 	pendingTitle string // for A flow: title input → project picker
 	statusMsg    string // flash feedback in status bar
@@ -134,9 +132,6 @@ func NewApp(b backend.Backend, syncEngine *sync.Engine, dbPath string, syncInter
 	ti := textinput.New()
 	ti.CharLimit = 200
 
-	ta := textarea.New()
-	ta.ShowLineNumbers = false
-
 	df := textinput.New()
 	df.Placeholder = "type to filter..."
 	df.CharLimit = 100
@@ -146,7 +141,6 @@ func NewApp(b backend.Backend, syncEngine *sync.Engine, dbPath string, syncInter
 		blockedSet:   make(map[string]bool),
 		itemBlockers: make(map[string][]model.ProjectItem),
 		titleInput:   ti,
-		notesInput:   ta,
 		depFilter:    df,
 		syncEngine:   syncEngine,
 		syncInterval: syncInterval,
@@ -1064,6 +1058,15 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(fetchProjectsCmd(m.backend, m.projectStatusFilter()), flashCmd)
 
+	case externalEditDoneMsg:
+		m.appMode = m.returnMode
+		saveCmd, note := finishExternalEdit(m.backend, msg)
+		if note != "" {
+			flashCmd := m.flash(note)
+			return m, flashCmd
+		}
+		return m, saveCmd
+
 	case projectCreatedMsg:
 		flashCmd := m.flash("Project created")
 		return m, tea.Batch(fetchProjectsCmd(m.backend, m.projectStatusFilter()), flashCmd)
@@ -1282,8 +1285,8 @@ func (m *App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handlePickerKey(msg)
 	case modeItemDetail:
 		return m.handleDetailKey(msg)
-	case modeEditNotes, modeEditProjectDesc:
-		return m.handleNotesKey(msg)
+	case modeExternalEdit:
+		return m, nil
 	case modeProjectDetail:
 		return m.handleProjectDetailKey(msg)
 	case modeEditProjectName, modeDropProject:
@@ -1589,11 +1592,8 @@ func (m *App) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if item.Notes != nil {
 				notes = *item.Notes
 			}
-			m.notesInput.SetValue(notes)
-			cmd := m.notesInput.Focus()
-			m.returnMode = modeNormal
-			m.appMode = modeEditNotes
-			return m, cmd
+			editCmd := m.openInEditor(editTarget{itemID: item.ID}, itemNoteFileName(item.ProjectItem), notes)
+			return m, editCmd
 		}
 		return m, nil
 
@@ -2046,11 +2046,8 @@ func (m *App) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.itemDetail.Notes != nil {
 			notes = *m.itemDetail.Notes
 		}
-		m.notesInput.SetValue(notes)
-		cmd := m.notesInput.Focus()
-		m.returnMode = modeItemDetail
-		m.appMode = modeEditNotes
-		return m, cmd
+		editCmd := m.openInEditor(editTarget{itemID: m.itemDetail.ID}, itemNoteFileName(m.itemDetail.ProjectItem), notes)
+		return m, editCmd
 
 	case "p":
 		if onTask {
@@ -2102,39 +2099,6 @@ func (m *App) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m *App) handleNotesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "ctrl+s":
-		value := m.notesInput.Value()
-		m.appMode = m.returnMode
-		m.notesInput.Blur()
-
-		if m.returnMode == modeProjectDetail && m.projectDetail != nil {
-			return m, updateProjectCmd(m.backend, m.projectDetail.ID, model.UpdateProject{Description: &value})
-		}
-
-		var itemID string
-		if m.itemDetail != nil {
-			itemID = m.itemDetail.ID
-		} else if item := m.currentItem(); item != nil {
-			itemID = item.ID
-		} else {
-			return m, nil
-		}
-		return m, updateItemCmd(m.backend, itemID, model.UpdateProjectItem{Notes: &value})
-
-	case "esc":
-		m.appMode = m.returnMode
-		m.notesInput.Blur()
-		return m, nil
-
-	default:
-		var cmd tea.Cmd
-		m.notesInput, cmd = m.notesInput.Update(msg)
-		return m, cmd
-	}
-}
-
 func (m *App) handleProjectDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.projectDetail == nil {
 		return m, nil
@@ -2159,11 +2123,8 @@ func (m *App) handleProjectDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.projectDetail.Description != nil {
 			desc = *m.projectDetail.Description
 		}
-		m.notesInput.SetValue(desc)
-		cmd := m.notesInput.Focus()
-		m.returnMode = modeProjectDetail
-		m.appMode = modeEditProjectDesc
-		return m, cmd
+		editCmd := m.openInEditor(editTarget{projectID: m.projectDetail.ID}, projectDescriptionFileName(m.projectDetail.Project), desc)
+		return m, editCmd
 
 	case "c":
 		if model.IsTerminalStatus(m.projectDetail.Status) {
@@ -2649,9 +2610,6 @@ func (m *App) View() string {
 	case modeProjectDetail:
 		overlay := m.renderProjectDetailOverlay()
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, overlay)
-	case modeEditNotes, modeEditProjectDesc:
-		overlay := m.renderNotesOverlay()
-		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, overlay)
 	case modeHelp:
 		overlay := m.renderHelpOverlay()
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, overlay)
@@ -2933,46 +2891,6 @@ func (m *App) renderProjectDetailOverlay() string {
 	return overlayBoxStyle.Width(boxWidth).Render(content)
 }
 
-func (m *App) renderNotesOverlay() string {
-	var title, subtitle string
-	if m.appMode == modeEditProjectDesc && m.projectDetail != nil {
-		title = "Edit Description"
-		subtitle = fmt.Sprintf("  Project: %s", m.projectDetail.Name)
-	} else {
-		title = "Edit Notes"
-		if m.itemDetail != nil {
-			subtitle = fmt.Sprintf("  Item: %s (%s)", m.itemDetail.Title, itemHandle(m.itemDetail.ProjectItem))
-		} else if item := m.currentItem(); item != nil {
-			subtitle = fmt.Sprintf("  Item: %s (%s)", item.Title, itemHandle(item.ProjectItem))
-		}
-	}
-
-	boxWidth := m.width * 3 / 4
-	if boxWidth < 40 {
-		boxWidth = 40
-	}
-	boxHeight := m.height * 2 / 3
-	if boxHeight < 10 {
-		boxHeight = 10
-	}
-
-	// Size the textarea to fill the overlay (subtract border, padding, header/footer lines)
-	m.notesInput.SetWidth(boxWidth - 6)
-	m.notesInput.SetHeight(boxHeight - 7)
-
-	var lines []string
-	lines = append(lines, overlayTitleStyle.Render(title))
-	lines = append(lines, dimStyle.Render(subtitle))
-	lines = append(lines, "")
-	lines = append(lines, m.notesInput.View())
-	lines = append(lines, "")
-	lines = append(lines, dimStyle.Render("  [Ctrl+S] Save  [Esc] Cancel"))
-
-	content := strings.Join(lines, "\n")
-
-	return overlayBoxStyle.Width(boxWidth).Render(content)
-}
-
 func (m *App) renderHelpOverlay() string {
 	var lines []string
 	lines = append(lines, overlayTitleStyle.Render("Keybindings"))
@@ -3011,7 +2929,7 @@ func (m *App) renderHelpOverlay() string {
   a              Add item
   A              Add item to multiple projects
   e              Edit title
-  n              Edit notes
+  n              Edit notes in $EDITOR
   t              Add a task
   x              Archive item
   p              Manage project membership
