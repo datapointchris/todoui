@@ -5,23 +5,38 @@ Any path naming `./cmd/todoui` is stale.
 
 ## How to run and test
 
-**Use `go run .` from the repo root. Do not build throwaway binaries to `/tmp`
-and do not seed synthetic databases.**
+**Use `direnv exec . go run .` from the repo root. Do not build throwaway
+binaries to `/tmp` and do not seed synthetic databases.**
 
-`.envrc` (loaded by direnv on `cd`) exports `TODOUI_DB` pointing at
-`~/.local/share/todoui/dev.db` — a dedicated dev database separate from any
-production data. The dev DB carries real projects, items, tasks, dependencies
-and notes, which makes it a far better manual-test target than an empty scratch
-DB.
+`.envrc` pairs a dedicated dev database with the sync API's local dev stack, so
+nothing run here touches production data. This is the whole file:
+
+```bash
+export TODOUI_DB="$HOME/.local/share/todoui/dev.db"
+export TODOUI_SYNC=true
+export TODOUI_SYNC_URL="https://api.docker.localhost"
+```
+
+The dev API needs no token, because its proxy injects the user header. The
+server's own repo starts it, and the first sync binds `dev.db` to it. Its seed
+data carries notes one line long. A change about notes needs a real-length
+markdown note written into the dev API first.
 
 ⚠️ **`.envrc` is machine-local and is not in this repo. Check it exists before
 running anything here.** Without it nothing is overridden, so `go run .` opens
 the production database against the production API — which is the accident the
 coupled-variables rule below exists to prevent, arrived at from the other
-direction. `env | rg '^TODOUI'` returning nothing means you do not have it.
+direction. `task setup`, which `worktree new` runs, links the primary
+checkout's `.envrc` into a worktree.
+
+**A shell without direnv's hook ignores `.envrc`, and Claude Code's tool shell is
+one.** There, a bare `go run .` opens production even with the file in place.
+Load it explicitly:
 
 ```bash
-go run .            # launch TUI against dev.db
+direnv exec . go run .        # TUI against dev.db
+direnv exec . go run . sync   # one reconcile against the dev API
+direnv exec . env | rg '^TODOUI'   # nothing printed: no .envrc here
 ```
 
 Build, vet and test check code correctness, not TUI correctness. Do not claim a TUI change

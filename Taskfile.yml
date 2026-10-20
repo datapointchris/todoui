@@ -18,11 +18,22 @@ tasks:
       - task --list
 
   # A worktree is a clean checkout, so everything gitignored is absent. The
-  # module cache comes back from go.sum.
+  # module cache comes back from go.sum. .envrc is linked from the primary
+  # checkout, because a worktree without it runs against production data.
+  # PRIMARY is derived from the shared git directory, so the link step no-ops in
+  # the primary itself and wherever the primary has no .envrc.
   setup:
     desc: Make a fresh checkout runnable
+    vars:
+      PRIMARY:
+        sh: git rev-parse --path-format=absolute --git-common-dir | sed 's|/\.git$||'
     cmds:
       - go mod download
+      - |
+        if [ "{{.PRIMARY}}" != "$PWD" ] && [ -f "{{.PRIMARY}}/.envrc" ]; then
+          ln -sfn "{{.PRIMARY}}/.envrc" .envrc
+          if command -v direnv >/dev/null; then direnv allow .; fi
+        fi
 
   build:
     desc: Build the todoui binary
