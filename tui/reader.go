@@ -99,8 +99,17 @@ func (m *App) renderedMarkdown(entityID, source string, width int) []string {
 // renderMarkdown renders source to rows no wider than width. A text glamour
 // cannot render is shown as written rather than not at all.
 func renderMarkdown(source string, width int) []string {
+	// A terminal draws a tab to the next eighth column, which the row wrap
+	// counts as no width at all. Four spaces is what lipgloss draws.
+	source = strings.ReplaceAll(source, "\t", "    ")
 	out := source
-	r, err := glamour.NewTermRenderer(glamour.WithStyles(readerMarkdownStyle), glamour.WithWordWrap(width))
+	r, err := glamour.NewTermRenderer(
+		glamour.WithStyles(readerMarkdownStyle),
+		glamour.WithWordWrap(width),
+		// glamour assumes true color and never reads NO_COLOR, so it takes the
+		// profile lipgloss resolved for the rest of the screen.
+		glamour.WithColorProfile(lipgloss.ColorProfile()),
+	)
 	if err == nil {
 		if rendered, err := r.Render(htmlAsText(source)); err == nil {
 			out = rendered

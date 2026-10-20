@@ -19,9 +19,24 @@ func longNote() string {
 	para := strings.Repeat("A paragraph long enough to wrap several times at any reader width. ", 6)
 	var b strings.Builder
 	for i := range 20 {
-		fmt.Fprintf(&b, "## Section %d\n\n%s\n\n| key | value |\n|---|---|\n| one | **two** |\n\n- first\n- second\n\n", i, para)
+		fmt.Fprintf(&b, "## Section %d\n\n%s\n\n"+
+			"\tif err := run(ctx, \"a command\"); err != nil {\n\t\treturn fmt.Errorf(\"run the command with its arguments, its flags and its environment: %%w\", err)\n\t}\n\n"+
+			"| key | value |\n|---|---|\n| one | **two** |\n\n- first\n- second\n\n", i, para)
 	}
 	return b.String()
+}
+
+// screenWidth is the columns a terminal draws row in. A tab advances to the
+// next multiple of eight, where lipgloss.Width counts it as nothing.
+func screenWidth(row string) int {
+	col := 0
+	for i, part := range strings.Split(ansi.Strip(row), "\t") {
+		if i > 0 {
+			col += 8 - col%8
+		}
+		col += lipgloss.Width(part)
+	}
+	return col
 }
 
 // A long note opens at its top, scrolls by the rows it renders into, and the
@@ -47,8 +62,8 @@ func TestReaderScrollsALongNoteByRenderedRows(t *testing.T) {
 	width := app.readerWidth()
 	rows := app.readerRows(width)
 	for i, r := range rows {
-		if lipgloss.Width(r) > width {
-			t.Fatalf("row %d is %d wide at width %d, so it is more than one screen row", i, lipgloss.Width(r), width)
+		if got := screenWidth(r); got > width {
+			t.Fatalf("row %d is %d wide at width %d, so it is more than one screen row", i, got, width)
 		}
 	}
 
