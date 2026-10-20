@@ -2435,7 +2435,7 @@ func (m *App) renderHelpOverlay() string {
 		lines = append(lines, actions)
 	} else {
 		actions := `
-  On an item row, or reading an item
+  On an item row
   space          Toggle done
   a              Add item
   A              Add item to multiple projects
@@ -2448,6 +2448,10 @@ func (m *App) renderHelpOverlay() string {
   B              Unlink dependency
   T              Dependency browser (map + tree)
   m              Move/reorder item
+
+  Reading an item
+  space e n t x  Act on the item shown,
+  p b B T        as on its row
 
   On a task row
   space          Toggle task done
