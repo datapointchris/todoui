@@ -262,6 +262,26 @@ func TestAutomaticPullIsSilentAndManualPullIsNot(t *testing.T) {
 	}
 }
 
+// Each flash lasts its full duration. A second flash raised before the first
+// one's timer fires must outlive that timer.
+func TestOlderFlashTimerLeavesNewerFlashShowing(t *testing.T) {
+	app := newTestApp(t, 80, 24, "Alpha")
+
+	app.flash("first")
+	firstClear := clearStatusMsg{seq: app.flashSeq}
+	app.flash("second")
+	secondClear := clearStatusMsg{seq: app.flashSeq}
+
+	send(t, app, firstClear)
+	if app.statusMsg != "second" {
+		t.Fatalf("the first flash's timer cleared the second flash: %q", app.statusMsg)
+	}
+	send(t, app, secondClear)
+	if app.statusMsg != "" {
+		t.Errorf("the second flash's own timer left it showing: %q", app.statusMsg)
+	}
+}
+
 // A failing automatic pull is not something the user did. The status bar already
 // reads SYNC ERR off the engine; pinning an error banner every interval would
 // make a briefly unreachable API look like a broken app.

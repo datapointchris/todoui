@@ -61,6 +61,7 @@ type App struct {
 	picker       projectPicker
 	pendingTitle string // for A flow: title input → project picker
 	statusMsg    string // flash feedback in status bar
+	flashSeq     int    // tags each flash, so only its own timer clears it
 
 	// Reader: the full-screen view of one item or one project. itemDetail is
 	// set while it shows an item, projectDetail while it shows a project.
@@ -254,8 +255,9 @@ type depBlockersForUnlinkMsg []model.ProjectItem
 
 type errMsg struct{ error }
 
-// Status flash clear
-type clearStatusMsg struct{}
+// clearStatusMsg ends the flash whose flashSeq it carries. A newer flash has
+// moved flashSeq on, so an older flash's timer leaves it on screen.
+type clearStatusMsg struct{ seq int }
 
 // Sync messages. A pull carries whether the user asked for it: an automatic one
 // runs every syncInterval, so announcing it would flash the status bar forever
@@ -274,8 +276,10 @@ const statusFlashDuration = 3 * time.Second
 
 func (m *App) flash(msg string) tea.Cmd {
 	m.statusMsg = msg
+	m.flashSeq++
+	seq := m.flashSeq
 	return tea.Tick(statusFlashDuration, func(_ time.Time) tea.Msg {
-		return clearStatusMsg{}
+		return clearStatusMsg{seq: seq}
 	})
 }
 
@@ -1187,7 +1191,9 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(fetchProjectsCmd(m.backend, m.projectStatusFilter()), flashCmd)
 
 	case clearStatusMsg:
-		m.statusMsg = ""
+		if msg.seq == m.flashSeq {
+			m.statusMsg = ""
+		}
 		return m, nil
 
 	case errMsg:
