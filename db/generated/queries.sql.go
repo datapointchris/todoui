@@ -1093,7 +1093,9 @@ LEFT JOIN project_item_memberships m ON p.id = m.project_id
 LEFT JOIN project_items pi ON m.item_id = pi.id AND pi.archived = 0
 WHERE CAST(?1 AS TEXT) = 'all' OR p.status = CAST(?1 AS TEXT)
 GROUP BY p.id
-ORDER BY p.closed_at IS NULL DESC, p.closed_at DESC, p.position ASC, p.name ASC
+ORDER BY
+    CASE p.status WHEN 'active' THEN 0 WHEN 'someday' THEN 1 ELSE 2 END,
+    p.closed_at DESC, p.position ASC, p.name ASC
 `
 
 type ListProjectsWithItemCountRow struct {
@@ -1117,6 +1119,10 @@ type ListProjectsWithItemCountRow struct {
 // The completed split rides along with the total rather than being a second
 // query: the pane draws both numbers on every row, so asking twice would mean a
 // query per project.
+//
+// The order is active, then someday, then closed. A someday project has no
+// closed_at, so ordering on closed_at alone would mix it in among the active
+// ones.
 func (q *Queries) ListProjectsWithItemCount(ctx context.Context, statusFilter string) ([]ListProjectsWithItemCountRow, error) {
 	rows, err := q.db.QueryContext(ctx, listProjectsWithItemCount, statusFilter)
 	if err != nil {
@@ -1323,6 +1329,8 @@ SET status = ?1,
     status_reason = CASE WHEN ?1 = 'active' THEN NULL ELSE ?2 END,
     closed_at = CASE
         WHEN ?1 = 'active' THEN NULL
+        -- A someday project is set aside, not closed, so it records no close.
+        WHEN ?1 = 'someday' THEN NULL
         -- Already closed and staying that way: keep the original date rather
         -- than restamping it on an edit to the reason.
         WHEN closed_at IS NOT NULL AND status = ?1 THEN closed_at

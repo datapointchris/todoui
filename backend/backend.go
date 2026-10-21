@@ -11,9 +11,10 @@ type Backend interface {
 	GetProject(id string) (*model.ProjectWithItemCount, error)
 	CreateProject(input model.CreateProject) (*model.Project, error)
 	UpdateProject(id string, input model.UpdateProject) (*model.Project, error)
-	// SetProjectStatus moves a project between active, done, and dropped. The
-	// closing timestamp and the reason are derived from the transition rather
-	// than sent, so they cannot contradict the status they describe.
+	// SetProjectStatus moves a project between active, someday, completed and
+	// dropped. The closing timestamp and the reason are derived from the
+	// transition rather than sent, so they cannot contradict the status they
+	// describe.
 	SetProjectStatus(id, status string, reason *string) (*model.Project, error)
 	DeleteProject(id string) error
 	ReorderProject(projectID string, newPosition int) error

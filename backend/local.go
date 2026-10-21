@@ -205,10 +205,11 @@ func (b *LocalBackend) UpdateProject(id string, input model.UpdateProject) (*mod
 	return &result, nil
 }
 
-// SetProjectStatus moves a project between active, done, and dropped. A reason
-// is required when dropping and ignored when reopening — the closing timestamp
-// and the reason are consequences of the transition, derived in the statement
-// rather than handed in, so an active project can never carry either.
+// SetProjectStatus moves a project between active, someday, completed and
+// dropped. A reason is required when dropping, optional when shelving and
+// ignored when reopening — the closing timestamp and the reason are
+// consequences of the transition, derived in the statement rather than handed
+// in, so an active project can never carry either.
 func (b *LocalBackend) SetProjectStatus(id, status string, reason *string) (*model.Project, error) {
 	ctx := b.ctx()
 	if status == model.StatusDropped && (reason == nil || strings.TrimSpace(*reason) == "") {

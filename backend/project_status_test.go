@@ -225,19 +225,43 @@ func TestUndoRestoresTheStatusAProjectHad(t *testing.T) {
 	}
 }
 
-func TestListPutsActiveProjectsAheadOfClosedOnes(t *testing.T) {
+func TestShelvingHidesTheProjectWithoutClosingIt(t *testing.T) {
+	b := newTestBackend(t)
+	p := mustCreateProject(t, b, "slow burn")
+
+	shelved := mustSetStatus(t, b, p.ID, model.StatusSomeday, ptr("waiting on the API"))
+
+	if shelved.ClosedAt != nil {
+		t.Errorf("closed_at = %v, want nil — a shelved project has not ended", shelved.ClosedAt)
+	}
+	if shelved.StatusReason == nil || *shelved.StatusReason != "waiting on the API" {
+		t.Errorf("status_reason = %v, want the reason given", shelved.StatusReason)
+	}
+	active, err := b.ListProjectsByStatus(model.StatusActive)
+	if err != nil {
+		t.Fatalf("listing projects: %v", err)
+	}
+	if len(active) != 0 {
+		t.Errorf("shelved project still in the active list: %v", projectNames(active))
+	}
+}
+
+func TestListGroupsActiveThenSomedayThenClosed(t *testing.T) {
 	b := newTestBackend(t)
 	closed := mustCreateProject(t, b, "finished")
+	shelved := mustCreateProject(t, b, "shelved")
 	mustCreateProject(t, b, "live")
 	mustSetStatus(t, b, closed.ID, model.StatusCompleted, nil)
+	mustSetStatus(t, b, shelved.ID, model.StatusSomeday, nil)
 
 	all, err := b.ListProjectsByStatus(model.StatusAll)
 	if err != nil {
 		t.Fatalf("listing all projects: %v", err)
 	}
 
-	if got := projectNames(all); len(got) != 2 || got[0] != "live" {
-		t.Errorf("order = %v, want the active project first even though it was created second", got)
+	want := []string{"live", "shelved", "finished"}
+	if got := projectNames(all); strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("order = %v, want %v regardless of creation order", got, want)
 	}
 }
 

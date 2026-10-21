@@ -6,6 +6,10 @@
 -- The completed split rides along with the total rather than being a second
 -- query: the pane draws both numbers on every row, so asking twice would mean a
 -- query per project.
+--
+-- The order is active, then someday, then closed. A someday project has no
+-- closed_at, so ordering on closed_at alone would mix it in among the active
+-- ones.
 -- name: ListProjectsWithItemCount :many
 SELECT
     p.*,
@@ -17,7 +21,9 @@ LEFT JOIN project_item_memberships m ON p.id = m.project_id
 LEFT JOIN project_items pi ON m.item_id = pi.id AND pi.archived = 0
 WHERE CAST(@status_filter AS TEXT) = 'all' OR p.status = CAST(@status_filter AS TEXT)
 GROUP BY p.id
-ORDER BY p.closed_at IS NULL DESC, p.closed_at DESC, p.position ASC, p.name ASC;
+ORDER BY
+    CASE p.status WHEN 'active' THEN 0 WHEN 'someday' THEN 1 ELSE 2 END,
+    p.closed_at DESC, p.position ASC, p.name ASC;
 
 -- name: GetProject :one
 SELECT * FROM projects WHERE id = ?;
@@ -56,6 +62,8 @@ SET status = sqlc.arg(new_status),
     status_reason = CASE WHEN sqlc.arg(new_status) = 'active' THEN NULL ELSE sqlc.narg(reason) END,
     closed_at = CASE
         WHEN sqlc.arg(new_status) = 'active' THEN NULL
+        -- A someday project is set aside, not closed, so it records no close.
+        WHEN sqlc.arg(new_status) = 'someday' THEN NULL
         -- Already closed and staying that way: keep the original date rather
         -- than restamping it on an edit to the reason.
         WHEN closed_at IS NOT NULL AND status = sqlc.arg(new_status) THEN closed_at

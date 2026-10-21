@@ -450,6 +450,36 @@ func TestShowClosedTogglesTheClosedProjectsBackIn(t *testing.T) {
 	}
 }
 
+// A shelved project is not closed, but it is not open either: it leaves the
+// pane, and its reader offers reopen and refuses complete.
+func TestShelvedProjectOffersOnlyReopen(t *testing.T) {
+	app := newTestApp(t, 100, 30)
+	app.activePane = projectPane
+	send(t, app, tea.KeyMsg{Type: tea.KeyEnter})
+	keys(t, app, "S")
+	send(t, app, tea.KeyMsg{Type: tea.KeyEsc})
+
+	if len(app.projects) != 0 {
+		t.Fatalf("shelving must take the project out of the pane, still have %d", len(app.projects))
+	}
+
+	keys(t, app, "C")
+	if len(app.projects) != 1 || app.projects[0].Status != model.StatusSomeday {
+		t.Fatalf("C must bring the shelved project back as someday, got %v", app.projects)
+	}
+
+	send(t, app, tea.KeyMsg{Type: tea.KeyEnter})
+	keys(t, app, "c")
+	if app.projects[0].Status != model.StatusSomeday {
+		t.Errorf("c on a shelved project must be refused, status = %q", app.projects[0].Status)
+	}
+
+	keys(t, app, "r")
+	if app.projects[0].Status != model.StatusActive {
+		t.Errorf("r must reopen a shelved project, status = %q", app.projects[0].Status)
+	}
+}
+
 // A reason is required, so dropping is a prompt rather than a keypress.
 func TestDroppingAProjectAsksWhy(t *testing.T) {
 	app := newTestApp(t, 100, 30)

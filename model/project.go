@@ -16,18 +16,16 @@ const (
 	// one concept one way.
 	StatusCompleted = "completed"
 	StatusDropped   = "dropped"
+	// StatusSomeday is a project set aside rather than finished: hidden like a
+	// closed one and giving up its name, but with no close recorded, because
+	// the project has not ended.
+	StatusSomeday = "someday"
 
 	// StatusAll asks for every project. Not a status a project can be in — it is
 	// the absence of the filter, which is why the API keeps it out of its lookup
 	// table too.
 	StatusAll = "all"
 )
-
-// IsTerminalStatus reports whether a project in this status is closed and
-// therefore hidden by default.
-func IsTerminalStatus(status string) bool {
-	return status == StatusCompleted || status == StatusDropped
-}
 
 // Project represents a project that items are organized into.
 type Project struct {
@@ -38,8 +36,9 @@ type Project struct {
 	// Why a project was dropped rather than deferred. Nil for anything still
 	// active, and cleared by the server on reopen.
 	StatusReason *string `json:"status_reason,omitempty"`
-	// When the project reached a terminal status. CreatedAt orders by when work
-	// started, which is the wrong axis for a list of finished things.
+	// When the project reached a terminal status, and nil while it is active or
+	// someday. CreatedAt orders by when the project started, which is the wrong
+	// axis for a list of finished things.
 	ClosedAt  *time.Time `json:"closed_at,omitempty"`
 	Position  int        `json:"position"`
 	CreatedAt time.Time  `json:"created_at"`

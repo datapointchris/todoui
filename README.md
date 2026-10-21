@@ -126,9 +126,11 @@ order:
 A missing registry bans nothing. A registry that does not parse fails every create and rename with
 the parse error.
 
-A project's status is `active`, `completed` or `dropped`. Reading a project, `c` completes
-it, `x` drops it, and `r` reopens a closed one. Completing a project is what takes it out of the
-list, so there is no separate archive step the way items have one. `C` shows closed projects again.
+A project's status is `active`, `someday`, `completed` or `dropped`. Reading a project, `c`
+completes it, `x` drops it, `S` shelves it for someday, and `r` reopens a shelved or closed one.
+Completing a project is what takes it out of the list, so there is no separate archive step the way
+items have one. A shelved project leaves the list too, but records no closing date. `C` shows
+shelved and closed projects again, each marked with its status.
 Dropping requires a reason, because "deferred" invites the same idea back next month and "dropped,
 and here is why" does not.
 

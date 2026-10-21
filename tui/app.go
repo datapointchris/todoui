@@ -109,7 +109,7 @@ type App struct {
 
 	// All Items view
 	showingAll       bool            // true when the "All" pseudo-project is selected
-	showClosed       bool            // include completed and dropped projects in the pane
+	showClosed       bool            // include someday, completed and dropped projects in the pane
 	allGroups        []allItemGroup  // project groups for rendering headers in grouped views
 	selectedProjects map[string]bool // multi-select: project IDs toggled via space
 
@@ -1460,9 +1460,9 @@ func (m *App) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.projectCursor = 0
 		m.projectScroll = 0
 		m.selectedProjects = nil
-		note := "Closed projects hidden"
+		note := "Shelved and closed projects hidden"
 		if m.showClosed {
-			note = "Showing closed projects"
+			note = "Showing shelved and closed projects"
 		}
 		return m, tea.Batch(fetchProjectsCmd(m.backend, m.projectStatusFilter()), m.flash(note))
 
@@ -2428,7 +2428,7 @@ func (m *App) renderHelpOverlay() string {
   Project Pane
   a              Add project
   m              Move/reorder project
-  C              Show/hide closed projects
+  C              Show/hide shelved and closed projects
   space          Toggle multi-select
   Esc            Clear selections
 
@@ -2437,7 +2437,8 @@ func (m *App) renderHelpOverlay() string {
   d              Edit description in $EDITOR
   c              Complete project
   x              Drop project (asks why)
-  r              Reopen a closed project`
+  S              Shelve project for someday
+  r              Reopen a shelved or closed project`
 		lines = append(lines, actions)
 	} else {
 		actions := `
@@ -2680,7 +2681,7 @@ func (m *App) projectRowLabel(p model.ProjectWithItemCount) string {
 	}
 	// Only while closed projects are on show: every row reads "active"
 	// otherwise, which spends width to say nothing.
-	if m.showClosed && model.IsTerminalStatus(p.Status) {
+	if m.showClosed && p.Status != model.StatusActive {
 		label = fmt.Sprintf("%s [%s]", label, p.Status)
 	}
 	return label

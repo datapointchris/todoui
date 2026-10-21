@@ -102,10 +102,14 @@ and rename takes.
 
 ## A project has a status, and it is not an `archived` flag
 
-`projects.status` is `active`/`completed`/`dropped`. For an item, complete and archive are
+`projects.status` is `active`/`someday`/`completed`/`dropped`. For an item, complete and archive are
 orthogonal; for a project they collapse, because a project is a finite effort with a definition of
 done, so completion *is* the hide signal. `dropped` requires a reason: "deferred" invites
 re-proposal, "dropped, and here is why" closes the question.
+
+`someday` is shelved, not closed. It is hidden and gives up its name like a closed project, but
+`closed_at` stays NULL, matching the API. So "is it closed" and "is it hidden" are different
+questions: the TUI asks `status != active` for hiding and for offering reopen.
 
 `SetProjectStatus` is the only write path, and `closed_at` and `status_reason` are derived inside
 its statement rather than accepted from a caller, so an active project can never carry either.

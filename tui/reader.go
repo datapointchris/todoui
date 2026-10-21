@@ -315,12 +315,15 @@ func (m *App) projectReaderRows(width int) []string {
 	add(dimStyle, fmt.Sprintf("Project %s · %s", shortID(p.ID), p.Status))
 	rows = append(rows, projectCounts(p.OpenCount(), p.CompletedCount)+dimStyle.Render("  open · done"))
 	add(dimStyle, "Created: "+p.CreatedAt.Format("Jan 2, 2006"))
-	if model.IsTerminalStatus(p.Status) {
-		closed := "Closed"
-		if p.ClosedAt != nil {
-			closed += ": " + p.ClosedAt.Format("Jan 2, 2006")
+	if p.Status != model.StatusActive {
+		// A shelved project has not closed, so it has no closing line.
+		if p.Status != model.StatusSomeday {
+			closed := "Closed"
+			if p.ClosedAt != nil {
+				closed += ": " + p.ClosedAt.Format("Jan 2, 2006")
+			}
+			add(dimStyle, closed)
 		}
-		add(dimStyle, closed)
 		if p.StatusReason != nil && *p.StatusReason != "" {
 			add(dimStyle, "Reason: "+*p.StatusReason)
 		}
@@ -374,10 +377,10 @@ func (m *App) readerHints() string {
 	if m.itemDetail != nil {
 		return scroll + " [space]done [e]dit [n]otes [p]rojects [t]ask [b]lock [B]unblock [T]ree [x]archive [u]ndo"
 	}
-	if m.projectDetail != nil && model.IsTerminalStatus(m.projectDetail.Status) {
+	if m.projectDetail != nil && m.projectDetail.Status != model.StatusActive {
 		return scroll + " [e]dit name [d]escription [r]eopen"
 	}
-	return scroll + " [e]dit name [d]escription [c]omplete [x]drop"
+	return scroll + " [e]dit name [d]escription [c]omplete [x]drop [S]helve"
 }
 
 // renderReaderBar is the reader's status bar: the hints, or a flash, on the
@@ -478,14 +481,22 @@ func (m *App) handleProjectReaderKey(key string) tea.Cmd {
 		return m.openInEditor(editTarget{projectID: p.ID}, projectDescriptionFileName(p.Project), desc)
 
 	case "c":
-		if model.IsTerminalStatus(p.Status) {
-			return m.flash("Already closed — r reopens it")
+		if p.Status != model.StatusActive {
+			return m.flash("Not active — r reopens it")
 		}
 		return setProjectStatusCmd(m.backend, p.ID, model.StatusCompleted, nil)
 
+	case "S":
+		if p.Status != model.StatusActive {
+			return m.flash("Not active — r reopens it")
+		}
+		// Shelving closes no question about the project, so unlike a drop it
+		// asks for no reason.
+		return setProjectStatusCmd(m.backend, p.ID, model.StatusSomeday, nil)
+
 	case "x":
-		if model.IsTerminalStatus(p.Status) {
-			return m.flash("Already closed — r reopens it")
+		if p.Status != model.StatusActive {
+			return m.flash("Not active — r reopens it")
 		}
 		// A reason is required, so dropping is a prompt rather than a keypress:
 		// "deferred" invites the same idea back, "dropped, and here is why" does not.
@@ -496,7 +507,7 @@ func (m *App) handleProjectReaderKey(key string) tea.Cmd {
 		return m.titleInput.Focus()
 
 	case "r":
-		if !model.IsTerminalStatus(p.Status) {
+		if p.Status == model.StatusActive {
 			return m.flash("Already active")
 		}
 		return setProjectStatusCmd(m.backend, p.ID, model.StatusActive, nil)
