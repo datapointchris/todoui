@@ -51,7 +51,7 @@ window size is reproducible here and invisible in a manual pass. It does not rep
 
 ## todoui is a TUI; there is no item CLI
 
-Chris drives todoui through the TUI. Agents and scripts reach the same projects and items through
+todoui is driven through the TUI. Agents and scripts reach the same projects and items through
 ichrisbirch's own CLI against the API. The subcommands here are `sync`, `update`, `version` and
 `completion`, and none of them reads or writes an item. A verb added here would be a second front
 door onto rows ichrisbirch's CLI already owns, spelled independently of it.
@@ -138,9 +138,9 @@ a live one sharing its name.
 `TODOUI_SYNC_TOKEN_COMMAND` where the dev API wants a token. They name one
 environment. A URL from the environment never takes the config file's
 `token_command` (`config.Load`), so the dev URL cannot carry the production
-token. Overriding one of them names an
-environment that does not exist, and for this tool that is destructive rather
-than merely wrong: a pull deletes every local row the server did not return, so
+token. Overriding one of them names an environment that does not exist, and
+for this tool that is destructive rather than merely wrong: a pull deletes
+every local row the server did not return, so
 a production database reconciled against the dev API is emptied of everything
 dev has never heard of. A sync run that way once deleted 42 projects and 286
 items and printed `Synced.`
