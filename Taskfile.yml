@@ -3,10 +3,10 @@ version: "3"
 vars:
   BINARY_NAME: todoui
   BUILD_DIR: .
-  # ~/.local/bin precedes ~/go/bin on PATH. Installing a dev build to $GOBIN
-  # lets the released binary shadow it, so committed changes look like they
-  # never took effect.
-  INSTALL_DIR: "{{.HOME}}/.local/bin"
+  # The release installs into ~/go/bin, so the dev build replaces it there and
+  # the next release replaces the dev build. A copy in ~/.local/bin, which
+  # precedes ~/go/bin on PATH, would hide every later release.
+  INSTALL_DIR: "{{.HOME}}/go/bin"
   VERSION:
     sh: git describe --tags --always --dirty
 
@@ -55,7 +55,7 @@ tasks:
       - go test -v ./...
 
   install:
-    desc: Build and install the dev build to ~/.local/bin
+    desc: Build and install the dev build to ~/go/bin, where the release lives
     deps:
       - build
     cmds:
